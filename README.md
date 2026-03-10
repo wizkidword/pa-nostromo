@@ -4,6 +4,8 @@ PA Nostromo is a local-first productivity dashboard you run on your own machine.
 
 It combines project tracking + utility pods in one lightweight web app:
 
+![PA Nostromo dashboard preview](docs/screenshots/dashboard-preview.svg)
+
 - Project directory + kanban board
 - Notes and ideas capture
 - Reminders + timer/alarm
