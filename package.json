@@ -1,0 +1,11 @@
+{
+  "name": "pa-nostromo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first swiss-army dashboard",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT"
+}

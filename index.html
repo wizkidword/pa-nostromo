@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PA Nostromo</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>🚀 PA Nostromo</h1>
+      <p class="sub">Project dashboard + execution board</p>
+      <div class="social-quick-links" aria-label="Blast From The Ads social links">
+        <a class="social-icon-link" href="https://www.instagram.com/ablastfromtheads/" target="_blank" rel="noopener" title="Instagram" aria-label="Instagram"><img src="assets/social/instagram.svg" alt="Instagram" /></a>
+        <a class="social-icon-link" href="https://www.tiktok.com/@ablastfromtheads" target="_blank" rel="noopener" title="TikTok" aria-label="TikTok"><img src="assets/social/tiktok.svg" alt="TikTok" /></a>
+        <a class="social-icon-link" href="https://www.youtube.com/channel/UCyuF26iUTnaOtPUyEOk_0XA" target="_blank" rel="noopener" title="YouTube" aria-label="YouTube"><img src="assets/social/youtube.svg" alt="YouTube" /></a>
+        <a class="social-icon-link" href="https://www.facebook.com/profile.php?id=61587986203145" target="_blank" rel="noopener" title="Facebook" aria-label="Facebook"><img src="assets/social/facebook.svg" alt="Facebook" /></a>
+        <a class="social-icon-link" href="https://x.com/blastfromtheads" target="_blank" rel="noopener" title="X" aria-label="X"><img src="assets/social/x.svg" alt="X" /></a>
+        <a class="social-icon-link" href="https://bsky.app/profile/blastfromtheads.bsky.social" target="_blank" rel="noopener" title="Bluesky" aria-label="Bluesky"><img src="assets/social/bluesky.svg" alt="Bluesky" /></a>
+        <a class="social-icon-link" href="https://mastodon.social/@blastfromtheads" target="_blank" rel="noopener" title="Mastodon" aria-label="Mastodon"><img src="assets/social/mastodon.svg" alt="Mastodon" /></a>
+      </div>
+    </div>
+    <div class="top-actions">
+      <a class="btn ghost" href="http://localhost:3399" target="_blank" rel="noopener">Open Radio Map</a>
+      <button id="openSettingsBtn" class="btn ghost">⚙️ Settings</button>
+      <button id="addProjectBtn" class="btn">+ New Project</button>
+      <button id="addTaskBtn" class="btn primary">+ New Task</button>
+    </div>
+  </header>
+
+  <aside id="settingsPanel" class="settings-panel" aria-hidden="true">
+    <div class="settings-head">
+      <h2>Settings</h2>
+      <button id="closeSettingsBtn" class="btn ghost">Close</button>
+    </div>
+    <div class="settings-body">
+      <label>Theme
+        <select id="settingTheme">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+          <option value="system">System</option>
+        </select>
+      </label>
+      <label class="row-between-wrap gap10">
+        <span>Fullscreen mode</span>
+        <input id="settingFullscreen" type="checkbox" class="w-auto" />
+      </label>
+      <label>Weather refresh interval
+        <select id="settingWeatherInterval">
+          <option value="5">Every 5 minutes</option>
+          <option value="15">Every 15 minutes</option>
+          <option value="30">Every 30 minutes</option>
+        </select>
+      </label>
+      <label>Default new task column
+        <select id="settingDefaultTaskColumn">
+          <option value="inbox">Inbox</option>
+          <option value="ideas">Ideas</option>
+          <option value="in_progress">In Progress</option>
+          <option value="waiting_blocked">Waiting / Blocked</option>
+          <option value="ready_to_publish">Ready to Publish</option>
+          <option value="done">Done</option>
+        </select>
+      </label>
+
+      <hr class="settings-divider" />
+      <button id="toggleChangeLogBtn" class="btn ghost settings-toggle-start">Show Patch Notes</button>
+      <div id="changeLogSection" style="display:none">
+        <h3 class="m0">Change Log (Patch Notes)</h3>
+        <label>Add manual note
+          <input id="changeLogInput" placeholder="e.g. Added changelog to settings panel" />
+        </label>
+        <button id="addChangeLogBtn" class="btn">+ Add Patch Note</button>
+        <div id="changeLogList" class="change-log-list"></div>
+        <button id="changeLogLoadMoreBtn" class="btn ghost changelog-loadmore">Load older</button>
+      </div>
+    </div>
+  </aside>
+
+  <section class="utils-layout">
+    <div class="utils-row">
+      <div class="card utility-card">
+        <h2>📅 Date & Time</h2>
+        <div id="dateTimeWidget" class="widget-block"></div>
+        <div class="row-wrap mt10">
+          <input id="alarmMinutes" type="number" min="1" step="1" placeholder="Minutes" class="w-110" />
+          <button id="startAlarmBtn" class="btn">Start Timer</button>
+          <button id="cancelAlarmBtn" class="btn ghost">Cancel</button>
+        </div>
+        <div id="alarmStatus" class="note-meta mt6">No active timer</div>
+      </div>
+      <div class="card utility-card">
+        <h2>🗓️ Calendar</h2>
+        <div id="calendarWidget" class="widget-block"></div>
+        <div id="calendarSelectedDate" class="note-meta mt8"></div>
+        <div class="row-wrap mt6">
+          <input id="calendarReminderText" placeholder="Reminder..." />
+          <input id="calendarReminderTime" type="time" class="w-130" />
+          <button id="addCalendarReminderBtn" class="btn">+ Add</button>
+        </div>
+        <div id="calendarDayReminders" class="change-log-list mt8"></div>
+      </div>
+      <div class="card utility-card">
+        <div class="row-between-wrap">
+          <h2>🌤️ Local Weather (44224)</h2>
+          <button id="weatherRefreshBtn" class="btn ghost">Refresh</button>
+        </div>
+        <div id="weatherWidget" class="widget-block">Loading weather...</div>
+        <div id="weatherUpdatedAt" class="note-meta mt6"></div>
+      </div>
+    </div>
+
+    <div class="utils-row">
+      <div class="card utility-card">
+        <div class="row-between-wrap">
+          <h2>🏀 NBA Scores (Today · EST)</h2>
+          <button id="nbaRefreshBtn" class="btn ghost">Refresh</button>
+        </div>
+        <div id="nbaScoresWidget" class="widget-block">Loading NBA scores...</div>
+        <div id="nbaUpdatedAt" class="note-meta mt6"></div>
+      </div>
+      <div class="card utility-card">
+        <div class="row-between-wrap">
+          <h2>₿ Crypto Tracker</h2>
+          <button id="cryptoRefreshBtn" class="btn ghost">Refresh</button>
+        </div>
+        <div id="cryptoWidget" class="widget-block">Loading crypto market data...</div>
+        <div id="cryptoUpdatedAt" class="note-meta mt6"></div>
+      </div>
+      <div class="card utility-card">
+        <h2>🎵 Music Player</h2>
+        <div id="musicPlayerWidget" class="widget-block">Loading music player...</div>
+        <div id="musicPlayerStatus" class="note-meta mt6"></div>
+      </div>
+      <div class="card utility-card">
+        <h2>🎙️ Voice Note</h2>
+        <div id="voiceNoteWidget" class="widget-block"></div>
+        <div id="voiceNoteStatus" class="note-meta mt6">Ready to record.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Project Directory</h2>
+    <div id="projectDirectory" class="project-grid"></div>
+  </section>
+
+  <section class="card mt14">
+    <h2>📌 Today Reminders</h2>
+    <div id="todayReminders" class="change-log-list"></div>
+  </section>
+
+  <section class="stats" id="stats"></section>
+
+  <section class="board" id="board"></section>
+
+  <section class="card">
+    <div class="row-between-wrap gap10">
+      <h2>Mini Notes Board</h2>
+      <div class="row-wrap">
+        <input id="notesSearch" placeholder="Search notes..." class="minw-220" />
+        <select id="notesFilter">
+          <option value="all">All</option>
+          <option value="pinned">Pinned</option>
+          <option value="today">Today</option>
+          <option value="backlog">Backlog</option>
+        </select>
+        <button id="notesClearFiltersBtn" class="btn ghost">Clear</button>
+        <button id="addNoteBtn" class="btn">+ New Note</button>
+      </div>
+    </div>
+    <h3 class="mt10">Today</h3>
+    <div id="notesBoardToday" class="notes-grid"></div>
+    <h3 class="mt14">Backlog</h3>
+    <div id="notesBoardBacklog" class="notes-grid"></div>
+  </section>
+
+  <dialog id="projectDialog">
+    <form method="dialog" id="projectForm">
+      <h3>New Project</h3>
+      <label>Name <input name="name" required /></label>
+      <label>Summary <input name="summary" required /></label>
+      <label>Status
+        <select name="status">
+          <option value="active">active</option>
+          <option value="planning">planning</option>
+          <option value="paused">paused</option>
+        </select>
+      </label>
+      <label>App Link <input name="appLink" placeholder="https://..." /></label>
+      <label>Repo Link <input name="repoLink" placeholder="https://..." /></label>
+      <menu>
+        <button type="button" id="projectCancelBtn" class="btn ghost" onclick="document.getElementById('projectDialog').close()">Cancel</button>
+        <button value="default" class="btn primary">Save</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="taskDialog">
+    <form method="dialog" id="taskForm">
+      <h3>New Task</h3>
+      <label>Title <input name="title" required /></label>
+      <label>Project
+        <select name="projectId" id="taskProject"></select>
+      </label>
+      <label>Column
+        <select name="column">
+          <option value="inbox">Inbox</option>
+          <option value="ideas">Ideas</option>
+          <option value="in_progress">In Progress</option>
+          <option value="waiting_blocked">Waiting / Blocked</option>
+          <option value="ready_to_publish">Ready to Publish</option>
+          <option value="done">Done</option>
+        </select>
+      </label>
+      <label>Blocker Type
+        <select name="blockerType">
+          <option value="">None</option>
+          <option value="approval">Approval</option>
+          <option value="dependency">Dependency</option>
+          <option value="error">Error</option>
+        </select>
+      </label>
+      <label>Owner <input name="owner" value="Rowan" /></label>
+      <label>Next Action <input name="nextAction" required /></label>
+      <label>Due Date <input name="dueDate" type="date" /></label>
+      <menu>
+        <button value="cancel" class="btn ghost">Cancel</button>
+        <button value="default" class="btn primary">Save</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
