@@ -233,6 +233,42 @@
     </form>
   </dialog>
 
+
+  <dialog id="editTaskDialog">
+    <form method="dialog" id="editTaskForm">
+      <h3>Edit Task</h3>
+      <input type="hidden" name="id" />
+      <label>Title <input name="title" required /></label>
+      <label>Project
+        <select name="projectId" id="editTaskProject"></select>
+      </label>
+      <label>Column
+        <select name="column">
+          <option value="inbox">Inbox</option>
+          <option value="ideas">Ideas</option>
+          <option value="in_progress">In Progress</option>
+          <option value="waiting_blocked">Waiting / Blocked</option>
+          <option value="ready_to_publish">Ready to Publish</option>
+          <option value="done">Done</option>
+        </select>
+      </label>
+      <label>Blocker Type
+        <select name="blockerType">
+          <option value="">None</option>
+          <option value="approval">Approval</option>
+          <option value="dependency">Dependency</option>
+          <option value="error">Error</option>
+        </select>
+      </label>
+      <label>Owner <input name="owner" value="Rowan" /></label>
+      <label>Next Action <input name="nextAction" required /></label>
+      <label>Due Date <input name="dueDate" type="date" /></label>
+      <menu>
+        <button type="button" id="editTaskCancelBtn" class="btn ghost">Cancel</button>
+        <button value="default" class="btn primary">Save</button>
+      </menu>
+    </form>
+  </dialog>
   <script src="app.js"></script>
 </body>
 </html>

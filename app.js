@@ -1457,6 +1457,20 @@ function renderBoard(){
     el.addEventListener('dragend', ()=> el.classList.remove('dragging'));
   });
 
+  document.querySelectorAll('.task-edit-btn').forEach((btn) => {
+    ['mousedown', 'pointerdown', 'dragstart'].forEach((evt) => {
+      btn.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+    });
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openEditTaskDialog(btn.dataset.id);
+    });
+  });
+
   document.querySelectorAll('.drop').forEach(drop=>{
     drop.addEventListener('dragenter', ()=> drop.classList.add('is-over'));
     drop.addEventListener('dragover', e=> e.preventDefault());
@@ -1480,7 +1494,10 @@ function taskHtml(t){
   if(t.column==='waiting_blocked') chips.push('<span class="chip high">High</span>');
   if(t.blockerType) chips.push(`<span class="chip ${t.blockerType}">${title(t.blockerType)}</span>`);
   return `<div class="task" draggable="true" data-id="${t.id}">
-    <strong>${escapeHtml(t.title)}</strong>
+    <div class="task-top-row">
+      <strong>${escapeHtml(t.title)}</strong>
+      <button type="button" class="btn ghost task-edit-btn" data-id="${t.id}" draggable="false">Edit</button>
+    </div>
     <small>${escapeHtml(t.nextAction)}</small>
     <small>Owner: ${escapeHtml(t.owner || 'Rowan')}</small>
     ${t.dueDate ? `<small>Due: ${escapeHtml(t.dueDate)}</small>` : ''}
@@ -1491,16 +1508,38 @@ function taskHtml(t){
 function title(v){ return v.charAt(0).toUpperCase()+v.slice(1); }
 
 function populateProjectSelect(){
+  const options = state.projects.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
   const sel = document.getElementById('taskProject');
-  sel.innerHTML = state.projects.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  if (sel) sel.innerHTML = options;
+  const editSel = document.getElementById('editTaskProject');
+  if (editSel) editSel.innerHTML = options;
+}
+
+function openEditTaskDialog(taskId){
+  const task = state.tasks.find((t) => t.id === taskId);
+  if (!task || !editTaskDialog || !editTaskForm) return;
+
+  editTaskForm.elements.id.value = task.id;
+  editTaskForm.elements.title.value = task.title || '';
+  editTaskForm.elements.projectId.value = task.projectId || state.projects[0]?.id || '';
+  editTaskForm.elements.column.value = task.column || 'inbox';
+  editTaskForm.elements.blockerType.value = task.blockerType || '';
+  editTaskForm.elements.owner.value = task.owner || 'Rowan';
+  editTaskForm.elements.nextAction.value = task.nextAction || '';
+  editTaskForm.elements.dueDate.value = task.dueDate || '';
+
+  editTaskDialog.showModal();
 }
 
 // dialogs
 const projectDialog = document.getElementById('projectDialog');
 const taskDialog = document.getElementById('taskDialog');
+const editTaskDialog = document.getElementById('editTaskDialog');
+const editTaskForm = document.getElementById('editTaskForm');
 document.getElementById('addProjectBtn').onclick = ()=> projectDialog.showModal();
 document.getElementById('addTaskBtn').onclick = ()=> taskDialog.showModal();
 document.getElementById('projectCancelBtn')?.addEventListener('click', ()=> projectDialog.close());
+document.getElementById('editTaskCancelBtn')?.addEventListener('click', ()=> editTaskDialog?.close());
 
 const settingsPanel = document.getElementById('settingsPanel');
 document.getElementById('openSettingsBtn')?.addEventListener('click', ()=> {
@@ -1641,6 +1680,29 @@ document.getElementById('taskForm').addEventListener('submit', e=>{
   renderAll();
 });
 
+editTaskForm?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const task = state.tasks.find((t) => t.id === f.get('id'));
+  if (!task) {
+    editTaskDialog?.close();
+    return;
+  }
+
+  task.title = f.get('title');
+  task.projectId = f.get('projectId');
+  task.column = f.get('column');
+  task.blockerType = f.get('blockerType') || null;
+  task.owner = f.get('owner') || 'Rowan';
+  task.nextAction = f.get('nextAction');
+  task.dueDate = f.get('dueDate') || '';
+  task.updatedAt = now();
+
+  editTaskDialog?.close();
+  logChange(`Edited task: ${task.title}`);
+  renderAll();
+});
+
 function enableProjectDragScroll(){
   const el = document.getElementById('projectDirectory');
   if (!el || el.dataset.dragReady === '1') return;
@@ -1763,6 +1825,11 @@ if (!state.changelog.some((c) => c.message === utilityLayoutPatch)) {
 const voiceNotePatch = 'Added Voice Note pod (V1): Start/Stop speech transcription creates a new unassigned "Voice Note" note.';
 if (!state.changelog.some((c) => c.message === voiceNotePatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: voiceNotePatch });
+}
+
+const taskEditPatch = 'Board update: task cards now support Edit via modal for all task fields, including project/column reassignment.';
+if (!state.changelog.some((c) => c.message === taskEditPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: taskEditPatch });
 }
 
 renderAll();
