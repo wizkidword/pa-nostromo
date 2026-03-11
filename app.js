@@ -5,6 +5,10 @@ const NBA_REFRESH_MS = 5 * 60 * 1000;
 const CRYPTO_REFRESH_MS = 15 * 60 * 1000;
 const CRYPTO_DIR_CACHE_KEY = 'mission-control-crypto-directory-v1';
 const CRYPTO_DIR_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const CRYPTO_WATCH_CACHE_KEY = 'mission-control-crypto-watch-cache-v1';
+const CRYPTO_MANUAL_COOLDOWN_MS = 45 * 1000;
+const CRYPTO_FAILURE_BACKOFF_BASE_MS = 20 * 1000;
+const CRYPTO_FAILURE_BACKOFF_MAX_MS = 3 * 60 * 1000;
 const SHARED_STATE_API = '/api/state';
 const SHORTCUT_GLOBAL_PROJECT_ID = '__global__';
 
@@ -82,6 +86,10 @@ let nbaTimer = null;
 let cryptoTimer = null;
 let coinDirectory = [];
 let topSymbolMap = new Map();
+let cryptoRefreshCooldownUntil = 0;
+let cryptoRefreshCooldownTimer = null;
+let cryptoFailureCount = 0;
+let cryptoBackoffUntil = 0;
 let changeLogVisible = false;
 let changeLogLimit = 10;
 let pendingChanges = [];
@@ -836,16 +844,254 @@ function findCoinMatches(query, limit = 5){
   return out;
 }
 
-async function renderCrypto(){
+function getCryptoWatchCache(){
+  try {
+    const raw = localStorage.getItem(CRYPTO_WATCH_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.updatedAt || !Array.isArray(parsed?.watch)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function setCryptoWatchCache(payload){
+  try {
+    localStorage.setItem(CRYPTO_WATCH_CACHE_KEY, JSON.stringify(payload));
+  } catch {}
+}
+
+function formatCryptoError(error){
+  const status = Number(error?.status || 0);
+  if (status === 429) return 'Rate limited (429)';
+  if (status === 401 || status === 403) return 'API access denied';
+  if (status >= 500) return `CoinGecko server error (${status})`;
+  if (status >= 400) return `Request failed (${status})`;
+  if (error?.name === 'AbortError') return 'Request timed out';
+  return 'Network/API error';
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = 12000){
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) {
+      const err = new Error(`HTTP ${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function updateCryptoRefreshButton(){
+  const btn = document.getElementById('cryptoRefreshBtn');
+  if (!btn) return;
+  const leftMs = cryptoRefreshCooldownUntil - Date.now();
+  if (leftMs > 0) {
+    btn.disabled = true;
+    btn.textContent = `Refresh (${Math.ceil(leftMs / 1000)}s)`;
+    return;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Refresh';
+  if (cryptoRefreshCooldownTimer) {
+    clearInterval(cryptoRefreshCooldownTimer);
+    cryptoRefreshCooldownTimer = null;
+  }
+}
+
+function startCryptoRefreshCooldown(){
+  cryptoRefreshCooldownUntil = Date.now() + CRYPTO_MANUAL_COOLDOWN_MS;
+  updateCryptoRefreshButton();
+  if (cryptoRefreshCooldownTimer) clearInterval(cryptoRefreshCooldownTimer);
+  cryptoRefreshCooldownTimer = setInterval(updateCryptoRefreshButton, 1000);
+}
+
+function renderCryptoWidget(el, watch){
+  let totalValue = 0;
+  let totalCostBasis = 0;
+
+  const row = (c) => {
+    const change = Number(c.price_change_percentage_24h || 0);
+    const color = change >= 0 ? '#22c55e' : '#ef4444';
+    const coinId = String(c.id || '').toLowerCase();
+    const holding = state.cryptoHoldings?.[coinId] || { quantity: 0, avgBuyPrice: 0 };
+    const quantity = Number(holding.quantity || 0);
+    const avgBuyPrice = Number(holding.avgBuyPrice || 0);
+    const currentPrice = Number(c.current_price || 0);
+
+    const positionValue = quantity * currentPrice;
+    const costBasis = quantity * avgBuyPrice;
+    const pnl = positionValue - costBasis;
+    const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
+
+    totalValue += positionValue;
+    totalCostBasis += costBasis;
+
+    const pnlColor = pnl >= 0 ? '#22c55e' : '#ef4444';
+
+    return `
+      <div class="change-log-item" style="margin-bottom:8px;">
+        <div class="row-between-wrap">
+          <strong>${escapeHtml((c.symbol || '').toUpperCase())} · ${formatUsdPrice(c.current_price)}</strong>
+          <span style="color:${color};font-weight:700;">${change.toFixed(2)}%</span>
+        </div>
+        <div class="note-meta row-between-wrap" style="margin-top:4px;">
+          <span>${escapeHtml(c.name || c.id || '')} · MCap: $${Number(c.market_cap || 0).toLocaleString()}</span>
+          <button class="btn ghost" data-crypto-remove="${escapeHtml(c.id)}">Remove</button>
+        </div>
+        <div class="row-wrap" style="margin-top:6px;gap:6px;">
+          <label class="note-meta">Qty <input data-crypto-qty="${escapeHtml(c.id)}" type="number" min="0" step="any" value="${Number.isFinite(quantity) ? quantity : 0}" style="width:110px;" /></label>
+          <label class="note-meta">Avg $ <input data-crypto-avg="${escapeHtml(c.id)}" type="number" min="0" step="any" value="${Number.isFinite(avgBuyPrice) ? avgBuyPrice : 0}" style="width:120px;" /></label>
+        </div>
+        <div class="note-meta" style="margin-top:6px;line-height:1.4;">
+          Position: ${formatUsdPrice(positionValue)} · Cost: ${formatUsdPrice(costBasis)}
+          <span style="color:${pnlColor};font-weight:700;"> · P/L: ${formatSignedUsd(pnl)} (${pnl > 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</span>
+        </div>
+      </div>
+    `;
+  };
+
+  const rowsHtml = watch.length ? watch.map((c) => row(c)).join('') : '<div class="note-meta">No watchlist coins yet.</div>';
+
+  const totalPnl = totalValue - totalCostBasis;
+  const totalPnlPct = totalCostBasis > 0 ? (totalPnl / totalCostBasis) * 100 : 0;
+  const totalPnlColor = totalPnl >= 0 ? '#22c55e' : '#ef4444';
+
+  el.innerHTML = `
+    <div class="row-wrap" style="margin-bottom:8px;">
+      <input id="cryptoAddInput" placeholder="Search coin (e.g. btc, ethereum, solana)" />
+      <button id="cryptoAddBtn" class="btn">Add</button>
+      <button id="cryptoDirRefreshBtn" class="btn ghost">Refresh List</button>
+    </div>
+    <div id="cryptoAddHint" class="note-meta"></div>
+    <div class="change-log-item mt8" style="margin-bottom:8px;">
+      <div><strong>💼 Portfolio</strong></div>
+      <div class="note-meta" style="line-height:1.4;margin-top:4px;">
+        Value: ${formatUsdPrice(totalValue)} · Cost: ${formatUsdPrice(totalCostBasis)}
+        <span style="color:${totalPnlColor};font-weight:700;"> · Unrealized: ${formatSignedUsd(totalPnl)} (${totalPnl > 0 ? '+' : ''}${totalPnlPct.toFixed(2)}%)</span>
+      </div>
+    </div>
+    <div class="mt8"><strong>👀 Watchlist</strong></div>
+    <div>${rowsHtml}</div>
+  `;
+
+  const addInput = document.getElementById('cryptoAddInput');
+  const hint = document.getElementById('cryptoAddHint');
+
+  const renderHintMatches = () => {
+    if (!hint) return;
+    const val = (addInput?.value || '').trim().toLowerCase();
+    if (!val) {
+      hint.textContent = 'Tip: add by ticker, name, or id.';
+      return;
+    }
+
+    const preferred = topSymbolMap.get(val);
+    const matches = findCoinMatches(val, 5);
+    if (!matches.length && !preferred) {
+      hint.textContent = 'No matching coin found in cached list.';
+      return;
+    }
+
+    const preferredText = preferred ? `Default for ${val.toUpperCase()}: ${preferred}` : '';
+    const matchText = matches.length
+      ? `Matches: ${matches.map((m) => `${escapeHtml((m.symbol || '').toUpperCase())} (${escapeHtml(m.id)})`).join(' · ')}`
+      : '';
+
+    hint.innerHTML = [preferredText, matchText].filter(Boolean).join('<br/>');
+  };
+
+  addInput?.addEventListener('input', renderHintMatches);
+  renderHintMatches();
+
+  document.getElementById('cryptoAddBtn')?.addEventListener('click', () => {
+    const val = (addInput?.value || '').trim();
+    const id = resolveCoinId(val);
+    if (!id) {
+      if (hint) hint.textContent = 'Could not resolve coin from cached list. Try a different name/symbol.';
+      return;
+    }
+    if (!state.cryptoWatchlist.includes(id)) state.cryptoWatchlist.push(id);
+    if (!state.cryptoHoldings[id]) state.cryptoHoldings[id] = { quantity: 0, avgBuyPrice: 0 };
+    if (addInput) addInput.value = '';
+    save();
+    renderCrypto();
+  });
+
+  document.getElementById('cryptoDirRefreshBtn')?.addEventListener('click', async () => {
+    const btn = document.getElementById('cryptoDirRefreshBtn');
+    if (btn) btn.textContent = 'Refreshing...';
+    await getCoinDirectory(true);
+    if (btn) btn.textContent = 'Refresh List';
+    if (hint) hint.textContent = `Coin list refreshed (${coinDirectory.length.toLocaleString()} coins).`;
+  });
+
+  el.querySelectorAll('[data-crypto-remove]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-crypto-remove');
+      if (!id) return;
+      state.cryptoWatchlist = state.cryptoWatchlist.filter((x) => x !== id);
+      delete state.cryptoHoldings[id];
+      save();
+      renderCrypto();
+    });
+  });
+
+  el.querySelectorAll('[data-crypto-qty]').forEach((input) => {
+    input.addEventListener('change', () => {
+      const coinId = String(input.getAttribute('data-crypto-qty') || '').toLowerCase();
+      if (!coinId) return;
+      const qty = Number(input.value);
+      if (!state.cryptoHoldings[coinId]) state.cryptoHoldings[coinId] = { quantity: 0, avgBuyPrice: 0 };
+      state.cryptoHoldings[coinId].quantity = Number.isFinite(qty) && qty >= 0 ? qty : 0;
+      save();
+      renderCrypto();
+    });
+  });
+
+  el.querySelectorAll('[data-crypto-avg]').forEach((input) => {
+    input.addEventListener('change', () => {
+      const coinId = String(input.getAttribute('data-crypto-avg') || '').toLowerCase();
+      if (!coinId) return;
+      const avg = Number(input.value);
+      if (!state.cryptoHoldings[coinId]) state.cryptoHoldings[coinId] = { quantity: 0, avgBuyPrice: 0 };
+      state.cryptoHoldings[coinId].avgBuyPrice = Number.isFinite(avg) && avg >= 0 ? avg : 0;
+      save();
+      renderCrypto();
+    });
+  });
+}
+
+async function renderCrypto(options = {}){
   const el = document.getElementById('cryptoWidget');
   if (!el) return;
+
+  const manual = !!options.manual;
+  const ts = document.getElementById('cryptoUpdatedAt');
+  const nowTs = Date.now();
+  const backoffLeftMs = cryptoBackoffUntil - nowTs;
+
+  updateCryptoRefreshButton();
+
+  if (!manual && backoffLeftMs > 0) {
+    const cached = getCryptoWatchCache();
+    if (cached?.watch?.length) {
+      renderCryptoWidget(el, cached.watch);
+      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${Math.ceil(backoffLeftMs / 1000)}s backoff)`;
+      return;
+    }
+  }
 
   try {
     if (!coinDirectory.length) await getCoinDirectory(false);
 
-    // Build preferred symbol->id map from top market-cap coins so inputs like "btc" resolve to Bitcoin.
-    const topMapRes = await fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false');
-    const topMapCoins = await topMapRes.json();
+    const topMapCoins = await fetchJsonWithTimeout('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false');
     topSymbolMap = new Map();
     if (Array.isArray(topMapCoins)) {
       for (const c of topMapCoins) {
@@ -859,170 +1105,32 @@ async function renderCrypto(){
     let watch = [];
     if (watchIds.length) {
       const watchUrl = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${encodeURIComponent(watchIds.join(','))}&order=market_cap_desc&sparkline=false&price_change_percentage=24h`;
-      const watchRes = await fetch(watchUrl);
-      watch = await watchRes.json();
+      const watchRes = await fetchJsonWithTimeout(watchUrl);
+      watch = Array.isArray(watchRes) ? watchRes : [];
     }
 
-    let totalValue = 0;
-    let totalCostBasis = 0;
+    renderCryptoWidget(el, watch);
+    const updatedAt = Date.now();
+    setCryptoWatchCache({ updatedAt, watch });
+    cryptoFailureCount = 0;
+    cryptoBackoffUntil = 0;
 
-    const row = (c) => {
-      const change = Number(c.price_change_percentage_24h || 0);
-      const color = change >= 0 ? '#22c55e' : '#ef4444';
-      const coinId = String(c.id || '').toLowerCase();
-      const holding = state.cryptoHoldings?.[coinId] || { quantity: 0, avgBuyPrice: 0 };
-      const quantity = Number(holding.quantity || 0);
-      const avgBuyPrice = Number(holding.avgBuyPrice || 0);
-      const currentPrice = Number(c.current_price || 0);
+    if (ts) ts.textContent = `Updated: ${new Date(updatedAt).toLocaleTimeString()} (watchlist + portfolio · auto: every 15 min)`;
+  } catch (error) {
+    cryptoFailureCount += 1;
+    const backoffMs = Math.min(CRYPTO_FAILURE_BACKOFF_BASE_MS * (2 ** (cryptoFailureCount - 1)), CRYPTO_FAILURE_BACKOFF_MAX_MS);
+    cryptoBackoffUntil = Date.now() + backoffMs;
+    const reason = formatCryptoError(error);
 
-      const positionValue = quantity * currentPrice;
-      const costBasis = quantity * avgBuyPrice;
-      const pnl = positionValue - costBasis;
-      const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
+    const cached = getCryptoWatchCache();
+    if (cached?.watch?.length) {
+      renderCryptoWidget(el, cached.watch);
+      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${reason}; retry in ${Math.ceil(backoffMs / 1000)}s)`;
+      return;
+    }
 
-      totalValue += positionValue;
-      totalCostBasis += costBasis;
-
-      const pnlColor = pnl >= 0 ? '#22c55e' : '#ef4444';
-
-      return `
-        <div class="change-log-item" style="margin-bottom:8px;">
-          <div class="row-between-wrap">
-            <strong>${escapeHtml((c.symbol || '').toUpperCase())} · ${formatUsdPrice(c.current_price)}</strong>
-            <span style="color:${color};font-weight:700;">${change.toFixed(2)}%</span>
-          </div>
-          <div class="note-meta row-between-wrap" style="margin-top:4px;">
-            <span>${escapeHtml(c.name || c.id || '')} · MCap: $${Number(c.market_cap || 0).toLocaleString()}</span>
-            <button class="btn ghost" data-crypto-remove="${escapeHtml(c.id)}">Remove</button>
-          </div>
-          <div class="row-wrap" style="margin-top:6px;gap:6px;">
-            <label class="note-meta">Qty <input data-crypto-qty="${escapeHtml(c.id)}" type="number" min="0" step="any" value="${Number.isFinite(quantity) ? quantity : 0}" style="width:110px;" /></label>
-            <label class="note-meta">Avg $ <input data-crypto-avg="${escapeHtml(c.id)}" type="number" min="0" step="any" value="${Number.isFinite(avgBuyPrice) ? avgBuyPrice : 0}" style="width:120px;" /></label>
-          </div>
-          <div class="note-meta" style="margin-top:6px;line-height:1.4;">
-            Position: ${formatUsdPrice(positionValue)} · Cost: ${formatUsdPrice(costBasis)}
-            <span style="color:${pnlColor};font-weight:700;"> · P/L: ${formatSignedUsd(pnl)} (${pnl > 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</span>
-          </div>
-        </div>
-      `;
-    };
-
-    const rowsHtml = watch.length ? watch.map((c) => row(c)).join('') : '<div class="note-meta">No watchlist coins yet.</div>';
-
-    const totalPnl = totalValue - totalCostBasis;
-    const totalPnlPct = totalCostBasis > 0 ? (totalPnl / totalCostBasis) * 100 : 0;
-    const totalPnlColor = totalPnl >= 0 ? '#22c55e' : '#ef4444';
-
-    el.innerHTML = `
-      <div class="row-wrap" style="margin-bottom:8px;">
-        <input id="cryptoAddInput" placeholder="Search coin (e.g. btc, ethereum, solana)" />
-        <button id="cryptoAddBtn" class="btn">Add</button>
-        <button id="cryptoDirRefreshBtn" class="btn ghost">Refresh List</button>
-      </div>
-      <div id="cryptoAddHint" class="note-meta"></div>
-      <div class="change-log-item mt8" style="margin-bottom:8px;">
-        <div><strong>💼 Portfolio</strong></div>
-        <div class="note-meta" style="line-height:1.4;margin-top:4px;">
-          Value: ${formatUsdPrice(totalValue)} · Cost: ${formatUsdPrice(totalCostBasis)}
-          <span style="color:${totalPnlColor};font-weight:700;"> · Unrealized: ${formatSignedUsd(totalPnl)} (${totalPnl > 0 ? '+' : ''}${totalPnlPct.toFixed(2)}%)</span>
-        </div>
-      </div>
-      <div class="mt8"><strong>👀 Watchlist</strong></div>
-      <div>${rowsHtml}</div>
-    `;
-
-    const addInput = document.getElementById('cryptoAddInput');
-    const hint = document.getElementById('cryptoAddHint');
-
-    const renderHintMatches = () => {
-      if (!hint) return;
-      const val = (addInput?.value || '').trim().toLowerCase();
-      if (!val) {
-        hint.textContent = 'Tip: add by ticker, name, or id.';
-        return;
-      }
-
-      const preferred = topSymbolMap.get(val);
-      const matches = findCoinMatches(val, 5);
-      if (!matches.length && !preferred) {
-        hint.textContent = 'No matching coin found in cached list.';
-        return;
-      }
-
-      const preferredText = preferred ? `Default for ${val.toUpperCase()}: ${preferred}` : '';
-      const matchText = matches.length
-        ? `Matches: ${matches.map((m) => `${escapeHtml((m.symbol || '').toUpperCase())} (${escapeHtml(m.id)})`).join(' · ')}`
-        : '';
-
-      hint.innerHTML = [preferredText, matchText].filter(Boolean).join('<br/>');
-    };
-
-    addInput?.addEventListener('input', renderHintMatches);
-    renderHintMatches();
-
-    document.getElementById('cryptoAddBtn')?.addEventListener('click', () => {
-      const val = (addInput?.value || '').trim();
-      const id = resolveCoinId(val);
-      if (!id) {
-        if (hint) hint.textContent = 'Could not resolve coin from cached list. Try a different name/symbol.';
-        return;
-      }
-      if (!state.cryptoWatchlist.includes(id)) state.cryptoWatchlist.push(id);
-      if (!state.cryptoHoldings[id]) state.cryptoHoldings[id] = { quantity: 0, avgBuyPrice: 0 };
-      if (addInput) addInput.value = '';
-      save();
-      renderCrypto();
-    });
-
-    document.getElementById('cryptoDirRefreshBtn')?.addEventListener('click', async () => {
-      const btn = document.getElementById('cryptoDirRefreshBtn');
-      if (btn) btn.textContent = 'Refreshing...';
-      await getCoinDirectory(true);
-      if (btn) btn.textContent = 'Refresh List';
-      if (hint) hint.textContent = `Coin list refreshed (${coinDirectory.length.toLocaleString()} coins).`;
-    });
-
-    el.querySelectorAll('[data-crypto-remove]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const id = btn.getAttribute('data-crypto-remove');
-        if (!id) return;
-        state.cryptoWatchlist = state.cryptoWatchlist.filter((x) => x !== id);
-        delete state.cryptoHoldings[id];
-        save();
-        renderCrypto();
-      });
-    });
-
-    el.querySelectorAll('[data-crypto-qty]').forEach((input) => {
-      input.addEventListener('change', () => {
-        const coinId = String(input.getAttribute('data-crypto-qty') || '').toLowerCase();
-        if (!coinId) return;
-        const qty = Number(input.value);
-        if (!state.cryptoHoldings[coinId]) state.cryptoHoldings[coinId] = { quantity: 0, avgBuyPrice: 0 };
-        state.cryptoHoldings[coinId].quantity = Number.isFinite(qty) && qty >= 0 ? qty : 0;
-        save();
-        renderCrypto();
-      });
-    });
-
-    el.querySelectorAll('[data-crypto-avg]').forEach((input) => {
-      input.addEventListener('change', () => {
-        const coinId = String(input.getAttribute('data-crypto-avg') || '').toLowerCase();
-        if (!coinId) return;
-        const avg = Number(input.value);
-        if (!state.cryptoHoldings[coinId]) state.cryptoHoldings[coinId] = { quantity: 0, avgBuyPrice: 0 };
-        state.cryptoHoldings[coinId].avgBuyPrice = Number.isFinite(avg) && avg >= 0 ? avg : 0;
-        save();
-        renderCrypto();
-      });
-    });
-
-    const ts = document.getElementById('cryptoUpdatedAt');
-    if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()} (watchlist + portfolio · auto: every 15 min)`;
-  } catch {
     el.textContent = 'Crypto data unavailable right now.';
-    const ts = document.getElementById('cryptoUpdatedAt');
-    if (ts) ts.textContent = 'Update failed';
+    if (ts) ts.textContent = `Update failed: ${reason} (retry in ${Math.ceil(backoffMs / 1000)}s)`;
   }
 }
 
@@ -2476,6 +2584,11 @@ if (!state.changelog.some((c) => c.message === cryptoPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: cryptoPatch });
 }
 
+const cryptoResiliencePatch = 'Crypto pod resilience patch: last-good watchlist fallback with stale indicator, smarter rate-limit/network error messaging, failed-fetch backoff, and manual refresh cooldown countdown.';
+if (!state.changelog.some((c) => c.message === cryptoResiliencePatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: cryptoResiliencePatch });
+}
+
 const musicPatch = 'Added mini Music Player pod with YouTube/stream URL input, local audio file playback, compact controls, volume, and one-click favorite stream recall.';
 if (!state.changelog.some((c) => c.message === musicPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: musicPatch });
@@ -2526,7 +2639,15 @@ setupNbaTimer();
 setupCryptoTimer();
 document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => renderWeather());
 document.getElementById('nbaRefreshBtn')?.addEventListener('click', () => renderNbaScores());
-document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => renderCrypto());
+document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
+  if (Date.now() < cryptoRefreshCooldownUntil) {
+    updateCryptoRefreshButton();
+    return;
+  }
+  startCryptoRefreshCooldown();
+  renderCrypto({ manual: true });
+});
+updateCryptoRefreshButton();
 
 document.getElementById('addCalendarReminderBtn')?.addEventListener('click', () => {
   if (!selectedCalendarDate) selectedCalendarDate = dateKey(new Date());
