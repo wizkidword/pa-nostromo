@@ -7,7 +7,7 @@ const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
 
-function loadEnvFile(filePath) {
+function loadEnvFile(filePath, shellEnvKeys = new Set()) {
   if (!fs.existsSync(filePath)) return;
   const raw = fs.readFileSync(filePath, 'utf8');
 
@@ -21,7 +21,7 @@ function loadEnvFile(filePath) {
     const key = trimmed.slice(0, idx).trim();
     let value = trimmed.slice(idx + 1).trim();
 
-    if (!key || process.env[key] !== undefined) continue;
+    if (!key || shellEnvKeys.has(key)) continue;
 
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
@@ -32,8 +32,9 @@ function loadEnvFile(filePath) {
 }
 
 // Local config support (safe precedence): shell env > .env.local > .env
-loadEnvFile(path.join(ROOT, '.env'));
-loadEnvFile(path.join(ROOT, '.env.local'));
+const SHELL_ENV_KEYS = new Set(Object.keys(process.env));
+loadEnvFile(path.join(ROOT, '.env'), SHELL_ENV_KEYS);
+loadEnvFile(path.join(ROOT, '.env.local'), SHELL_ENV_KEYS);
 
 const PORT = Number(process.env.PORT || 4187);
 
