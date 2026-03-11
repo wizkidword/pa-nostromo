@@ -7,9 +7,14 @@ const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
 
-const ROWAN_MAX_TEXT_LENGTH = Number(process.env.ROWAN_SEND_MAX_TEXT_LENGTH || 2000);
+function parsePositiveInt(value, fallback) {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? Math.floor(num) : fallback;
+}
+
+const ROWAN_MAX_TEXT_LENGTH = parsePositiveInt(process.env.ROWAN_SEND_MAX_TEXT_LENGTH, 2000);
 const ROWAN_RELAY_URL = String(process.env.ROWAN_RELAY_URL || '').trim();
-const ROWAN_RELAY_TIMEOUT_MS = Math.max(1000, Number(process.env.ROWAN_RELAY_TIMEOUT_MS || 8000));
+const ROWAN_RELAY_TIMEOUT_MS = Math.max(1000, parsePositiveInt(process.env.ROWAN_RELAY_TIMEOUT_MS, 8000));
 const ROWAN_RELAY_AUTH_BEARER = String(process.env.ROWAN_RELAY_AUTH_BEARER || '').trim();
 const ROWAN_RELAY_AUTH_HEADER = String(process.env.ROWAN_RELAY_AUTH_HEADER || 'Authorization').trim() || 'Authorization';
 const ROWAN_RELAY_OPENCLAW_CHANNEL = String(process.env.ROWAN_RELAY_OPENCLAW_CHANNEL || '').trim();
@@ -53,8 +58,7 @@ function isLoopbackAddress(value) {
 }
 
 function isLocalRequest(req) {
-  const forwardedFor = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  if (forwardedFor) return isLoopbackAddress(forwardedFor);
+  // Do not trust x-forwarded-for here; clients can spoof it unless a trusted proxy is enforced.
   return isLoopbackAddress(req.socket?.remoteAddress);
 }
 
