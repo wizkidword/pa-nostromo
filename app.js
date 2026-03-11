@@ -1432,7 +1432,11 @@ function renderNotes(){
         <span class="note-meta">${new Date(n.updatedAt).toLocaleString()}</span>
       </div>
       <input data-field="title" value="${escapeHtml(n.title || '')}" placeholder="Note title" />
+      <div class="md-toolbar" data-editor-toolbar>
+        ${markdownToolbarButtons()}
+      </div>
       <textarea data-field="body" rows="4" placeholder="Type your note...">${escapeHtml(n.body || '')}</textarea>
+      <div class="md-preview" data-rendered="body">${renderFormattedText(n.body || '')}</div>
       <div class="note-actions">
         <select data-field="projectId">${opts}</select>
         <div style="display:flex;gap:8px;">
@@ -1454,6 +1458,10 @@ function renderNotes(){
       if (!note) return;
       note[e.target.dataset.field] = e.target.value;
       note.updatedAt = now();
+      if (e.target.dataset.field === 'body') {
+        const preview = card.querySelector('[data-rendered="body"]');
+        if (preview) preview.innerHTML = renderFormattedText(e.target.value);
+      }
       save();
     });
     el.addEventListener('change', (e)=>{
@@ -1464,6 +1472,23 @@ function renderNotes(){
       note.updatedAt = now();
       save();
       renderNotes();
+    });
+  });
+
+  document.querySelectorAll('#notesBoardToday [data-editor-toolbar], #notesBoardBacklog [data-editor-toolbar]').forEach((toolbar)=>{
+    toolbar.querySelectorAll('button[data-md-format]').forEach((btn)=>{
+      btn.addEventListener('click', ()=>{
+        const card = btn.closest('.note-card');
+        const input = card?.querySelector('textarea[data-field="body"]');
+        const note = state.notes.find((x)=>x.id===card?.dataset.noteId);
+        if (!input || !note) return;
+        applyFormat(input, btn.dataset.mdFormat);
+        note.body = input.value;
+        note.updatedAt = now();
+        const preview = card.querySelector('[data-rendered="body"]');
+        if (preview) preview.innerHTML = renderFormattedText(input.value);
+        save();
+      });
     });
   });
 
@@ -1732,6 +1757,164 @@ function escapeHtml(str){
     .replaceAll('"','&quot;');
 }
 
+const EDITOR_CONFIG = {
+  mode: 'markdown',
+  supportedModes: ['markdown', 'richtext'],
+  // TODO: add rich-text adapter here (TipTap/ProseMirror/etc.) while keeping markdown persistence as source-of-truth.
+};
+
+function markdownToolbarButtons(){
+  return [
+    ['bold', 'B', 'Bold'],
+    ['italic', 'I', 'Italic'],
+    ['underline', 'U', 'Underline'],
+    ['bullet', '• List', 'Bullet list'],
+    ['numbered', '1. List', 'Numbered list'],
+    ['clear', 'Clear', 'Clear formatting'],
+  ].map(([key, label, title]) => `<button type="button" class="btn ghost md-btn" data-md-format="${key}" title="${title}">${label}</button>`).join('');
+}
+
+function applyWrapFormat(value, start, end, marker){
+  const selected = value.slice(start, end);
+  const hasWrapper = selected.startsWith(marker) && selected.endsWith(marker) && selected.length >= marker.length * 2;
+  if (hasWrapper) {
+    const inner = selected.slice(marker.length, selected.length - marker.length);
+    return {
+      value: `${value.slice(0, start)}${inner}${value.slice(end)}`,
+      selectionStart: start,
+      selectionEnd: start + inner.length,
+    };
+  }
+  const core = selected || 'text';
+  const next = `${marker}${core}${marker}`;
+  const caretStart = start + marker.length;
+  return {
+    value: `${value.slice(0, start)}${next}${value.slice(end)}`,
+    selectionStart: caretStart,
+    selectionEnd: caretStart + core.length,
+  };
+}
+
+function stripMarkdownFormatting(text){
+  return String(text || '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/\*(.*?)\*/g, '$1')
+    .replace(/\+\+(.*?)\+\+/g, '$1')
+    .replace(/^\s*[-*]\s+/gm, '')
+    .replace(/^\s*\d+\.\s+/gm, '');
+}
+
+function applyFormat(input, format){
+  if (!input) return;
+  const value = String(input.value || '');
+  const start = input.selectionStart ?? 0;
+  const end = input.selectionEnd ?? 0;
+
+  let result = { value, selectionStart: start, selectionEnd: end };
+  if (format === 'bold') result = applyWrapFormat(value, start, end, '**');
+  if (format === 'italic') result = applyWrapFormat(value, start, end, '*');
+  if (format === 'underline') result = applyWrapFormat(value, start, end, '++');
+  if (format === 'bullet') {
+    const selected = value.slice(start, end) || 'list item';
+    const next = selected.split('\n').map((line) => (line.trim() ? `- ${line.replace(/^\s*[-*]\s+/, '')}` : '- ')).join('\n');
+    result = {
+      value: `${value.slice(0, start)}${next}${value.slice(end)}`,
+      selectionStart: start,
+      selectionEnd: start + next.length,
+    };
+  }
+  if (format === 'numbered') {
+    const selected = value.slice(start, end) || 'list item';
+    const next = selected.split('\n').map((line, idx) => {
+      const cleaned = line.replace(/^\s*\d+\.\s+/, '').trim();
+      return `${idx + 1}. ${cleaned || 'item'}`;
+    }).join('\n');
+    result = {
+      value: `${value.slice(0, start)}${next}${value.slice(end)}`,
+      selectionStart: start,
+      selectionEnd: start + next.length,
+    };
+  }
+  if (format === 'clear') {
+    const selected = value.slice(start, end);
+    const target = selected || value;
+    const cleaned = stripMarkdownFormatting(target);
+    result = selected
+      ? {
+        value: `${value.slice(0, start)}${cleaned}${value.slice(end)}`,
+        selectionStart: start,
+        selectionEnd: start + cleaned.length,
+      }
+      : {
+        value: cleaned,
+        selectionStart: 0,
+        selectionEnd: cleaned.length,
+      };
+  }
+
+  input.value = result.value;
+  input.focus();
+  input.setSelectionRange(result.selectionStart, result.selectionEnd);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function renderInlineMarkdown(text){
+  const escaped = escapeHtml(text || '');
+  return escaped
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/\+\+(.+?)\+\+/g, '<u>$1</u>');
+}
+
+function renderFormattedText(markdown){
+  if (EDITOR_CONFIG.mode !== 'markdown') return escapeHtml(markdown || '');
+  const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+  const blocks = [];
+  let listType = null;
+
+  const closeList = () => {
+    if (listType) {
+      blocks.push(`</${listType}>`);
+      listType = null;
+    }
+  };
+
+  lines.forEach((line) => {
+    const ul = line.match(/^\s*[-*]\s+(.+)$/);
+    const ol = line.match(/^\s*\d+\.\s+(.+)$/);
+
+    if (ul) {
+      if (listType !== 'ul') {
+        closeList();
+        listType = 'ul';
+        blocks.push('<ul>');
+      }
+      blocks.push(`<li>${renderInlineMarkdown(ul[1])}</li>`);
+      return;
+    }
+
+    if (ol) {
+      if (listType !== 'ol') {
+        closeList();
+        listType = 'ol';
+        blocks.push('<ol>');
+      }
+      blocks.push(`<li>${renderInlineMarkdown(ol[1])}</li>`);
+      return;
+    }
+
+    closeList();
+    if (!line.trim()) {
+      blocks.push('<div class="md-spacer"></div>');
+      return;
+    }
+    blocks.push(`<p>${renderInlineMarkdown(line)}</p>`);
+  });
+
+  closeList();
+  return blocks.join('') || '<p></p>';
+}
+
 function renderBoard(){
 
   const board = document.getElementById('board');
@@ -1790,7 +1973,7 @@ function taskHtml(t){
       <strong>${escapeHtml(t.title)}</strong>
       <button type="button" class="btn ghost task-edit-btn" data-id="${t.id}" draggable="false">Edit</button>
     </div>
-    <small>${escapeHtml(t.nextAction)}</small>
+    <div class="task-next-action md-preview">${renderFormattedText(t.nextAction || '')}</div>
     <small>Owner: ${escapeHtml(t.owner || 'Rowan')}</small>
     ${t.dueDate ? `<small>Due: ${escapeHtml(t.dueDate)}</small>` : ''}
     <div style="margin-top:6px">${chips.join('')}</div>
@@ -1819,6 +2002,9 @@ function openEditTaskDialog(taskId){
   editTaskForm.elements.owner.value = task.owner || 'Rowan';
   editTaskForm.elements.nextAction.value = task.nextAction || '';
   editTaskForm.elements.dueDate.value = task.dueDate || '';
+
+  const preview = document.getElementById('editTaskNextActionPreview');
+  if (preview) preview.innerHTML = renderFormattedText(task.nextAction || '');
 
   editTaskDialog.showModal();
 }
@@ -1854,6 +2040,19 @@ document.getElementById('addTaskBtn').onclick = ()=> taskDialog.showModal();
 document.getElementById('projectCancelBtn')?.addEventListener('click', ()=> projectDialog.close());
 document.getElementById('editTaskCancelBtn')?.addEventListener('click', ()=> editTaskDialog?.close());
 document.getElementById('addShortcutBtn')?.addEventListener('click', ()=> openShortcutDialog());
+
+const editTaskNextActionInput = document.getElementById('editTaskNextAction');
+const editTaskNextActionPreview = document.getElementById('editTaskNextActionPreview');
+const editTaskToolbar = document.getElementById('editTaskToolbar');
+if (editTaskToolbar) {
+  editTaskToolbar.innerHTML = markdownToolbarButtons();
+  editTaskToolbar.querySelectorAll('button[data-md-format]').forEach((btn)=>{
+    btn.addEventListener('click', ()=> applyFormat(editTaskNextActionInput, btn.dataset.mdFormat));
+  });
+}
+editTaskNextActionInput?.addEventListener('input', ()=> {
+  if (editTaskNextActionPreview) editTaskNextActionPreview.innerHTML = renderFormattedText(editTaskNextActionInput.value || '');
+});
 document.getElementById('shortcutCancelBtn')?.addEventListener('click', ()=> shortcutDialog?.close());
 
 const settingsPanel = document.getElementById('settingsPanel');
@@ -2191,6 +2390,11 @@ if (!state.changelog.some((c) => c.message === shortcutsPatch)) {
 const shortcutsUxPatch = 'Shortcuts UX update: wider pod layout, denser shortcut cards, and drag/drop bookmark creation that defaults to currently checked shortcut project filters (or Global if none selected).';
 if (!state.changelog.some((c) => c.message === shortcutsUxPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: shortcutsUxPatch });
+}
+
+const markdownEditorPatch = 'Markdown editor helpers added for Notes + Edit Task next action (toolbar + safe formatted preview) with future rich-text adapter seam.';
+if (!state.changelog.some((c) => c.message === markdownEditorPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: markdownEditorPatch });
 }
 
 renderAll();

@@ -382,6 +382,11 @@ body.theme-light .social-icon-link img {
   opacity: 0.8;
 }
 
+.task-next-action {
+  margin: 4px 0 6px;
+  font-size: 12px;
+}
+
 .chip {
   font-size: 11px;
   padding: 2px 6px;
@@ -507,6 +512,48 @@ menu {
 .note-delete { background: #7f1d1d; }
 .note-pin { background: #4c1d95; }
 .note-card.pinned { border-color: #8b5cf6; box-shadow: 0 0 0 1px rgba(139,92,246,.35) inset; }
+
+.md-toolbar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.md-btn {
+  width: auto;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.md-preview {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 8px;
+  font-size: 12px;
+}
+
+.md-preview p {
+  margin: 0 0 6px;
+}
+
+.md-preview p:last-child {
+  margin-bottom: 0;
+}
+
+.md-preview ul,
+.md-preview ol {
+  margin: 0 0 6px 18px;
+  padding: 0;
+}
+
+.md-preview li {
+  margin: 0 0 3px;
+}
+
+.md-spacer {
+  height: 4px;
+}
 
 .forecast-row {
   margin-top: 6px;

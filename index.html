@@ -270,7 +270,11 @@
         </select>
       </label>
       <label>Owner <input name="owner" value="Rowan" /></label>
-      <label>Next Action <input name="nextAction" required /></label>
+      <label>Next Action
+        <div class="md-toolbar" id="editTaskToolbar"></div>
+        <textarea name="nextAction" id="editTaskNextAction" rows="4" required></textarea>
+        <div class="md-preview" id="editTaskNextActionPreview"></div>
+      </label>
       <label>Due Date <input name="dueDate" type="date" /></label>
       <menu>
         <button type="button" id="editTaskCancelBtn" class="btn ghost">Cancel</button>
