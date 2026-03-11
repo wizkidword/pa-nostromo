@@ -1476,19 +1476,18 @@ function renderNotes(){
   });
 
   document.querySelectorAll('#notesBoardToday [data-editor-toolbar], #notesBoardBacklog [data-editor-toolbar]').forEach((toolbar)=>{
-    toolbar.querySelectorAll('button[data-md-format]').forEach((btn)=>{
-      btn.addEventListener('click', ()=>{
-        const card = btn.closest('.note-card');
-        const input = card?.querySelector('textarea[data-field="body"]');
-        const note = state.notes.find((x)=>x.id===card?.dataset.noteId);
-        if (!input || !note) return;
-        applyFormat(input, btn.dataset.mdFormat);
-        note.body = input.value;
-        note.updatedAt = now();
-        const preview = card.querySelector('[data-rendered="body"]');
-        if (preview) preview.innerHTML = renderFormattedText(input.value);
-        save();
-      });
+    bindMarkdownToolbar(toolbar, (btn) => {
+      const card = btn.closest('.note-card');
+      return card?.querySelector('textarea[data-field="body"]') || null;
+    }, (input, btn) => {
+      const card = btn.closest('.note-card');
+      const note = state.notes.find((x)=>x.id===card?.dataset.noteId);
+      if (!note) return;
+      note.body = input.value;
+      note.updatedAt = now();
+      const preview = card.querySelector('[data-rendered="body"]');
+      if (preview) preview.innerHTML = renderFormattedText(input.value);
+      save();
     });
   });
 
@@ -1785,13 +1784,14 @@ function applyWrapFormat(value, start, end, marker){
       selectionEnd: start + inner.length,
     };
   }
-  const core = selected || 'text';
-  const next = `${marker}${core}${marker}`;
+  const next = `${marker}${selected}${marker}`;
   const caretStart = start + marker.length;
   return {
     value: `${value.slice(0, start)}${next}${value.slice(end)}`,
     selectionStart: caretStart,
-    selectionEnd: caretStart + core.length,
+    selectionEnd: selected
+      ? caretStart + selected.length
+      : caretStart,
   };
 }
 
@@ -1815,24 +1815,32 @@ function applyFormat(input, format){
   if (format === 'italic') result = applyWrapFormat(value, start, end, '*');
   if (format === 'underline') result = applyWrapFormat(value, start, end, '++');
   if (format === 'bullet') {
-    const selected = value.slice(start, end) || 'list item';
-    const next = selected.split('\n').map((line) => (line.trim() ? `- ${line.replace(/^\s*[-*]\s+/, '')}` : '- ')).join('\n');
+    const selected = value.slice(start, end);
+    const hasSelection = start !== end;
+    const lines = (hasSelection ? selected : '').split('\n');
+    const next = hasSelection
+      ? lines.map((line) => (line.trim() ? `- ${line.replace(/^\s*[-*]\s+/, '')}` : '- ')).join('\n')
+      : '- ';
     result = {
       value: `${value.slice(0, start)}${next}${value.slice(end)}`,
-      selectionStart: start,
-      selectionEnd: start + next.length,
+      selectionStart: hasSelection ? start : start + 2,
+      selectionEnd: hasSelection ? start + next.length : start + 2,
     };
   }
   if (format === 'numbered') {
-    const selected = value.slice(start, end) || 'list item';
-    const next = selected.split('\n').map((line, idx) => {
-      const cleaned = line.replace(/^\s*\d+\.\s+/, '').trim();
-      return `${idx + 1}. ${cleaned || 'item'}`;
-    }).join('\n');
+    const selected = value.slice(start, end);
+    const hasSelection = start !== end;
+    const lines = (hasSelection ? selected : '').split('\n');
+    const next = hasSelection
+      ? lines.map((line, idx) => {
+        const cleaned = line.replace(/^\s*\d+\.\s+/, '').trim();
+        return `${idx + 1}. ${cleaned}`.trimEnd();
+      }).join('\n')
+      : '1. ';
     result = {
       value: `${value.slice(0, start)}${next}${value.slice(end)}`,
-      selectionStart: start,
-      selectionEnd: start + next.length,
+      selectionStart: hasSelection ? start : start + 3,
+      selectionEnd: hasSelection ? start + next.length : start + 3,
     };
   }
   if (format === 'clear') {
@@ -1856,6 +1864,19 @@ function applyFormat(input, format){
   input.focus();
   input.setSelectionRange(result.selectionStart, result.selectionEnd);
   input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function bindMarkdownToolbar(toolbar, getInput, onApplied){
+  if (!toolbar) return;
+  toolbar.querySelectorAll('button[data-md-format]').forEach((btn)=>{
+    btn.addEventListener('mousedown', (e)=> e.preventDefault());
+    btn.addEventListener('click', ()=>{
+      const input = typeof getInput === 'function' ? getInput(btn) : null;
+      if (!input) return;
+      applyFormat(input, btn.dataset.mdFormat);
+      if (typeof onApplied === 'function') onApplied(input, btn);
+    });
+  });
 }
 
 function renderInlineMarkdown(text){
@@ -2046,9 +2067,7 @@ const editTaskNextActionPreview = document.getElementById('editTaskNextActionPre
 const editTaskToolbar = document.getElementById('editTaskToolbar');
 if (editTaskToolbar) {
   editTaskToolbar.innerHTML = markdownToolbarButtons();
-  editTaskToolbar.querySelectorAll('button[data-md-format]').forEach((btn)=>{
-    btn.addEventListener('click', ()=> applyFormat(editTaskNextActionInput, btn.dataset.mdFormat));
-  });
+  bindMarkdownToolbar(editTaskToolbar, () => editTaskNextActionInput);
 }
 editTaskNextActionInput?.addEventListener('input', ()=> {
   if (editTaskNextActionPreview) editTaskNextActionPreview.innerHTML = renderFormattedText(editTaskNextActionInput.value || '');
@@ -2395,6 +2414,11 @@ if (!state.changelog.some((c) => c.message === shortcutsUxPatch)) {
 const markdownEditorPatch = 'Markdown editor helpers added for Notes + Edit Task next action (toolbar + safe formatted preview) with future rich-text adapter seam.';
 if (!state.changelog.some((c) => c.message === markdownEditorPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: markdownEditorPatch });
+}
+
+const markdownToolbarUxPatch = 'Markdown toolbar UX fix: single-click now formats active selection reliably, avoids placeholder insertion when text is selected, and inserts clean caret-ready wrappers for empty selections (bold/italic/underline/lists).';
+if (!state.changelog.some((c) => c.message === markdownToolbarUxPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: markdownToolbarUxPatch });
 }
 
 renderAll();
