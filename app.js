@@ -796,12 +796,53 @@ async function getCoinDirectory(force = false){
   return coinDirectory;
 }
 
+const CRYPTO_PROVIDER_CHAIN = ['coingecko', 'coincap', 'cryptocompare'];
+const CRYPTO_PROVIDER_LABELS = {
+  coingecko: 'CoinGecko',
+  coincap: 'CoinCap',
+  cryptocompare: 'CryptoCompare',
+};
+
+const CRYPTO_SYMBOL_ALIASES = {
+  btc: 'bitcoin',
+  xbt: 'bitcoin',
+  eth: 'ethereum',
+  doge: 'dogecoin',
+  sol: 'solana',
+  matic: 'polygon',
+  wmatic: 'polygon',
+  avax: 'avalanche-2',
+  link: 'chainlink',
+  dot: 'polkadot',
+  ltc: 'litecoin',
+  xrp: 'ripple',
+  bch: 'bitcoin-cash',
+  uni: 'uniswap',
+  atom: 'cosmos',
+  etc: 'ethereum-classic',
+};
+
+let activeCryptoProvider = 'coingecko';
+
+function mapCoinIdToSymbolMap(){
+  const m = new Map();
+  for (const c of coinDirectory) {
+    const id = String(c?.id || '').toLowerCase();
+    const sym = String(c?.symbol || '').toUpperCase();
+    if (id && sym) m.set(id, sym);
+  }
+  return m;
+}
+
 function resolveCoinId(query){
   const qRaw = String(query || '').trim().toLowerCase();
   if (!qRaw) return null;
 
-  // Normalize common ticker prefixes users type (e.g., $DOGE, @doge, #btc)
+  // Normalize common ticker prefixes users type (e.g., ticker symbols with leading punctuation)
   const q = qRaw.replace(/^[^a-z0-9]+/, '');
+
+  const aliasId = CRYPTO_SYMBOL_ALIASES[q] || CRYPTO_SYMBOL_ALIASES[qRaw];
+  if (aliasId) return aliasId;
 
   // Prefer canonical symbol mapping first so short tickers like "doge" resolve to top-market-cap coin.
   if (q && topSymbolMap.has(q)) return topSymbolMap.get(q);
@@ -850,6 +891,7 @@ function getCryptoWatchCache(){
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed?.updatedAt || !Array.isArray(parsed?.watch)) return null;
+    if (!parsed.provider) parsed.provider = 'coingecko';
     return parsed;
   } catch {
     return null;
@@ -866,7 +908,10 @@ function formatCryptoError(error){
   const status = Number(error?.status || 0);
   if (status === 429) return 'Rate limited (429)';
   if (status === 401 || status === 403) return 'API access denied';
-  if (status >= 500) return `CoinGecko server error (${status})`;
+  if (status >= 500) {
+    const providerLabel = CRYPTO_PROVIDER_LABELS[String(error?.provider || '').toLowerCase()] || 'Provider';
+    return `${providerLabel} server error (${status})`;
+  }
   if (status >= 400) return `Request failed (${status})`;
   if (error?.name === 'AbortError') return 'Request timed out';
   return 'Network/API error';
@@ -886,6 +931,153 @@ async function fetchJsonWithTimeout(url, timeoutMs = 12000){
   } finally {
     clearTimeout(timer);
   }
+}
+
+function cryptoProviderError(provider, error){
+  if (error && typeof error === 'object') {
+    error.provider = provider;
+    return error;
+  }
+  const wrapped = new Error(String(error || 'Provider error'));
+  wrapped.provider = provider;
+  return wrapped;
+}
+
+async function fetchTopSymbolMapWithFailover(){
+  const nextMap = new Map();
+  let lastErr = null;
+
+  for (const provider of ['coingecko', 'coincap']) {
+    try {
+      if (provider === 'coingecko') {
+        const topMapCoins = await fetchJsonWithTimeout('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false');
+        if (Array.isArray(topMapCoins)) {
+          for (const c of topMapCoins) {
+            const sym = String(c.symbol || '').toLowerCase();
+            const id = String(c.id || '').toLowerCase();
+            if (sym && id && !nextMap.has(sym)) nextMap.set(sym, id);
+          }
+        }
+      } else {
+        const topAssets = await fetchJsonWithTimeout('https://api.coincap.io/v2/assets?limit=300');
+        const assets = Array.isArray(topAssets?.data) ? topAssets.data : [];
+        for (const a of assets) {
+          const sym = String(a?.symbol || '').toLowerCase();
+          const id = resolveCoinId(a?.id || a?.name || sym);
+          if (sym && id && !nextMap.has(sym)) nextMap.set(sym, id);
+        }
+      }
+
+      if (nextMap.size) {
+        topSymbolMap = nextMap;
+        return;
+      }
+    } catch (error) {
+      lastErr = cryptoProviderError(provider, error);
+    }
+  }
+
+  if (lastErr) throw lastErr;
+}
+
+async function fetchWatchFromCoinGecko(watchIds){
+  if (!watchIds.length) return [];
+  const watchUrl = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${encodeURIComponent(watchIds.join(','))}&order=market_cap_desc&sparkline=false&price_change_percentage=24h`;
+  const watchRes = await fetchJsonWithTimeout(watchUrl);
+  const watch = Array.isArray(watchRes) ? watchRes : [];
+  return watch.map((c) => ({
+    id: String(c.id || '').toLowerCase(),
+    symbol: String(c.symbol || '').toLowerCase(),
+    name: c.name || c.id || '',
+    current_price: Number(c.current_price || 0),
+    price_change_percentage_24h: Number(c.price_change_percentage_24h || 0),
+    market_cap: Number(c.market_cap || 0),
+  }));
+}
+
+async function fetchWatchFromCoinCap(watchIds){
+  if (!watchIds.length) return [];
+  const idToSymbol = mapCoinIdToSymbolMap();
+  const symbols = [...new Set(watchIds.map((id) => idToSymbol.get(id)).filter(Boolean))];
+  if (!symbols.length) return [];
+
+  const assetsRes = await fetchJsonWithTimeout('https://api.coincap.io/v2/assets?limit=2000');
+  const assets = Array.isArray(assetsRes?.data) ? assetsRes.data : [];
+  const symbolSet = new Set(symbols.map((s) => String(s || '').toUpperCase()));
+  const bySymbol = new Map();
+  for (const a of assets) {
+    const sym = String(a?.symbol || '').toUpperCase();
+    if (!sym || !symbolSet.has(sym) || bySymbol.has(sym)) continue;
+    bySymbol.set(sym, a);
+  }
+
+  const out = [];
+  for (const id of watchIds) {
+    const sym = idToSymbol.get(id);
+    if (!sym) continue;
+    const a = bySymbol.get(sym);
+    if (!a) continue;
+    const change24 = Number(a?.changePercent24Hr || 0);
+    out.push({
+      id,
+      symbol: sym.toLowerCase(),
+      name: a?.name || id,
+      current_price: Number(a?.priceUsd || 0),
+      price_change_percentage_24h: Number.isFinite(change24) ? change24 : 0,
+      market_cap: Number(a?.marketCapUsd || 0),
+    });
+  }
+  return out;
+}
+
+async function fetchWatchFromCryptoCompare(watchIds){
+  if (!watchIds.length) return [];
+  const idToSymbol = mapCoinIdToSymbolMap();
+  const symbols = [...new Set(watchIds.map((id) => idToSymbol.get(id)).filter(Boolean))];
+  if (!symbols.length) return [];
+
+  const fsyms = symbols.join(',');
+  const priceUrl = `https://min-api.cryptocompare.com/data/pricemultifull?fsyms=${encodeURIComponent(fsyms)}&tsyms=USD`;
+  const res = await fetchJsonWithTimeout(priceUrl);
+  const raw = res?.RAW || {};
+
+  const out = [];
+  for (const id of watchIds) {
+    const sym = idToSymbol.get(id);
+    if (!sym) continue;
+    const usd = raw?.[sym]?.USD;
+    if (!usd) continue;
+    out.push({
+      id,
+      symbol: sym.toLowerCase(),
+      name: usd?.FROMSYMBOL || sym,
+      current_price: Number(usd?.PRICE || 0),
+      price_change_percentage_24h: Number(usd?.CHANGEPCT24HOUR || 0),
+      market_cap: Number(usd?.MKTCAP || 0),
+    });
+  }
+  return out;
+}
+
+async function fetchCryptoWatchWithFailover(watchIds){
+  let lastErr = null;
+  for (const provider of CRYPTO_PROVIDER_CHAIN) {
+    try {
+      let watch = [];
+      if (provider === 'coingecko') watch = await fetchWatchFromCoinGecko(watchIds);
+      else if (provider === 'coincap') watch = await fetchWatchFromCoinCap(watchIds);
+      else if (provider === 'cryptocompare') watch = await fetchWatchFromCryptoCompare(watchIds);
+
+      if (watchIds.length && !watch.length) {
+        throw cryptoProviderError(provider, new Error('Empty watchlist response'));
+      }
+
+      return { provider, watch };
+    } catch (error) {
+      lastErr = cryptoProviderError(provider, error);
+    }
+  }
+  throw lastErr || new Error('All crypto providers failed');
 }
 
 function updateCryptoRefreshButton(){
@@ -1083,7 +1275,8 @@ async function renderCrypto(options = {}){
     const cached = getCryptoWatchCache();
     if (cached?.watch?.length) {
       renderCryptoWidget(el, cached.watch);
-      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${Math.ceil(backoffLeftMs / 1000)}s backoff)`;
+      const providerLabel = CRYPTO_PROVIDER_LABELS[cached.provider] || CRYPTO_PROVIDER_LABELS[activeCryptoProvider];
+      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${Math.ceil(backoffLeftMs / 1000)}s backoff) · Data: ${providerLabel}`;
       return;
     }
   }
@@ -1091,31 +1284,20 @@ async function renderCrypto(options = {}){
   try {
     if (!coinDirectory.length) await getCoinDirectory(false);
 
-    const topMapCoins = await fetchJsonWithTimeout('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false');
-    topSymbolMap = new Map();
-    if (Array.isArray(topMapCoins)) {
-      for (const c of topMapCoins) {
-        const sym = String(c.symbol || '').toLowerCase();
-        const id = String(c.id || '').toLowerCase();
-        if (sym && id && !topSymbolMap.has(sym)) topSymbolMap.set(sym, id);
-      }
-    }
+    await fetchTopSymbolMapWithFailover();
 
     const watchIds = (state.cryptoWatchlist || []).filter(Boolean).slice(0, 40);
-    let watch = [];
-    if (watchIds.length) {
-      const watchUrl = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${encodeURIComponent(watchIds.join(','))}&order=market_cap_desc&sparkline=false&price_change_percentage=24h`;
-      const watchRes = await fetchJsonWithTimeout(watchUrl);
-      watch = Array.isArray(watchRes) ? watchRes : [];
-    }
+    const { provider, watch } = await fetchCryptoWatchWithFailover(watchIds);
+    activeCryptoProvider = provider;
 
     renderCryptoWidget(el, watch);
     const updatedAt = Date.now();
-    setCryptoWatchCache({ updatedAt, watch });
+    setCryptoWatchCache({ updatedAt, watch, provider });
     cryptoFailureCount = 0;
     cryptoBackoffUntil = 0;
 
-    if (ts) ts.textContent = `Updated: ${new Date(updatedAt).toLocaleTimeString()} (watchlist + portfolio · auto: every 15 min)`;
+    const providerLabel = CRYPTO_PROVIDER_LABELS[provider] || provider;
+    if (ts) ts.textContent = `Updated: ${new Date(updatedAt).toLocaleTimeString()} (watchlist + portfolio · auto: every 15 min) · Data: ${providerLabel}`;
   } catch (error) {
     cryptoFailureCount += 1;
     const backoffMs = Math.min(CRYPTO_FAILURE_BACKOFF_BASE_MS * (2 ** (cryptoFailureCount - 1)), CRYPTO_FAILURE_BACKOFF_MAX_MS);
@@ -1125,7 +1307,8 @@ async function renderCrypto(options = {}){
     const cached = getCryptoWatchCache();
     if (cached?.watch?.length) {
       renderCryptoWidget(el, cached.watch);
-      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${reason}; retry in ${Math.ceil(backoffMs / 1000)}s)`;
+      const providerLabel = CRYPTO_PROVIDER_LABELS[cached.provider] || CRYPTO_PROVIDER_LABELS[activeCryptoProvider];
+      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${reason}; retry in ${Math.ceil(backoffMs / 1000)}s) · Data: ${providerLabel}`;
       return;
     }
 
@@ -2587,6 +2770,11 @@ if (!state.changelog.some((c) => c.message === cryptoPatch)) {
 const cryptoResiliencePatch = 'Crypto pod resilience patch: last-good watchlist fallback with stale indicator, smarter rate-limit/network error messaging, failed-fetch backoff, and manual refresh cooldown countdown.';
 if (!state.changelog.some((c) => c.message === cryptoResiliencePatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: cryptoResiliencePatch });
+}
+
+const cryptoMultiProviderPatch = 'Crypto pod reliability update: multi-provider market data failover chain (CoinGecko → CoinCap → CryptoCompare) with active data-source status and watchlist ID-safe normalization.';
+if (!state.changelog.some((c) => c.message === cryptoMultiProviderPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: cryptoMultiProviderPatch });
 }
 
 const musicPatch = 'Added mini Music Player pod with YouTube/stream URL input, local audio file playback, compact controls, volume, and one-click favorite stream recall.';
