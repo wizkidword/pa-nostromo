@@ -101,6 +101,8 @@ let alarmRepeatTimer = null;
 let selectedCalendarDate = null;
 let streamIframePlayer = null;
 let youtubeApiLoading = false;
+let youtubePlayerReady = false;
+let pendingYoutubeAction = null;
 let voiceNoteRecognizer = null;
 let voiceNoteListening = false;
 let voiceNoteSupported = false;
@@ -1383,18 +1385,43 @@ async function renderCrypto(options = {}){
   }
 }
 
+function normalizeYoutubeId(candidate){
+  const value = String(candidate || '').trim();
+  return /^[a-zA-Z0-9_-]{11}$/.test(value) ? value : null;
+}
+
 function extractYoutubeId(url){
   try {
     const u = new URL(String(url || '').trim());
-    const host = u.hostname.replace('www.', '');
-    if (host === 'youtu.be') return u.pathname.slice(1) || null;
-    if (host.includes('youtube.com')) {
-      if (u.searchParams.get('v')) return u.searchParams.get('v');
+    const host = u.hostname.replace(/^www\./, '').toLowerCase();
+
+    if (host === 'youtu.be') {
+      const id = u.pathname.split('/').filter(Boolean)[0];
+      return normalizeYoutubeId(id);
+    }
+
+    if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
+      const watchId = normalizeYoutubeId(u.searchParams.get('v'));
+      if (watchId) return watchId;
+
       const parts = u.pathname.split('/').filter(Boolean);
       const embedIdx = parts.indexOf('embed');
-      if (embedIdx >= 0 && parts[embedIdx + 1]) return parts[embedIdx + 1];
+      if (embedIdx >= 0 && parts[embedIdx + 1]) {
+        const embedId = normalizeYoutubeId(parts[embedIdx + 1]);
+        if (embedId) return embedId;
+      }
+
       const liveIdx = parts.indexOf('live');
-      if (liveIdx >= 0 && parts[liveIdx + 1]) return parts[liveIdx + 1];
+      if (liveIdx >= 0 && parts[liveIdx + 1]) {
+        const liveId = normalizeYoutubeId(parts[liveIdx + 1]);
+        if (liveId) return liveId;
+      }
+
+      const shortsIdx = parts.indexOf('shorts');
+      if (shortsIdx >= 0 && parts[shortsIdx + 1]) {
+        const shortsId = normalizeYoutubeId(parts[shortsIdx + 1]);
+        if (shortsId) return shortsId;
+      }
     }
   } catch {}
   return null;
@@ -1405,20 +1432,47 @@ function ensureYoutubeApi(){
   youtubeApiLoading = true;
   const tag = document.createElement('script');
   tag.src = 'https://www.youtube.com/iframe_api';
+  tag.onerror = () => {
+    youtubeApiLoading = false;
+    if (pendingYoutubeAction) {
+      setMusicStatus('Failed to load YouTube player API. Check connection and try again.');
+    }
+  };
   document.head.appendChild(tag);
+}
+
+function runPendingYoutubeAction(){
+  if (!youtubePlayerReady || !streamIframePlayer || !pendingYoutubeAction) return false;
+
+  if (pendingYoutubeAction === 'play' && streamIframePlayer.playVideo) {
+    streamIframePlayer.playVideo();
+    pendingYoutubeAction = null;
+    state.musicPlayer.isPlaying = true;
+    save();
+    setMusicStatus('Playing YouTube stream (audio via embed player).');
+    return true;
+  }
+
+  pendingYoutubeAction = null;
+  return false;
 }
 
 function initYouTubePlayerIfReady(){
   const iframe = document.getElementById('musicStreamIframe');
   if (!iframe || !window.YT?.Player) return false;
 
+  youtubePlayerReady = false;
   try {
     if (streamIframePlayer?.destroy) streamIframePlayer.destroy();
   } catch {}
 
   streamIframePlayer = new window.YT.Player('musicStreamIframe', {
     events: {
-      onReady: () => syncMusicVolume(state.musicPlayer.volume),
+      onReady: () => {
+        youtubePlayerReady = true;
+        syncMusicVolume(state.musicPlayer.volume);
+        runPendingYoutubeAction();
+      },
     },
   });
   return true;
@@ -1456,16 +1510,18 @@ function loadStreamIntoPlayer(url){
   const ytId = extractYoutubeId(rawUrl);
   if (ytId) {
     state.musicPlayer.streamMode = 'youtube';
+    youtubePlayerReady = false;
     audio.pause();
     audio.removeAttribute('src');
     iframe.src = `https://www.youtube.com/embed/${encodeURIComponent(ytId)}?enablejsapi=1&autoplay=0&playsinline=1`;
     ensureYoutubeApi();
     if (window.YT?.Player) initYouTubePlayerIfReady();
-    setMusicStatus('YouTube stream loaded. Press Play to start (browser may require interaction).');
+    setMusicStatus('YouTube stream loaded. Press Play to start.');
     return;
   }
 
   state.musicPlayer.streamMode = 'direct';
+  pendingYoutubeAction = null;
   iframe.src = '';
   audio.src = rawUrl;
   audio.volume = state.musicPlayer.volume;
@@ -1494,13 +1550,12 @@ function playMusic(){
   }
 
   if (state.musicPlayer.streamMode === 'youtube') {
-    if (streamIframePlayer?.playVideo) {
-      streamIframePlayer.playVideo();
-      state.musicPlayer.isPlaying = true;
-      save();
-      setMusicStatus('Playing YouTube stream (audio via embed player).');
-    } else {
-      setMusicStatus('YouTube player still loading. Try Play again in a second.');
+    pendingYoutubeAction = 'play';
+    ensureYoutubeApi();
+    if (window.YT?.Player && !streamIframePlayer) initYouTubePlayerIfReady();
+
+    if (!runPendingYoutubeAction()) {
+      setMusicStatus('YouTube player is loading — play will start automatically when ready.');
     }
     return;
   }
@@ -1536,6 +1591,7 @@ function playMusic(){
 
 function pauseMusic(){
   const { audio } = getMusicEls();
+  pendingYoutubeAction = null;
   if (state.musicPlayer.sourceType === 'local' || state.musicPlayer.streamMode === 'direct') {
     audio?.pause();
   } else if (state.musicPlayer.streamMode === 'youtube' && streamIframePlayer?.pauseVideo) {
@@ -1548,6 +1604,7 @@ function pauseMusic(){
 
 function stopMusic(){
   const { audio, iframe } = getMusicEls();
+  pendingYoutubeAction = null;
   if (state.musicPlayer.sourceType === 'local' || state.musicPlayer.streamMode === 'direct') {
     if (audio) {
       audio.pause();
@@ -1632,6 +1689,7 @@ function renderMusicPlayer(){
     if (!file || !els.audio) return;
     state.musicPlayer.sourceType = 'local';
     state.musicPlayer.streamMode = 'unknown';
+    pendingYoutubeAction = null;
     state.musicPlayer.currentTrackName = file.name;
     els.audio.src = URL.createObjectURL(file);
     els.audio.volume = state.musicPlayer.volume;
@@ -2152,6 +2210,7 @@ function renderVoiceToRowanPod(){
 }
 
 window.onYouTubeIframeAPIReady = function(){
+  youtubeApiLoading = false;
   initYouTubePlayerIfReady();
 };
 
@@ -3301,6 +3360,11 @@ if (!state.changelog.some((c) => c.message === stateSafetyPatch)) {
 const musicStreamCompatibilityPatch = 'Patch: Music Player stream compatibility restored — non-direct live stream URLs now auto-fallback to embedded iframe mode while keeping YouTube and local audio behavior intact.';
 if (!state.changelog.some((c) => c.message === musicStreamCompatibilityPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: musicStreamCompatibilityPatch });
+}
+
+const youtubePlaybackReliabilityPatch = 'Patch: Music Player YouTube playback reliability improved — watch/youtu.be/embed URL parsing normalized and Play now auto-queues until the YouTube API/player is fully ready.';
+if (!state.changelog.some((c) => c.message === youtubePlaybackReliabilityPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: youtubePlaybackReliabilityPatch });
 }
 
 renderAll();
