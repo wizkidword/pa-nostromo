@@ -227,6 +227,10 @@ body.theme-light .social-icon-link img {
   grid-column: span 2;
 }
 
+.utility-card-full {
+  grid-column: 1 / -1;
+}
+
 .widget-block { color: var(--muted); }
 
 .voice-to-rowan-transcript {
