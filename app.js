@@ -10,6 +10,7 @@ const CRYPTO_MANUAL_COOLDOWN_MS = 45 * 1000;
 const CRYPTO_FAILURE_BACKOFF_BASE_MS = 20 * 1000;
 const CRYPTO_FAILURE_BACKOFF_MAX_MS = 3 * 60 * 1000;
 const SHARED_STATE_API = '/api/state';
+const SHARED_STATE_BACKUPS_API = '/api/state/backups';
 const SHORTCUT_GLOBAL_PROJECT_ID = '__global__';
 
 const COLUMNS = [
@@ -308,13 +309,30 @@ async function hydrateStateFromSharedApi(){
   }
 }
 
+async function writeStateToSharedApi(payload){
+  const res = await fetch(SHARED_STATE_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    let details = '';
+    try {
+      const errBody = await res.json();
+      details = errBody?.message || errBody?.error || '';
+    } catch {
+      // ignore
+    }
+    throw new Error(details || `State sync failed (HTTP ${res.status})`);
+  }
+
+  return res.json().catch(() => null);
+}
+
 async function pushStateToSharedApi(){
   try {
-    await fetch(SHARED_STATE_API, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(state),
-    });
+    await writeStateToSharedApi(state);
   } catch {
     // Local fallback only
   }
@@ -324,6 +342,47 @@ function save(){
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   if (sharedSaveTimer) clearTimeout(sharedSaveTimer);
   sharedSaveTimer = setTimeout(() => { pushStateToSharedApi(); }, 300);
+}
+
+function downloadJsonFile(filename, obj){
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportStateSnapshot(){
+  const stamp = now().replace(/[:.]/g, '-');
+  downloadJsonFile(`pa-nostromo-state-${stamp}.json`, state);
+}
+
+async function importStateSnapshotFromFile(file){
+  if (!file) return;
+  const warning = 'Importing state will overwrite the current shared dashboard state for all browsers. Continue?';
+  if (!window.confirm(warning)) return;
+
+  const text = await file.text();
+  const incoming = JSON.parse(text);
+  if (!incoming || typeof incoming !== 'object') {
+    throw new Error('Selected file is not a valid state object.');
+  }
+
+  await writeStateToSharedApi({
+    ...incoming,
+    __writeControl: {
+      overrideDowngrade: true,
+      source: 'manual_import',
+    },
+  });
+
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(incoming));
+  state = load();
+  renderAll();
 }
 
 function projectName(projectId){ return state.projects.find(p=>p.id===projectId)?.name || 'Unknown'; }
@@ -2840,6 +2899,35 @@ document.addEventListener('fullscreenchange', () => {
   if (fs) fs.checked = !!document.fullscreenElement;
 });
 
+document.getElementById('exportStateBtn')?.addEventListener('click', () => {
+  try {
+    exportStateSnapshot();
+    logChange('Exported state JSON snapshot from Settings');
+  } catch (err) {
+    alert(`Export failed: ${String(err?.message || err)}`);
+  }
+});
+
+const importStateFileInput = document.getElementById('importStateFileInput');
+document.getElementById('importStateBtn')?.addEventListener('click', () => {
+  importStateFileInput?.click();
+});
+
+importStateFileInput?.addEventListener('change', async (e) => {
+  const file = e.target?.files?.[0];
+  if (!file) return;
+
+  try {
+    await importStateSnapshotFromFile(file);
+    logChange('Imported state JSON snapshot via Settings');
+    alert('State imported successfully.');
+  } catch (err) {
+    alert(`Import failed: ${String(err?.message || err)}`);
+  } finally {
+    importStateFileInput.value = '';
+  }
+});
+
 document.getElementById('toggleChangeLogBtn')?.addEventListener('click', () => {
   changeLogVisible = !changeLogVisible;
   renderChangeLog();
@@ -3181,6 +3269,11 @@ if (!state.changelog.some((c) => c.message === markdownEditorPatch)) {
 const markdownToolbarUxPatch = 'Markdown toolbar UX fix: single-click now formats active selection reliably, avoids placeholder insertion when text is selected, and inserts clean caret-ready wrappers for empty selections (bold/italic/underline/lists).';
 if (!state.changelog.some((c) => c.message === markdownToolbarUxPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: markdownToolbarUxPatch });
+}
+
+const stateSafetyPatch = 'State Safety Pack: automatic pre-write versioned backups + restore APIs + checksum metadata + Settings export/import controls with explicit overwrite confirmation.';
+if (!state.changelog.some((c) => c.message === stateSafetyPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: stateSafetyPatch });
 }
 
 renderAll();

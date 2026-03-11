@@ -56,6 +56,33 @@ Open: `http://localhost:4187`
 
 This allows state sharing across browsers on the same machine.
 
+## State Safety & Recovery
+
+Mission Control now includes a built-in state safety pack to prevent accidental overwrite/data-loss events.
+
+- **Automatic snapshots on every accepted write**: before `/api/state` stores a new state, the previous state is saved to `data/backups/state-<ISO>-<nonce>.json`.
+- **Retention policy**: keeps the most recent 200 snapshots and prunes older files automatically.
+- **Integrity metadata**: every saved state includes `__integrity.savedAt` + `__integrity.checksum` (SHA-256 of state payload) for corruption/malformed write detection.
+- **Downgrade protection**: high-risk "state got much smaller" writes are blocked by default (`409 state_downgrade_blocked`).
+- **Explicit override only for manual recovery/import**: override is honored only when `__writeControl.overrideDowngrade=true` with `source` set to `manual_restore` or `manual_import`.
+
+### Recovery endpoints
+
+- `GET /api/state/backups` → lists snapshots (newest first)
+- `POST /api/state/restore` with `{ "backupFile": "state-...json" }` → restores a snapshot
+  - Restore also creates a **pre-restore snapshot** of current state first.
+
+### UI safety actions (Settings)
+
+- **Export State JSON**: downloads current in-memory state with timestamped filename.
+- **Import State JSON**: prompts for confirmation + warning, then performs guarded import.
+
+### Best practices
+
+1. Use Settings → **Export State JSON** before major manual edits.
+2. If state looks wrong, list backups and restore the most recent known-good snapshot.
+3. Keep writes local/trusted; do not expose this service publicly without auth/network controls.
+
 ## Project Structure
 
 - `index.html` - UI shell
@@ -105,6 +132,7 @@ Early alpha. Built for real daily use and rapid iteration.
 
 ## Patch Notes
 
+- 2026-03-11: State Safety Pack hardening: automatic versioned pre-write backups (`data/backups` with retention prune), integrity metadata (`savedAt` + checksum), guarded overwrite override paths for manual import/restore, new backup list + restore APIs, and Settings UI export/import controls with confirmation.
 - 2026-03-11: Turnkey local relay config update: `server.js` now auto-loads `.env` / `.env.local` (without overriding shell env), added `.env.example`, documented one-command startup via `npm start`, and kept `/api/rowan-send` local-only hardening defaults intact.
 - 2026-03-11: Voice-to-Rowan relay bridge upgrade: added `POST /api/rowan-send` with validated input, explicit relay env config, local-only default hardening, and UI primary transport shift to server relay with preserved-draft fallback path.
 - 2026-03-10: Crypto Tracker portfolio mode (manual holdings per watched coin: quantity + average buy) with per-coin position/cost/P&L and a compact total portfolio summary.

@@ -66,6 +66,15 @@
       </label>
 
       <hr class="settings-divider" />
+      <h3 class="m0">State Safety</h3>
+      <p class="note-meta">Export a full backup anytime. Import requires explicit confirmation and may overwrite newer shared state.</p>
+      <div class="row-wrap">
+        <button id="exportStateBtn" class="btn">Export State JSON</button>
+        <button id="importStateBtn" class="btn ghost">Import State JSON</button>
+        <input id="importStateFileInput" type="file" accept="application/json,.json" hidden />
+      </div>
+
+      <hr class="settings-divider" />
       <h3 class="m0">Shortcuts</h3>
       <button id="addShortcutBtn" class="btn settings-toggle-start">+ New Shortcut</button>
       <div id="settingsShortcutsList" class="change-log-list"></div>

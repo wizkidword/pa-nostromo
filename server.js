@@ -2,10 +2,13 @@ const http = require('http');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+const crypto = require('crypto');
 
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
+const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
+const BACKUP_RETENTION = 200;
 
 function loadEnvFile(filePath, shellEnvKeys = new Set()) {
   if (!fs.existsSync(filePath)) return;
@@ -31,7 +34,6 @@ function loadEnvFile(filePath, shellEnvKeys = new Set()) {
   }
 }
 
-// Local config support (safe precedence): shell env > .env.local > .env
 const SHELL_ENV_KEYS = new Set(Object.keys(process.env));
 loadEnvFile(path.join(ROOT, '.env'), SHELL_ENV_KEYS);
 loadEnvFile(path.join(ROOT, '.env.local'), SHELL_ENV_KEYS);
@@ -72,6 +74,7 @@ const MIME = {
 
 async function ensureDataDir() {
   await fsp.mkdir(DATA_DIR, { recursive: true });
+  await fsp.mkdir(BACKUPS_DIR, { recursive: true });
 }
 
 function sendJson(res, status, obj) {
@@ -95,8 +98,120 @@ function isLoopbackAddress(value) {
 }
 
 function isLocalRequest(req) {
-  // Do not trust x-forwarded-for here; clients can spoof it unless a trusted proxy is enforced.
   return isLoopbackAddress(req.socket?.remoteAddress);
+}
+
+function stateRichnessScore(state) {
+  const arrLen = (v) => Array.isArray(v) ? v.length : 0;
+  return (
+    arrLen(state?.tasks) * 5 +
+    arrLen(state?.notes) * 3 +
+    arrLen(state?.ideas) * 2 +
+    arrLen(state?.reminders) +
+    arrLen(state?.shortcuts) * 2 +
+    arrLen(state?.changelog)
+  );
+}
+
+function deepClone(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+function stripIntegrityMeta(stateObj) {
+  const clone = deepClone(stateObj || {});
+  if (clone && typeof clone === 'object') {
+    delete clone.__integrity;
+    delete clone.__writeControl;
+  }
+  return clone;
+}
+
+function computeChecksum(stateObj) {
+  const canonical = JSON.stringify(stripIntegrityMeta(stateObj));
+  return crypto.createHash('sha256').update(canonical).digest('hex');
+}
+
+function buildBackupFileName() {
+  const iso = new Date().toISOString().replace(/[:.]/g, '-');
+  const nonce = crypto.randomBytes(3).toString('hex');
+  return `state-${iso}-${nonce}.json`;
+}
+
+async function listBackupFiles() {
+  await ensureDataDir();
+  const entries = await fsp.readdir(BACKUPS_DIR, { withFileTypes: true });
+  const files = [];
+
+  for (const ent of entries) {
+    if (!ent.isFile()) continue;
+    if (!ent.name.startsWith('state-') || !ent.name.endsWith('.json')) continue;
+    const abs = path.join(BACKUPS_DIR, ent.name);
+    try {
+      const st = await fsp.stat(abs);
+      files.push({
+        backupFile: ent.name,
+        size: st.size,
+        createdAt: st.birthtime?.toISOString?.() || st.mtime.toISOString(),
+        mtimeMs: st.mtimeMs,
+      });
+    } catch {
+      // ignore race/deleted file
+    }
+  }
+
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return files;
+}
+
+async function pruneBackups(maxKeep = BACKUP_RETENTION) {
+  const files = await listBackupFiles();
+  const stale = files.slice(maxKeep);
+  await Promise.all(stale.map((f) => fsp.unlink(path.join(BACKUPS_DIR, f.backupFile)).catch(() => {})));
+}
+
+async function readStateFileSafe() {
+  try {
+    const raw = await fsp.readFile(STATE_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return { state: null, integrity: 'invalid' };
+
+    const storedChecksum = String(parsed?.__integrity?.checksum || '').trim();
+    if (!storedChecksum) return { state: parsed, integrity: 'missing_checksum' };
+
+    const computed = computeChecksum(parsed);
+    return { state: parsed, integrity: computed === storedChecksum ? 'ok' : 'checksum_mismatch' };
+  } catch {
+    return { state: null, integrity: 'not_found' };
+  }
+}
+
+async function writeBackupSnapshot(stateObj, reason = 'write') {
+  if (!stateObj || typeof stateObj !== 'object') return null;
+  await ensureDataDir();
+  const backupFile = buildBackupFileName();
+  const backupPath = path.join(BACKUPS_DIR, backupFile);
+  const payload = {
+    ...deepClone(stateObj),
+    __backupMeta: {
+      reason,
+      createdAt: new Date().toISOString(),
+    },
+  };
+  await fsp.writeFile(backupPath, JSON.stringify(payload, null, 2), 'utf8');
+  await pruneBackups(BACKUP_RETENTION);
+  return backupFile;
+}
+
+async function writeStateWithIntegrity(incomingState) {
+  const savedAt = new Date().toISOString();
+  const next = deepClone(incomingState || {});
+  next.__integrity = {
+    savedAt,
+    checksum: computeChecksum(next),
+  };
+
+  await fsp.writeFile(STATE_PATH, JSON.stringify(next, null, 2), 'utf8');
+  return next.__integrity;
 }
 
 async function relayRowanMessage(text) {
@@ -159,6 +274,51 @@ async function relayRowanMessage(text) {
 
 async function handleApiState(req, res) {
   await ensureDataDir();
+  const pathname = new URL(req.url || '/api/state', `http://localhost:${PORT}`).pathname;
+
+  if (pathname === '/api/state/backups') {
+    if (req.method !== 'GET') return sendJson(res, 405, { error: 'method_not_allowed' });
+    const backups = await listBackupFiles();
+    return sendJson(res, 200, { ok: true, backups: backups.map(({ mtimeMs, ...rest }) => rest) });
+  }
+
+  if (pathname === '/api/state/restore') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'method_not_allowed' });
+
+    try {
+      const body = await readBody(req);
+      const parsed = JSON.parse(body || '{}');
+      const backupFile = path.basename(String(parsed?.backupFile || '').trim());
+      if (!backupFile || !backupFile.startsWith('state-') || !backupFile.endsWith('.json')) {
+        return sendJson(res, 400, { ok: false, error: 'invalid_backup_file' });
+      }
+
+      const backupPath = path.join(BACKUPS_DIR, backupFile);
+      const raw = await fsp.readFile(backupPath, 'utf8');
+      const backupState = JSON.parse(raw);
+
+      const { state: currentState } = await readStateFileSafe();
+      let preRestoreSnapshot = null;
+      if (currentState) {
+        preRestoreSnapshot = await writeBackupSnapshot(currentState, 'pre_restore');
+      }
+
+      const integrity = await writeStateWithIntegrity(backupState);
+      return sendJson(res, 200, {
+        ok: true,
+        restoredFrom: backupFile,
+        preRestoreSnapshot,
+        savedAt: integrity.savedAt,
+        checksum: integrity.checksum,
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, error: 'restore_failed', message: String(err?.message || err) });
+    }
+  }
+
+  if (pathname !== '/api/state') {
+    return sendJson(res, 404, { error: 'not_found' });
+  }
 
   if (req.method === 'GET') {
     try {
@@ -174,8 +334,44 @@ async function handleApiState(req, res) {
     try {
       const body = await readBody(req);
       const parsed = JSON.parse(body || '{}');
-      await fsp.writeFile(STATE_PATH, JSON.stringify(parsed, null, 2), 'utf8');
-      return sendJson(res, 200, { ok: true, savedAt: new Date().toISOString() });
+      if (!parsed || typeof parsed !== 'object') {
+        return sendJson(res, 400, { error: 'invalid_json', message: 'State payload must be an object.' });
+      }
+
+      const overrideDowngrade = parsed?.__writeControl?.overrideDowngrade === true;
+      const source = String(parsed?.__writeControl?.source || '').trim();
+      const overrideAllowedSources = new Set(['manual_restore', 'manual_import']);
+      const allowOverride = overrideDowngrade && overrideAllowedSources.has(source);
+
+      const cleanIncoming = deepClone(parsed);
+      delete cleanIncoming.__writeControl;
+
+      const { state: current, integrity } = await readStateFileSafe();
+      if (current) {
+        const incomingScore = stateRichnessScore(cleanIncoming);
+        const currentScore = stateRichnessScore(current);
+
+        const looksLikeDangerousDowngrade = currentScore >= 20 && incomingScore <= Math.floor(currentScore * 0.35);
+        if (looksLikeDangerousDowngrade && !allowOverride) {
+          return sendJson(res, 409, {
+            ok: false,
+            error: 'state_downgrade_blocked',
+            message: 'Incoming state looks much smaller than current shared state; write blocked to prevent accidental data loss.',
+            currentScore,
+            incomingScore,
+          });
+        }
+
+        await writeBackupSnapshot(current, 'pre_write');
+      }
+
+      const writeIntegrity = await writeStateWithIntegrity(cleanIncoming);
+      return sendJson(res, 200, {
+        ok: true,
+        savedAt: writeIntegrity.savedAt,
+        checksum: writeIntegrity.checksum,
+        previousStateIntegrity: integrity,
+      });
     } catch (err) {
       return sendJson(res, 400, { error: 'invalid_json', message: String(err?.message || err) });
     }
@@ -279,5 +475,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Mission Control running on http://localhost:${PORT}`);
   console.log(`Shared state file: ${STATE_PATH}`);
+  console.log(`State backup dir: ${BACKUPS_DIR} (retain latest ${BACKUP_RETENTION})`);
   console.log(`Voice-to-Rowan relay: ${ROWAN_RELAY_URL ? 'configured' : 'not configured'} (${ROWAN_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
 });
