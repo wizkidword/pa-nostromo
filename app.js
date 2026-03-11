@@ -1754,16 +1754,94 @@ function setVoiceToRowanDraftValue(text){
   }
 }
 
+function getVoiceToRowanBridgeTargetOrigin(targetWindow){
+  if (!targetWindow) return null;
+
+  try {
+    if (targetWindow.location && targetWindow.location.origin === window.location.origin) {
+      return window.location.origin;
+    }
+  } catch {
+    // Cross-origin target; fall through to referrer-derived origin.
+  }
+
+  if (document.referrer) {
+    try {
+      return new URL(document.referrer).origin;
+    } catch {}
+  }
+
+  return null;
+}
+
+function sendVoiceToRowanViaParentBridge(text){
+  const payload = {
+    type: 'mission-control.chat.send',
+    action: 'mission-control:chat:send',
+    version: 1,
+    source: 'project-mission-control-lite',
+    text,
+    ts: Date.now(),
+  };
+
+  const targets = [];
+  if (window.parent && window.parent !== window) targets.push(window.parent);
+  if (window.top && window.top !== window && !targets.includes(window.top)) targets.push(window.top);
+  if (!targets.length) {
+    return { ok: false, reason: 'no parent/top window available for bridge fallback' };
+  }
+
+  let sent = 0;
+  const errors = [];
+  for (const target of targets) {
+    const targetOrigin = getVoiceToRowanBridgeTargetOrigin(target);
+    if (!targetOrigin) {
+      errors.push('could not determine safe target origin');
+      continue;
+    }
+    try {
+      target.postMessage(payload, targetOrigin);
+      sent += 1;
+    } catch (err) {
+      errors.push(String(err?.message || err));
+    }
+  }
+
+  if (sent > 0) {
+    return { ok: true, transport: sent > 1 ? 'postMessage(parent/top)' : 'postMessage(parent)' };
+  }
+
+  return {
+    ok: false,
+    reason: errors[0] || 'bridge postMessage failed',
+  };
+}
+
+function showVoiceToRowanFallbackTools(show){
+  const toolsEl = document.getElementById('voiceToRowanFallbackTools');
+  if (!toolsEl) return;
+  toolsEl.style.display = show ? 'flex' : 'none';
+}
+
 async function sendVoiceToRowanMessage(text){
   if (typeof window.sendMissionControlChatMessage === 'function') {
     await window.sendMissionControlChatMessage(text);
-    return;
+    return { transport: 'window.sendMissionControlChatMessage' };
   }
+
   if (typeof window.sendRowanChatMessage === 'function') {
     await window.sendRowanChatMessage(text);
-    return;
+    return { transport: 'window.sendRowanChatMessage' };
   }
-  throw new Error('Rowan chat bridge unavailable');
+
+  const bridge = sendVoiceToRowanViaParentBridge(text);
+  if (bridge.ok) {
+    return { transport: bridge.transport };
+  }
+
+  const err = new Error(`Rowan chat bridge unavailable (${bridge.reason}).`);
+  err.code = 'ROWAN_BRIDGE_UNAVAILABLE';
+  throw err;
 }
 
 function ensureVoiceToRowanRecognizer(){
@@ -1849,6 +1927,10 @@ function renderVoiceToRowanPod(){
       <button id="voiceToRowanSendBtn" class="btn">Send</button>
       <button id="voiceToRowanClearBtn" class="btn ghost">Clear</button>
     </div>
+    <div id="voiceToRowanFallbackTools" class="row-wrap mt6" style="display:none;">
+      <button id="voiceToRowanCopyBtn" class="btn ghost">Copy draft</button>
+      <a id="voiceToRowanOpenChatLink" class="btn ghost" href="#chat" title="Open host chat">Open chat</a>
+    </div>
     <div class="note-meta mt6">${voiceToRowanSupported ? 'Manual send only. Nothing is auto-sent.' : 'Voice transcription is not supported in this browser.'}</div>
   `;
 
@@ -1860,6 +1942,27 @@ function renderVoiceToRowanPod(){
 
   document.getElementById('voiceToRowanTranscript')?.addEventListener('input', (event) => {
     voiceToRowanDraft = event.target.value;
+    if (String(voiceToRowanDraft || '').trim()) {
+      showVoiceToRowanFallbackTools(false);
+    }
+  });
+
+  document.getElementById('voiceToRowanCopyBtn')?.addEventListener('click', async () => {
+    const body = String(voiceToRowanDraft || '').trim();
+    if (!body) {
+      setVoiceToRowanStatus('Nothing to copy yet. Record or type a message first.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(body);
+      setVoiceToRowanStatus('Draft copied. Paste it in Rowan chat.');
+    } catch {
+      setVoiceToRowanStatus('Copy failed. Select the draft text and copy manually.');
+    }
+  });
+
+  document.getElementById('voiceToRowanOpenChatLink')?.addEventListener('click', () => {
+    setVoiceToRowanStatus('Use your host app chat panel/tab, then paste from clipboard if needed.');
   });
 
   document.getElementById('voiceToRowanStartBtn')?.addEventListener('click', () => {
@@ -1869,6 +1972,7 @@ function renderVoiceToRowanPod(){
     voiceToRowanLastError = '';
     voiceToRowanManualStop = false;
     setVoiceToRowanDraftValue('');
+    showVoiceToRowanFallbackTools(false);
     voiceToRowanListening = true;
     setVoiceToRowanStatus('Listening… speak now.');
     document.getElementById('voiceToRowanStartBtn').disabled = true;
@@ -1896,6 +2000,7 @@ function renderVoiceToRowanPod(){
     setVoiceToRowanDraftValue('');
     voiceToRowanFinalTranscript = '';
     voiceToRowanLastError = '';
+    showVoiceToRowanFallbackTools(false);
     setVoiceToRowanStatus('Draft cleared.');
   });
 
@@ -1913,13 +2018,19 @@ function renderVoiceToRowanPod(){
     setVoiceToRowanStatus('Sending message to Rowan…');
 
     try {
-      await sendVoiceToRowanMessage(body);
+      const result = await sendVoiceToRowanMessage(body);
       setVoiceToRowanDraftValue('');
       voiceToRowanFinalTranscript = '';
       voiceToRowanLastError = '';
-      setVoiceToRowanStatus('Sent to Rowan chat.');
+      showVoiceToRowanFallbackTools(false);
+      setVoiceToRowanStatus(`Sent to Rowan chat via ${result.transport}.`);
     } catch (err) {
-      setVoiceToRowanStatus(`Could not send: ${String(err?.message || err)}.`);
+      if (err?.code === 'ROWAN_BRIDGE_UNAVAILABLE') {
+        showVoiceToRowanFallbackTools(true);
+        setVoiceToRowanStatus('Send bridge unavailable. Draft preserved — use Copy draft, then paste into chat.');
+      } else {
+        setVoiceToRowanStatus(`Could not send: ${String(err?.message || err)}.`);
+      }
     } finally {
       if (sendBtn) sendBtn.disabled = false;
       if (clearBtn) clearBtn.disabled = false;
@@ -2988,6 +3099,11 @@ if (!state.changelog.some((c) => c.message === voiceNotePatch)) {
 const voiceToRowanPatch = 'Added Voice to Rowan pod (V1): Start/Stop speech capture with editable transcript draft, manual Send to Rowan chat bridge, and Clear (no auto-send).';
 if (!state.changelog.some((c) => c.message === voiceToRowanPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: voiceToRowanPatch });
+}
+
+const voiceToRowanTransportPatch = 'Voice to Rowan transport patch: Send now uses fallback chain (direct window hooks → parent/top postMessage bridge) with preserved draft + one-click copy guidance when bridge is unavailable.';
+if (!state.changelog.some((c) => c.message === voiceToRowanTransportPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: voiceToRowanTransportPatch });
 }
 
 const taskEditPatch = 'Board update: task cards now support Edit via modal for all task fields, including project/column reassignment.';
