@@ -107,6 +107,13 @@ let voiceNoteSessionTranscript = '';
 let voiceNoteManualStop = false;
 let voiceNoteAutoRestartLeft = 0;
 let voiceNoteLastError = '';
+let voiceToRowanRecognizer = null;
+let voiceToRowanListening = false;
+let voiceToRowanSupported = false;
+let voiceToRowanFinalTranscript = '';
+let voiceToRowanDraft = '';
+let voiceToRowanManualStop = false;
+let voiceToRowanLastError = '';
 let sharedSaveTimer = null;
 
 function id(){ return Math.random().toString(36).slice(2,10); }
@@ -1734,11 +1741,197 @@ function renderVoiceNotePod(){
   });
 }
 
+function setVoiceToRowanStatus(text){
+  const el = document.getElementById('voiceToRowanStatus');
+  if (el) el.textContent = text;
+}
+
+function setVoiceToRowanDraftValue(text){
+  voiceToRowanDraft = String(text || '');
+  const input = document.getElementById('voiceToRowanTranscript');
+  if (input && input.value !== voiceToRowanDraft) {
+    input.value = voiceToRowanDraft;
+  }
+}
+
+async function sendVoiceToRowanMessage(text){
+  if (typeof window.sendMissionControlChatMessage === 'function') {
+    await window.sendMissionControlChatMessage(text);
+    return;
+  }
+  if (typeof window.sendRowanChatMessage === 'function') {
+    await window.sendRowanChatMessage(text);
+    return;
+  }
+  throw new Error('Rowan chat bridge unavailable');
+}
+
+function ensureVoiceToRowanRecognizer(){
+  if (voiceToRowanRecognizer || !voiceToRowanSupported) return voiceToRowanRecognizer;
+  const SpeechRecognitionCtor = getSpeechRecognitionCtor();
+  if (!SpeechRecognitionCtor) return null;
+
+  const recognizer = new SpeechRecognitionCtor();
+  recognizer.continuous = true;
+  recognizer.interimResults = true;
+  recognizer.lang = 'en-US';
+
+  recognizer.onresult = (event) => {
+    let interim = '';
+    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+      const text = event.results[i][0]?.transcript || '';
+      if (event.results[i].isFinal) {
+        voiceToRowanFinalTranscript += `${text} `;
+      } else {
+        interim += `${text} `;
+      }
+    }
+    const live = `${voiceToRowanFinalTranscript} ${interim}`.trim();
+    setVoiceToRowanDraftValue(live);
+    setVoiceToRowanStatus(live ? 'Listening… edit draft any time before send.' : 'Listening… speak now.');
+  };
+
+  recognizer.onerror = (event) => {
+    const err = event?.error || 'unknown';
+    voiceToRowanLastError = err;
+    if (err === 'not-allowed') {
+      setVoiceToRowanStatus('Microphone permission denied. Allow mic access and try again.');
+      return;
+    }
+    if (err === 'no-speech') {
+      setVoiceToRowanStatus('Listening… no speech detected yet. Keep talking or stop when ready.');
+      return;
+    }
+    setVoiceToRowanStatus(`Voice input error: ${err}.`);
+  };
+
+  recognizer.onend = () => {
+    const wasListening = voiceToRowanListening;
+    voiceToRowanListening = false;
+    const startBtn = document.getElementById('voiceToRowanStartBtn');
+    const stopBtn = document.getElementById('voiceToRowanStopBtn');
+    if (startBtn) startBtn.disabled = !voiceToRowanSupported;
+    if (stopBtn) stopBtn.disabled = true;
+
+    if (!wasListening) return;
+
+    const hasDraft = !!String(voiceToRowanDraft || '').trim();
+    if (!hasDraft && voiceToRowanLastError && voiceToRowanLastError !== 'no-speech') {
+      voiceToRowanManualStop = false;
+      setVoiceToRowanStatus(`Voice input error: ${voiceToRowanLastError}. Try Chrome/Edge on localhost and verify mic device.`);
+      return;
+    }
+
+    voiceToRowanManualStop = false;
+    if (hasDraft) {
+      setVoiceToRowanStatus('Draft ready. Edit if needed, then press Send.');
+      return;
+    }
+    setVoiceToRowanStatus('No speech captured. Try again and speak clearly.');
+  };
+
+  voiceToRowanRecognizer = recognizer;
+  return voiceToRowanRecognizer;
+}
+
+function renderVoiceToRowanPod(){
+  const el = document.getElementById('voiceToRowanWidget');
+  if (!el) return;
+
+  voiceToRowanSupported = !!getSpeechRecognitionCtor();
+  el.innerHTML = `
+    <div class="row-wrap">
+      <button id="voiceToRowanStartBtn" class="btn" ${voiceToRowanSupported && !voiceToRowanListening ? '' : 'disabled'}>Start Listening</button>
+      <button id="voiceToRowanStopBtn" class="btn ghost" ${voiceToRowanListening ? '' : 'disabled'}>Stop</button>
+    </div>
+    <textarea id="voiceToRowanTranscript" class="mt6 voice-to-rowan-transcript" rows="4" placeholder="Transcript preview... edit before sending.">${escapeHtml(voiceToRowanDraft)}</textarea>
+    <div class="row-wrap mt6">
+      <button id="voiceToRowanSendBtn" class="btn">Send</button>
+      <button id="voiceToRowanClearBtn" class="btn ghost">Clear</button>
+    </div>
+    <div class="note-meta mt6">${voiceToRowanSupported ? 'Manual send only. Nothing is auto-sent.' : 'Voice transcription is not supported in this browser.'}</div>
+  `;
+
+  if (!voiceToRowanSupported) {
+    setVoiceToRowanStatus('SpeechRecognition unsupported. Try Chrome/Edge on HTTPS or localhost.');
+  } else if (!voiceToRowanListening && !String(voiceToRowanDraft || '').trim()) {
+    setVoiceToRowanStatus('Ready. Start listening, then send manually.');
+  }
+
+  document.getElementById('voiceToRowanTranscript')?.addEventListener('input', (event) => {
+    voiceToRowanDraft = event.target.value;
+  });
+
+  document.getElementById('voiceToRowanStartBtn')?.addEventListener('click', () => {
+    const recognizer = ensureVoiceToRowanRecognizer();
+    if (!recognizer || voiceToRowanListening) return;
+    voiceToRowanFinalTranscript = '';
+    voiceToRowanLastError = '';
+    voiceToRowanManualStop = false;
+    setVoiceToRowanDraftValue('');
+    voiceToRowanListening = true;
+    setVoiceToRowanStatus('Listening… speak now.');
+    document.getElementById('voiceToRowanStartBtn').disabled = true;
+    document.getElementById('voiceToRowanStopBtn').disabled = false;
+    try {
+      recognizer.start();
+    } catch {
+      voiceToRowanListening = false;
+      document.getElementById('voiceToRowanStartBtn').disabled = false;
+      document.getElementById('voiceToRowanStopBtn').disabled = true;
+      setVoiceToRowanStatus('Could not start voice capture. Try again.');
+    }
+  });
+
+  document.getElementById('voiceToRowanStopBtn')?.addEventListener('click', () => {
+    if (!voiceToRowanRecognizer || !voiceToRowanListening) return;
+    voiceToRowanManualStop = true;
+    setVoiceToRowanStatus('Stopping…');
+    try {
+      voiceToRowanRecognizer.stop();
+    } catch {}
+  });
+
+  document.getElementById('voiceToRowanClearBtn')?.addEventListener('click', () => {
+    setVoiceToRowanDraftValue('');
+    voiceToRowanFinalTranscript = '';
+    voiceToRowanLastError = '';
+    setVoiceToRowanStatus('Draft cleared.');
+  });
+
+  document.getElementById('voiceToRowanSendBtn')?.addEventListener('click', async () => {
+    const body = String(voiceToRowanDraft || '').trim();
+    if (!body) {
+      setVoiceToRowanStatus('Draft is empty. Record or type a message first.');
+      return;
+    }
+
+    const sendBtn = document.getElementById('voiceToRowanSendBtn');
+    const clearBtn = document.getElementById('voiceToRowanClearBtn');
+    if (sendBtn) sendBtn.disabled = true;
+    if (clearBtn) clearBtn.disabled = true;
+    setVoiceToRowanStatus('Sending message to Rowan…');
+
+    try {
+      await sendVoiceToRowanMessage(body);
+      setVoiceToRowanDraftValue('');
+      voiceToRowanFinalTranscript = '';
+      voiceToRowanLastError = '';
+      setVoiceToRowanStatus('Sent to Rowan chat.');
+    } catch (err) {
+      setVoiceToRowanStatus(`Could not send: ${String(err?.message || err)}.`);
+    } finally {
+      if (sendBtn) sendBtn.disabled = false;
+      if (clearBtn) clearBtn.disabled = false;
+    }
+  });
+}
+
 window.onYouTubeIframeAPIReady = function(){
   initYouTubePlayerIfReady();
 };
 
-function renderAll(){ applyTheme(); renderDateTime(); renderCalendar(); renderCalendarRemindersPanel(); renderTodayReminders(); renderSettings(); renderProjects(); renderStats(); renderIdeas(); renderNotes(); renderBoard(); renderMusicPlayer(); renderVoiceNotePod(); renderShortcutsPod(); renderShortcutsSettings(); populateProjectSelect(); save(); }
+function renderAll(){ applyTheme(); renderDateTime(); renderCalendar(); renderCalendarRemindersPanel(); renderTodayReminders(); renderSettings(); renderProjects(); renderStats(); renderIdeas(); renderNotes(); renderBoard(); renderMusicPlayer(); renderVoiceNotePod(); renderVoiceToRowanPod(); renderShortcutsPod(); renderShortcutsSettings(); populateProjectSelect(); save(); }
 
 function renderProjects(){
   const wrap = document.getElementById('projectDirectory');
@@ -2790,6 +2983,11 @@ if (!state.changelog.some((c) => c.message === utilityLayoutPatch)) {
 const voiceNotePatch = 'Added Voice Note pod (V1): Start/Stop speech transcription creates a new unassigned "Voice Note" note.';
 if (!state.changelog.some((c) => c.message === voiceNotePatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: voiceNotePatch });
+}
+
+const voiceToRowanPatch = 'Added Voice to Rowan pod (V1): Start/Stop speech capture with editable transcript draft, manual Send to Rowan chat bridge, and Clear (no auto-send).';
+if (!state.changelog.some((c) => c.message === voiceToRowanPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: voiceToRowanPatch });
 }
 
 const taskEditPatch = 'Board update: task cards now support Edit via modal for all task fields, including project/column reassignment.';

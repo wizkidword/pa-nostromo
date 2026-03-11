@@ -229,6 +229,11 @@ body.theme-light .social-icon-link img {
 
 .widget-block { color: var(--muted); }
 
+.voice-to-rowan-transcript {
+  min-height: 88px;
+  resize: vertical;
+}
+
 .calendar-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
