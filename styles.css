@@ -616,7 +616,11 @@ menu {
 }
 
 #shortcutsWidget .shortcut-filter-checklist {
-  max-height: 58px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 6px;
+  align-content: start;
+  max-height: 86px;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
@@ -632,11 +636,30 @@ menu {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.2;
+  min-height: 30px;
+  padding: 5px 7px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-soft);
 }
 
 .shortcut-check-row input {
   width: auto;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.shortcut-check-label {
+  display: block;
+  min-width: 0;
+}
+
+#shortcutsWidget .shortcut-check-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .shortcut-filter-toolbar {

@@ -1932,7 +1932,7 @@ function renderShortcutProjectChecklist(targetId, selectedIds = []){
   wrap.innerHTML = shortcutAssignmentOptions().map((p) => `
     <label class="shortcut-check-row">
       <input type="checkbox" value="${p.id}" ${selected.has(p.id) ? 'checked' : ''} />
-      <span>${escapeHtml(p.name)}</span>
+      <span class="shortcut-check-label">${escapeHtml(p.name)}</span>
     </label>
   `).join('');
 }
@@ -2000,7 +2000,7 @@ function renderShortcutsPod(){
   const filterRows = shortcutAssignmentOptions().map((p) => `
     <label class="shortcut-check-row">
       <input type="checkbox" data-shortcut-filter="${p.id}" ${activeFilters.has(p.id) ? 'checked' : ''} />
-      <span>${escapeHtml(p.name)}</span>
+      <span class="shortcut-check-label">${escapeHtml(p.name)}</span>
     </label>
   `).join('');
 
@@ -2810,6 +2810,11 @@ if (!state.changelog.some((c) => c.message === shortcutsUxPatch)) {
 const shortcutsFilterViewportPatch = 'Shortcuts filter viewport polish: project filter checklist is capped to ~2 rows with hidden scrollbar while remaining wheel/trackpad/touch scrollable to preserve space for shortcut cards.';
 if (!state.changelog.some((c) => c.message === shortcutsFilterViewportPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: shortcutsFilterViewportPatch });
+}
+
+const shortcutsFilterGridPatch = 'Shortcuts filter layout tweak: project filters now render as dense side-by-side rows in an auto-fit responsive grid, keeping compact height and hidden-scroll overflow behavior.';
+if (!state.changelog.some((c) => c.message === shortcutsFilterGridPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: shortcutsFilterGridPatch });
 }
 
 const markdownEditorPatch = 'Markdown editor helpers added for Notes + Edit Task next action (toolbar + safe formatted preview) with future rich-text adapter seam.';
