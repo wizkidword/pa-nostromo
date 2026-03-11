@@ -1841,7 +1841,7 @@ function renderVoiceToRowanPod(){
   voiceToRowanSupported = !!getSpeechRecognitionCtor();
   el.innerHTML = `
     <div class="row-wrap">
-      <button id="voiceToRowanStartBtn" class="btn" ${voiceToRowanSupported && !voiceToRowanListening ? '' : 'disabled'}>Start Listening</button>
+      <button id="voiceToRowanStartBtn" class="btn" ${voiceToRowanSupported && !voiceToRowanListening ? '' : 'disabled'}>Start</button>
       <button id="voiceToRowanStopBtn" class="btn ghost" ${voiceToRowanListening ? '' : 'disabled'}>Stop</button>
     </div>
     <textarea id="voiceToRowanTranscript" class="mt6 voice-to-rowan-transcript" rows="4" placeholder="Transcript preview... edit before sending.">${escapeHtml(voiceToRowanDraft)}</textarea>
