@@ -1532,6 +1532,51 @@ function activeShortcutFilterSet(){
   return new Set(ids.filter(Boolean));
 }
 
+function checkedShortcutFilterIdsFromDom(){
+  return [...document.querySelectorAll('#shortcutsWidget [data-shortcut-filter]:checked')]
+    .map((el) => String(el.dataset.shortcutFilter || '').trim())
+    .filter(Boolean);
+}
+
+function shortcutDefaultsFromActiveFilters(){
+  const checked = checkedShortcutFilterIdsFromDom();
+  if (checked.length) return [...new Set(checked)];
+  const stateFilters = [...activeShortcutFilterSet()];
+  return stateFilters.length ? stateFilters : [SHORTCUT_GLOBAL_PROJECT_ID];
+}
+
+function extractUrlFromDrop(dataTransfer){
+  if (!dataTransfer) return '';
+  const uriList = String(dataTransfer.getData('text/uri-list') || '').trim();
+  if (uriList) {
+    const firstUrl = uriList
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith('#'));
+    if (firstUrl) return firstUrl;
+  }
+
+  const plain = String(dataTransfer.getData('text/plain') || '').trim();
+  if (/^https?:\/\//i.test(plain)) return plain;
+
+  const html = String(dataTransfer.getData('text/html') || '');
+  const hrefMatch = html.match(/href\s*=\s*["']([^"']+)["']/i);
+  return hrefMatch?.[1] || '';
+}
+
+function suggestShortcutTitle(url, fallbackText = ''){
+  const cleanFallback = String(fallbackText || '').trim();
+  if (cleanFallback && !/^https?:\/\//i.test(cleanFallback)) return cleanFallback.slice(0, 90);
+  try {
+    const u = new URL(String(url || '').trim());
+    const host = u.hostname.replace(/^www\./, '');
+    const firstSegment = u.pathname.split('/').filter(Boolean)[0] || '';
+    return firstSegment ? `${host} / ${decodeURIComponent(firstSegment).slice(0, 48)}` : host;
+  } catch {
+    return 'New Shortcut';
+  }
+}
+
 function renderShortcutsPod(){
   const wrap = document.getElementById('shortcutsWidget');
   if (!wrap) return;
@@ -1564,6 +1609,9 @@ function renderShortcutsPod(){
       <span class="note-meta">Filter by project:</span>
     </div>
     <div class="shortcut-project-checklist">${filterRows}</div>
+    <div id="shortcutDropzone" class="shortcut-dropzone" title="Drop bookmark/link here to create a shortcut">
+      Drop a bookmark or link here to create a shortcut
+    </div>
     <div class="shortcut-links">${cards}</div>
   `;
 
@@ -1584,6 +1632,48 @@ function renderShortcutsPod(){
     save();
     renderShortcutsPod();
   });
+
+  const dropzone = document.getElementById('shortcutDropzone');
+  if (dropzone) {
+    const setOver = (isOver) => dropzone.classList.toggle('is-over', !!isOver);
+    dropzone.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setOver(true);
+    });
+    dropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setOver(true);
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    });
+    dropzone.addEventListener('dragleave', () => setOver(false));
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setOver(false);
+
+      const url = extractUrlFromDrop(e.dataTransfer);
+      if (!url || !/^https?:\/\//i.test(url)) return;
+
+      const droppedText = String(e.dataTransfer?.getData('text/plain') || '').trim();
+      const projectIds = shortcutDefaultsFromActiveFilters();
+      const title = suggestShortcutTitle(url, droppedText);
+      state.shortcuts.push({
+        id: id(),
+        title,
+        url,
+        category: 'Bookmark',
+        projectIds,
+        enabled: true,
+        createdAt: now(),
+        updatedAt: now(),
+      });
+
+      logChange(`Created shortcut from drop: ${title}`);
+      renderAll();
+    });
+  }
 }
 
 function renderShortcutsSettings(){
@@ -2096,6 +2186,11 @@ if (!state.changelog.some((c) => c.message === taskEditPatch)) {
 const shortcutsPatch = 'Added Shortcuts pod + Settings shortcut manager: multi-project assignments, Global (Mission Control) scope, project checkbox filtering, and persisted visibility toggles.';
 if (!state.changelog.some((c) => c.message === shortcutsPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: shortcutsPatch });
+}
+
+const shortcutsUxPatch = 'Shortcuts UX update: wider pod layout, denser shortcut cards, and drag/drop bookmark creation that defaults to currently checked shortcut project filters (or Global if none selected).';
+if (!state.changelog.some((c) => c.message === shortcutsUxPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: shortcutsUxPatch });
 }
 
 renderAll();

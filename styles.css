@@ -223,6 +223,10 @@ body.theme-light .social-icon-link img {
   height: 100%;
 }
 
+.utility-card-shortcuts {
+  grid-column: span 2;
+}
+
 .widget-block { color: var(--muted); }
 
 .calendar-grid {
@@ -586,7 +590,8 @@ menu {
 .shortcut-links {
   margin-top: 10px;
   display: grid;
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 6px;
 }
 
 .shortcut-link {
@@ -598,12 +603,35 @@ menu {
   background: var(--surface-soft);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
-  padding: 8px;
+  padding: 6px 7px;
+  line-height: 1.25;
+}
+
+.shortcut-link strong {
+  font-size: 13px;
 }
 
 .shortcut-link span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.shortcut-dropzone {
+  margin-top: 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  padding: 8px;
+  text-align: center;
   font-size: 12px;
   color: var(--muted);
+  background: rgba(148, 163, 184, 0.05);
+  transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease;
+}
+
+.shortcut-dropzone.is-over {
+  border-color: var(--accent);
+  color: var(--text);
+  background: rgba(59, 130, 246, 0.14);
 }
 
 .shortcut-admin-actions {
@@ -617,6 +645,10 @@ menu {
 
   .utils-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .utility-card-shortcuts {
+    grid-column: span 2;
   }
 
   .board {
@@ -638,5 +670,9 @@ menu {
 @media (max-width: 680px) {
   .utils-row {
     grid-template-columns: 1fr;
+  }
+
+  .utility-card-shortcuts {
+    grid-column: auto;
   }
 }
