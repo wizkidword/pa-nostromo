@@ -1479,13 +1479,15 @@ function initYouTubePlayerIfReady(){
 }
 
 function getMusicEls(){
+  const root = document.getElementById('musicPlayerWidget')?.querySelector('[data-pod="music-player"]') || null;
   return {
-    streamInput: document.getElementById('musicStreamUrlInput'),
-    fileInput: document.getElementById('musicLocalFileInput'),
-    volume: document.getElementById('musicVolumeInput'),
+    root,
+    streamInput: root?.querySelector('[data-music-role="stream-input"]') || document.getElementById('musicStreamUrlInput'),
+    fileInput: root?.querySelector('[data-music-role="local-file"]') || document.getElementById('musicLocalFileInput'),
+    volume: root?.querySelector('[data-music-role="volume"]') || document.getElementById('musicVolumeInput'),
     status: document.getElementById('musicPlayerStatus'),
-    audio: document.getElementById('musicLocalAudio'),
-    iframe: document.getElementById('musicStreamIframe'),
+    audio: root?.querySelector('[data-music-role="audio"]') || document.getElementById('musicLocalAudio'),
+    iframe: root?.querySelector('[data-music-role="iframe"]') || document.getElementById('musicStreamIframe'),
   };
 }
 
@@ -1629,26 +1631,26 @@ function renderMusicPlayer(){
   const hasFav = !!fav;
 
   el.innerHTML = `
-    <div class="music-player-shell">
-      <input id="musicStreamUrlInput" placeholder="YouTube/live stream URL" value="${streamVal}" />
+    <div class="music-player-shell" data-pod="music-player">
+      <input id="musicStreamUrlInput" data-music-role="stream-input" placeholder="YouTube/live stream URL" value="${streamVal}" />
       <div class="row-wrap">
-        <button id="musicLoadStreamBtn" class="btn">Load Stream</button>
-        <button id="musicSaveFavoriteBtn" class="btn ghost">Save Favorite</button>
-        <button id="musicUseFavoriteBtn" class="btn ghost" ${hasFav ? '' : 'disabled'}>Use Favorite</button>
+        <button id="musicLoadStreamBtn" data-music-role="load-stream" class="btn">Load Stream</button>
+        <button id="musicSaveFavoriteBtn" data-music-role="save-favorite" class="btn ghost">Save Favorite</button>
+        <button id="musicUseFavoriteBtn" data-music-role="use-favorite" class="btn ghost" ${hasFav ? '' : 'disabled'}>Use Favorite</button>
       </div>
       <div class="row-wrap">
-        <input id="musicLocalFileInput" type="file" accept="audio/*" />
+        <input id="musicLocalFileInput" data-music-role="local-file" type="file" accept="audio/*" />
       </div>
       <div class="music-player-controls">
-        <button id="musicPlayBtn" class="btn">Play</button>
-        <button id="musicPauseBtn" class="btn ghost">Pause</button>
-        <button id="musicStopBtn" class="btn ghost">Stop</button>
+        <button id="musicPlayBtn" data-music-role="play" class="btn">Play</button>
+        <button id="musicPauseBtn" data-music-role="pause" class="btn ghost">Pause</button>
+        <button id="musicStopBtn" data-music-role="stop" class="btn ghost">Stop</button>
       </div>
       <label class="music-player-mini">Volume
-        <input id="musicVolumeInput" type="range" min="0" max="1" step="0.05" value="${state.musicPlayer.volume}">
+        <input id="musicVolumeInput" data-music-role="volume" type="range" min="0" max="1" step="0.05" value="${state.musicPlayer.volume}">
       </label>
-      <iframe id="musicStreamIframe" class="music-player-hidden" allow="autoplay; encrypted-media" title="Music stream player"></iframe>
-      <audio id="musicLocalAudio" class="music-player-hidden" preload="metadata"></audio>
+      <iframe id="musicStreamIframe" data-music-role="iframe" class="music-player-hidden" allow="autoplay; encrypted-media" title="Music stream player"></iframe>
+      <audio id="musicLocalAudio" data-music-role="audio" class="music-player-hidden" preload="metadata"></audio>
       <div class="music-player-mini">Source: ${state.musicPlayer.sourceType === 'local' ? 'Local file' : 'Stream URL'}${hasFav ? ' · Favorite saved' : ''}</div>
     </div>
   `;
@@ -1656,7 +1658,11 @@ function renderMusicPlayer(){
   const els = getMusicEls();
   if (els.audio) els.audio.volume = state.musicPlayer.volume;
 
-  document.getElementById('musicLoadStreamBtn')?.addEventListener('click', () => {
+  const musicPod = el.querySelector('[data-pod="music-player"]');
+  // Regression guard: bind controls only within the Music pod root so sibling pods cannot trigger music actions.
+  musicPod?.querySelector('[data-music-role="load-stream"]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     const url = (els.streamInput?.value || '').trim();
     if (!url) return;
     state.musicPlayer.sourceType = 'stream';
@@ -1666,7 +1672,9 @@ function renderMusicPlayer(){
     loadStreamIntoPlayer(url);
   });
 
-  document.getElementById('musicSaveFavoriteBtn')?.addEventListener('click', () => {
+  musicPod?.querySelector('[data-music-role="save-favorite"]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     const url = (els.streamInput?.value || state.musicPlayer.currentStreamUrl || '').trim();
     if (!url) return;
     state.musicPlayer.favoriteStreamUrl = url;
@@ -1675,7 +1683,9 @@ function renderMusicPlayer(){
     setMusicStatus('Saved favorite stream URL.');
   });
 
-  document.getElementById('musicUseFavoriteBtn')?.addEventListener('click', () => {
+  musicPod?.querySelector('[data-music-role="use-favorite"]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     if (!state.musicPlayer.favoriteStreamUrl) return;
     state.musicPlayer.sourceType = 'stream';
     state.musicPlayer.currentStreamUrl = state.musicPlayer.favoriteStreamUrl;
@@ -1684,7 +1694,7 @@ function renderMusicPlayer(){
     loadStreamIntoPlayer(state.musicPlayer.currentStreamUrl);
   });
 
-  els.fileInput?.addEventListener('change', () => {
+  musicPod?.querySelector('[data-music-role="local-file"]')?.addEventListener('change', () => {
     const file = els.fileInput.files?.[0];
     if (!file || !els.audio) return;
     state.musicPlayer.sourceType = 'local';
@@ -1697,14 +1707,26 @@ function renderMusicPlayer(){
     setMusicStatus(`Local file loaded: ${file.name}`);
   });
 
-  els.volume?.addEventListener('input', (e) => {
+  musicPod?.querySelector('[data-music-role="volume"]')?.addEventListener('input', (e) => {
     syncMusicVolume(e.target.value);
     save();
   });
 
-  document.getElementById('musicPlayBtn')?.addEventListener('click', playMusic);
-  document.getElementById('musicPauseBtn')?.addEventListener('click', pauseMusic);
-  document.getElementById('musicStopBtn')?.addEventListener('click', stopMusic);
+  musicPod?.querySelector('[data-music-role="play"]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    playMusic();
+  });
+  musicPod?.querySelector('[data-music-role="pause"]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    pauseMusic();
+  });
+  musicPod?.querySelector('[data-music-role="stop"]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    stopMusic();
+  });
 
   if (state.musicPlayer.sourceType === 'stream' && state.musicPlayer.currentStreamUrl) {
     loadStreamIntoPlayer(state.musicPlayer.currentStreamUrl);
@@ -1719,6 +1741,15 @@ function renderMusicPlayer(){
 function setVoiceNoteStatus(text){
   const el = document.getElementById('voiceNoteStatus');
   if (el) el.textContent = text;
+}
+
+function getVoiceNoteControls(){
+  const root = document.getElementById('voiceNoteWidget')?.querySelector('[data-pod="voice-note"]');
+  return {
+    root,
+    startBtn: root?.querySelector('[data-voice-note-role="start"]') || null,
+    stopBtn: root?.querySelector('[data-voice-note-role="stop"]') || null,
+  };
 }
 
 function getSpeechRecognitionCtor(){
@@ -1783,8 +1814,7 @@ function ensureVoiceNoteRecognizer(){
   recognizer.onend = () => {
     const wasListening = voiceNoteListening;
     voiceNoteListening = false;
-    const startBtn = document.getElementById('voiceNoteStartBtn');
-    const stopBtn = document.getElementById('voiceNoteStopBtn');
+    const { startBtn, stopBtn } = getVoiceNoteControls();
     if (startBtn) startBtn.disabled = !voiceNoteSupported;
     if (stopBtn) stopBtn.disabled = true;
 
@@ -1836,9 +1866,9 @@ function renderVoiceNotePod(){
 
   voiceNoteSupported = !!getSpeechRecognitionCtor();
   el.innerHTML = `
-    <div class="row-wrap">
-      <button id="voiceNoteStartBtn" class="btn" ${voiceNoteSupported && !voiceNoteListening ? '' : 'disabled'}>Start</button>
-      <button id="voiceNoteStopBtn" class="btn ghost" ${voiceNoteListening ? '' : 'disabled'}>Stop</button>
+    <div class="row-wrap" data-pod="voice-note">
+      <button id="voiceNoteStartBtn" data-voice-note-role="start" class="btn" ${voiceNoteSupported && !voiceNoteListening ? '' : 'disabled'}>Start</button>
+      <button id="voiceNoteStopBtn" data-voice-note-role="stop" class="btn ghost" ${voiceNoteListening ? '' : 'disabled'}>Stop</button>
     </div>
     <div class="note-meta mt6">${voiceNoteSupported ? 'Creates a new unassigned note from your speech.' : 'Voice transcription is not supported in this browser.'}</div>
   `;
@@ -1848,7 +1878,12 @@ function renderVoiceNotePod(){
     return;
   }
 
-  document.getElementById('voiceNoteStartBtn')?.addEventListener('click', () => {
+  const { root, startBtn } = getVoiceNoteControls();
+
+  // Regression guard: Voice Note handlers are pod-scoped and never call music transport controls.
+  startBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     const recognizer = ensureVoiceNoteRecognizer();
     if (!recognizer || voiceNoteListening) return;
     voiceNoteSessionTranscript = '';
@@ -1857,23 +1892,26 @@ function renderVoiceNotePod(){
     voiceNoteAutoRestartLeft = 2;
     voiceNoteListening = true;
     setVoiceNoteStatus('Listening… speak now.');
-    document.getElementById('voiceNoteStartBtn').disabled = true;
-    document.getElementById('voiceNoteStopBtn').disabled = false;
+    const controls = getVoiceNoteControls();
+    if (controls.startBtn) controls.startBtn.disabled = true;
+    if (controls.stopBtn) controls.stopBtn.disabled = false;
     try {
       recognizer.start();
     } catch {
       voiceNoteListening = false;
-      document.getElementById('voiceNoteStartBtn').disabled = false;
-      document.getElementById('voiceNoteStopBtn').disabled = true;
+      if (controls.startBtn) controls.startBtn.disabled = false;
+      if (controls.stopBtn) controls.stopBtn.disabled = true;
       setVoiceNoteStatus('Could not start voice capture. Try again.');
     }
   });
 
-  document.getElementById('voiceNoteStopBtn')?.addEventListener('click', () => {
+  root?.querySelector('[data-voice-note-role="stop"]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     if (!voiceNoteRecognizer || !voiceNoteListening) return;
     voiceNoteManualStop = true;
     voiceNoteAutoRestartLeft = 0;
-    setVoiceNoteStatus('Stopping…');
+    setVoiceNoteStatus('Stopping voice capture…');
     try {
       voiceNoteRecognizer.stop();
     } catch {}
@@ -3365,6 +3403,11 @@ if (!state.changelog.some((c) => c.message === musicStreamCompatibilityPatch)) {
 const youtubePlaybackReliabilityPatch = 'Patch: Music Player YouTube playback reliability improved — watch/youtu.be/embed URL parsing normalized and Play now auto-queues until the YouTube API/player is fully ready.';
 if (!state.changelog.some((c) => c.message === youtubePlaybackReliabilityPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: youtubePlaybackReliabilityPatch });
+}
+
+const stopControlIsolationPatch = 'Regression guard: Voice Note and Music pod Stop controls are now pod-scoped and isolated so each Stop action only targets its own subsystem.';
+if (!state.changelog.some((c) => c.message === stopControlIsolationPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: stopControlIsolationPatch });
 }
 
 renderAll();
