@@ -231,6 +231,17 @@ body.theme-light .social-icon-link img {
   grid-column: 1 / -1;
 }
 
+/* Global horizontal scrollbar suppression (keep horizontal scrolling/drag behavior). */
+*::-webkit-scrollbar:horizontal {
+  height: 0 !important;
+}
+*::-webkit-scrollbar-thumb:horizontal {
+  background: transparent;
+}
+*::-webkit-scrollbar-track:horizontal {
+  background: transparent;
+}
+
 .widget-block { color: var(--muted); }
 
 .voice-to-rowan-transcript {
