@@ -66,6 +66,11 @@
       </label>
 
       <hr class="settings-divider" />
+      <h3 class="m0">Shortcuts</h3>
+      <button id="addShortcutBtn" class="btn settings-toggle-start">+ New Shortcut</button>
+      <div id="settingsShortcutsList" class="change-log-list"></div>
+
+      <hr class="settings-divider" />
       <button id="toggleChangeLogBtn" class="btn ghost settings-toggle-start">Show Patch Notes</button>
       <div id="changeLogSection" style="display:none">
         <h3 class="m0">Change Log (Patch Notes)</h3>
@@ -138,6 +143,10 @@
         <h2>🎙️ Voice Note</h2>
         <div id="voiceNoteWidget" class="widget-block"></div>
         <div id="voiceNoteStatus" class="note-meta mt6">Ready to record.</div>
+      </div>
+      <div class="card utility-card">
+        <h2>🔗 Shortcuts</h2>
+        <div id="shortcutsWidget" class="widget-block">Loading shortcuts...</div>
       </div>
     </div>
   </section>
@@ -265,6 +274,28 @@
       <label>Due Date <input name="dueDate" type="date" /></label>
       <menu>
         <button type="button" id="editTaskCancelBtn" class="btn ghost">Cancel</button>
+        <button value="default" class="btn primary">Save</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="shortcutDialog">
+    <form method="dialog" id="shortcutForm">
+      <h3 id="shortcutDialogTitle">New Shortcut</h3>
+      <input type="hidden" name="id" />
+      <label>Title <input name="title" required /></label>
+      <label>URL <input name="url" type="url" placeholder="https://..." required /></label>
+      <label>Category/Tag <input name="category" placeholder="Optional" /></label>
+      <fieldset class="shortcut-fieldset">
+        <legend>Project assignments</legend>
+        <div id="shortcutProjectChecklist" class="shortcut-project-checklist"></div>
+      </fieldset>
+      <label class="row-between-wrap gap10">
+        <span>Enabled</span>
+        <input name="enabled" type="checkbox" class="w-auto" checked />
+      </label>
+      <menu>
+        <button type="button" id="shortcutCancelBtn" class="btn ghost">Cancel</button>
         <button value="default" class="btn primary">Save</button>
       </menu>
     </form>

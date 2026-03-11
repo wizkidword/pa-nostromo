@@ -6,6 +6,7 @@ const CRYPTO_REFRESH_MS = 15 * 60 * 1000;
 const CRYPTO_DIR_CACHE_KEY = 'mission-control-crypto-directory-v1';
 const CRYPTO_DIR_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const SHARED_STATE_API = '/api/state';
+const SHORTCUT_GLOBAL_PROJECT_ID = '__global__';
 
 const COLUMNS = [
   ['inbox', 'Inbox'],
@@ -49,7 +50,29 @@ const seed = {
     volume: 0.7,
     isPlaying: false,
   },
-  changelog: []
+  changelog: [],
+  shortcuts: [
+    {
+      id: id(),
+      title: 'Mission Control Repo',
+      url: 'https://github.com/wizkidword/pa-nostromo',
+      category: 'Development',
+      projectIds: [SHORTCUT_GLOBAL_PROJECT_ID],
+      enabled: true,
+      createdAt: now(),
+      updatedAt: now(),
+    },
+    {
+      id: id(),
+      title: 'Radio Map Local',
+      url: 'http://localhost:3399',
+      category: 'Tools',
+      projectIds: [SHORTCUT_GLOBAL_PROJECT_ID],
+      enabled: true,
+      createdAt: now(),
+      updatedAt: now(),
+    },
+  ]
 };
 
 let state = load();
@@ -105,6 +128,9 @@ function load(){
   state.ideas = Array.isArray(state.ideas) ? state.ideas : [];
   state.reminders = Array.isArray(state.reminders) ? state.reminders : [];
   state.settings = { ...DEFAULT_SETTINGS, ...(state.settings || {}) };
+  state.settings.shortcutsFilterProjectIds = Array.isArray(state.settings.shortcutsFilterProjectIds)
+    ? state.settings.shortcutsFilterProjectIds
+    : [];
   state.cryptoWatchlist = Array.isArray(state.cryptoWatchlist) ? state.cryptoWatchlist : ['bitcoin', 'ethereum'];
 
   // Migration: repair legacy/ambiguous crypto watchlist ids from older resolver behavior.
@@ -185,6 +211,49 @@ function load(){
     }
   }
 
+  state.shortcuts = Array.isArray(state.shortcuts) ? state.shortcuts : [];
+  state.shortcuts = state.shortcuts.map((sc) => {
+    const projectIdsRaw = Array.isArray(sc.projectIds)
+      ? sc.projectIds
+      : (sc.projectId ? [sc.projectId] : [SHORTCUT_GLOBAL_PROJECT_ID]);
+    const projectIds = [...new Set(projectIdsRaw.map((v) => String(v || '').trim()).filter(Boolean))];
+    return {
+      id: sc.id || id(),
+      title: String(sc.title || sc.label || 'Shortcut').trim(),
+      url: String(sc.url || '').trim(),
+      category: String(sc.category || sc.tag || '').trim(),
+      projectIds: projectIds.length ? projectIds : [SHORTCUT_GLOBAL_PROJECT_ID],
+      enabled: sc.enabled !== false,
+      createdAt: sc.createdAt || now(),
+      updatedAt: sc.updatedAt || now(),
+    };
+  }).filter((sc) => sc.url);
+
+  if (!state.shortcuts.length) {
+    state.shortcuts = [
+      {
+        id: id(),
+        title: 'Mission Control Repo',
+        url: 'https://github.com/wizkidword/pa-nostromo',
+        category: 'Development',
+        projectIds: [SHORTCUT_GLOBAL_PROJECT_ID],
+        enabled: true,
+        createdAt: now(),
+        updatedAt: now(),
+      },
+      {
+        id: id(),
+        title: 'Radio Map Local',
+        url: 'http://localhost:3399',
+        category: 'Tools',
+        projectIds: [SHORTCUT_GLOBAL_PROJECT_ID],
+        enabled: true,
+        createdAt: now(),
+        updatedAt: now(),
+      },
+    ];
+  }
+
   return state;
 }
 
@@ -222,6 +291,13 @@ function save(){
 }
 
 function projectName(projectId){ return state.projects.find(p=>p.id===projectId)?.name || 'Unknown'; }
+function missionControlProjectId(){
+  return state.projects.find((p) => p.name === 'Mission Control Dashboard')?.id || '';
+}
+function projectDisplayName(projectId){
+  if (projectId === SHORTCUT_GLOBAL_PROJECT_ID) return 'Global (Mission Control)';
+  return projectName(projectId);
+}
 
 function applyTheme(){
   const pref = state.settings.theme;
@@ -1276,7 +1352,7 @@ window.onYouTubeIframeAPIReady = function(){
   initYouTubePlayerIfReady();
 };
 
-function renderAll(){ applyTheme(); renderDateTime(); renderCalendar(); renderCalendarRemindersPanel(); renderTodayReminders(); renderSettings(); renderProjects(); renderStats(); renderIdeas(); renderNotes(); renderBoard(); renderMusicPlayer(); renderVoiceNotePod(); populateProjectSelect(); save(); }
+function renderAll(){ applyTheme(); renderDateTime(); renderCalendar(); renderCalendarRemindersPanel(); renderTodayReminders(); renderSettings(); renderProjects(); renderStats(); renderIdeas(); renderNotes(); renderBoard(); renderMusicPlayer(); renderVoiceNotePod(); renderShortcutsPod(); renderShortcutsSettings(); populateProjectSelect(); save(); }
 
 function renderProjects(){
   const wrap = document.getElementById('projectDirectory');
@@ -1432,6 +1508,132 @@ function renderNotes(){
   });
 }
 
+function shortcutAssignmentOptions(){
+  return [
+    { id: SHORTCUT_GLOBAL_PROJECT_ID, name: 'Global (Mission Control)' },
+    ...state.projects.map((p) => ({ id: p.id, name: p.name })),
+  ];
+}
+
+function renderShortcutProjectChecklist(targetId, selectedIds = []){
+  const wrap = document.getElementById(targetId);
+  if (!wrap) return;
+  const selected = new Set(selectedIds.length ? selectedIds : [SHORTCUT_GLOBAL_PROJECT_ID]);
+  wrap.innerHTML = shortcutAssignmentOptions().map((p) => `
+    <label class="shortcut-check-row">
+      <input type="checkbox" value="${p.id}" ${selected.has(p.id) ? 'checked' : ''} />
+      <span>${escapeHtml(p.name)}</span>
+    </label>
+  `).join('');
+}
+
+function activeShortcutFilterSet(){
+  const ids = Array.isArray(state.settings.shortcutsFilterProjectIds) ? state.settings.shortcutsFilterProjectIds : [];
+  return new Set(ids.filter(Boolean));
+}
+
+function renderShortcutsPod(){
+  const wrap = document.getElementById('shortcutsWidget');
+  if (!wrap) return;
+
+  const activeFilters = activeShortcutFilterSet();
+  const enabledShortcuts = (state.shortcuts || []).filter((sc) => sc.enabled !== false);
+  const visible = !activeFilters.size
+    ? enabledShortcuts
+    : enabledShortcuts.filter((sc) => (sc.projectIds || []).some((pid) => activeFilters.has(pid)));
+
+  const filterRows = shortcutAssignmentOptions().map((p) => `
+    <label class="shortcut-check-row">
+      <input type="checkbox" data-shortcut-filter="${p.id}" ${activeFilters.has(p.id) ? 'checked' : ''} />
+      <span>${escapeHtml(p.name)}</span>
+    </label>
+  `).join('');
+
+  const cards = visible.length
+    ? visible.map((sc) => `
+      <a class="shortcut-link" href="${escapeHtml(sc.url)}" target="_blank" rel="noopener">
+        <strong>${escapeHtml(sc.title)}</strong>
+        <span>${escapeHtml(sc.category || 'Shortcut')}</span>
+      </a>
+    `).join('')
+    : '<div class="note-meta">No shortcuts match current project filters.</div>';
+
+  wrap.innerHTML = `
+    <div class="shortcut-filter-toolbar">
+      <button class="btn ghost" id="shortcutFilterAllBtn" type="button">Show all</button>
+      <span class="note-meta">Filter by project:</span>
+    </div>
+    <div class="shortcut-project-checklist">${filterRows}</div>
+    <div class="shortcut-links">${cards}</div>
+  `;
+
+  document.querySelectorAll('[data-shortcut-filter]').forEach((el) => {
+    el.addEventListener('change', (e) => {
+      const next = activeShortcutFilterSet();
+      const pid = e.target.dataset.shortcutFilter;
+      if (e.target.checked) next.add(pid);
+      else next.delete(pid);
+      state.settings.shortcutsFilterProjectIds = [...next];
+      save();
+      renderShortcutsPod();
+    });
+  });
+
+  document.getElementById('shortcutFilterAllBtn')?.addEventListener('click', () => {
+    state.settings.shortcutsFilterProjectIds = [];
+    save();
+    renderShortcutsPod();
+  });
+}
+
+function renderShortcutsSettings(){
+  const wrap = document.getElementById('settingsShortcutsList');
+  if (!wrap) return;
+  const rows = (state.shortcuts || [])
+    .slice()
+    .sort((a, b) => (a.title || '').localeCompare(b.title || ''))
+    .map((sc) => `
+      <div class="change-log-item">
+        <div class="row-between-wrap gap10">
+          <strong>${escapeHtml(sc.title)}</strong>
+          <span class="badge">${sc.enabled === false ? 'Disabled' : 'Enabled'}</span>
+        </div>
+        <div class="note-meta mt6">${escapeHtml(sc.category || 'No category')} · ${(sc.projectIds || []).map(projectDisplayName).map(escapeHtml).join(', ')}</div>
+        <div class="shortcut-admin-actions mt8">
+          <button class="btn ghost" data-shortcut-edit="${sc.id}" type="button">Edit</button>
+          <button class="btn ghost" data-shortcut-toggle="${sc.id}" type="button">${sc.enabled === false ? 'Enable' : 'Disable'}</button>
+          <button class="btn note-delete" data-shortcut-delete="${sc.id}" type="button">Delete</button>
+        </div>
+      </div>
+    `).join('');
+
+  wrap.innerHTML = rows || '<div class="note-meta">No shortcuts yet. Add one to get started.</div>';
+
+  document.querySelectorAll('[data-shortcut-edit]').forEach((btn) => {
+    btn.addEventListener('click', () => openShortcutDialog(btn.dataset.shortcutEdit));
+  });
+  document.querySelectorAll('[data-shortcut-toggle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sc = state.shortcuts.find((x) => x.id === btn.dataset.shortcutToggle);
+      if (!sc) return;
+      sc.enabled = sc.enabled === false;
+      sc.updatedAt = now();
+      logChange(`${sc.enabled ? 'Enabled' : 'Disabled'} shortcut: ${sc.title}`);
+      renderAll();
+    });
+  });
+  document.querySelectorAll('[data-shortcut-delete]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sc = state.shortcuts.find((x) => x.id === btn.dataset.shortcutDelete);
+      if (!sc) return;
+      if (!confirm(`Delete shortcut "${sc.title}"?`)) return;
+      state.shortcuts = state.shortcuts.filter((x) => x.id !== sc.id);
+      logChange(`Deleted shortcut: ${sc.title}`);
+      renderAll();
+    });
+  });
+}
+
 function escapeHtml(str){
   return String(str || '')
     .replaceAll('&','&amp;')
@@ -1531,15 +1733,38 @@ function openEditTaskDialog(taskId){
   editTaskDialog.showModal();
 }
 
+function openShortcutDialog(shortcutId = ''){
+  if (!shortcutDialog || !shortcutForm) return;
+  const sc = shortcutId ? state.shortcuts.find((x) => x.id === shortcutId) : null;
+  shortcutForm.elements.id.value = sc?.id || '';
+  shortcutForm.elements.title.value = sc?.title || '';
+  shortcutForm.elements.url.value = sc?.url || '';
+  shortcutForm.elements.category.value = sc?.category || '';
+  shortcutForm.elements.enabled.checked = sc ? sc.enabled !== false : true;
+
+  const defaults = sc?.projectIds?.length
+    ? sc.projectIds
+    : [missionControlProjectId() || SHORTCUT_GLOBAL_PROJECT_ID, SHORTCUT_GLOBAL_PROJECT_ID];
+  renderShortcutProjectChecklist('shortcutProjectChecklist', defaults);
+
+  const titleEl = document.getElementById('shortcutDialogTitle');
+  if (titleEl) titleEl.textContent = sc ? 'Edit Shortcut' : 'New Shortcut';
+  shortcutDialog.showModal();
+}
+
 // dialogs
 const projectDialog = document.getElementById('projectDialog');
 const taskDialog = document.getElementById('taskDialog');
 const editTaskDialog = document.getElementById('editTaskDialog');
 const editTaskForm = document.getElementById('editTaskForm');
+const shortcutDialog = document.getElementById('shortcutDialog');
+const shortcutForm = document.getElementById('shortcutForm');
 document.getElementById('addProjectBtn').onclick = ()=> projectDialog.showModal();
 document.getElementById('addTaskBtn').onclick = ()=> taskDialog.showModal();
 document.getElementById('projectCancelBtn')?.addEventListener('click', ()=> projectDialog.close());
 document.getElementById('editTaskCancelBtn')?.addEventListener('click', ()=> editTaskDialog?.close());
+document.getElementById('addShortcutBtn')?.addEventListener('click', ()=> openShortcutDialog());
+document.getElementById('shortcutCancelBtn')?.addEventListener('click', ()=> shortcutDialog?.close());
 
 const settingsPanel = document.getElementById('settingsPanel');
 document.getElementById('openSettingsBtn')?.addEventListener('click', ()=> {
@@ -1639,6 +1864,42 @@ document.getElementById('notesClearFiltersBtn')?.addEventListener('click', () =>
   if (s) s.value = '';
   if (f) f.value = 'all';
   renderNotes();
+});
+
+shortcutForm?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const selectedProjectIds = [...document.querySelectorAll('#shortcutProjectChecklist input[type="checkbox"]:checked')]
+    .map((el) => el.value)
+    .filter(Boolean);
+  const projectIds = selectedProjectIds.length ? [...new Set(selectedProjectIds)] : [SHORTCUT_GLOBAL_PROJECT_ID];
+
+  const existing = state.shortcuts.find((x) => x.id === f.get('id'));
+  if (existing) {
+    existing.title = String(f.get('title') || '').trim();
+    existing.url = String(f.get('url') || '').trim();
+    existing.category = String(f.get('category') || '').trim();
+    existing.projectIds = projectIds;
+    existing.enabled = f.get('enabled') === 'on';
+    existing.updatedAt = now();
+    logChange(`Edited shortcut: ${existing.title}`);
+  } else {
+    const title = String(f.get('title') || '').trim();
+    state.shortcuts.push({
+      id: id(),
+      title,
+      url: String(f.get('url') || '').trim(),
+      category: String(f.get('category') || '').trim(),
+      projectIds,
+      enabled: f.get('enabled') === 'on',
+      createdAt: now(),
+      updatedAt: now(),
+    });
+    logChange(`Created shortcut: ${title}`);
+  }
+
+  shortcutDialog?.close();
+  renderAll();
 });
 
 document.getElementById('projectForm').addEventListener('submit', e=>{
@@ -1830,6 +2091,11 @@ if (!state.changelog.some((c) => c.message === voiceNotePatch)) {
 const taskEditPatch = 'Board update: task cards now support Edit via modal for all task fields, including project/column reassignment.';
 if (!state.changelog.some((c) => c.message === taskEditPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: taskEditPatch });
+}
+
+const shortcutsPatch = 'Added Shortcuts pod + Settings shortcut manager: multi-project assignments, Global (Mission Control) scope, project checkbox filtering, and persisted visibility toggles.';
+if (!state.changelog.some((c) => c.message === shortcutsPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: shortcutsPatch });
 }
 
 renderAll();
