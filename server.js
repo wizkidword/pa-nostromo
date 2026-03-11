@@ -59,6 +59,13 @@ const ROWAN_RELAY_AUTH_HEADER = String(process.env.ROWAN_RELAY_AUTH_HEADER || 'A
 const ROWAN_RELAY_OPENCLAW_CHANNEL = String(process.env.ROWAN_RELAY_OPENCLAW_CHANNEL || (IS_PROD ? '' : 'webchat')).trim();
 const ROWAN_RELAY_OPENCLAW_TARGET = String(process.env.ROWAN_RELAY_OPENCLAW_TARGET || (IS_PROD ? '' : 'agent:main:main')).trim();
 const ROWAN_ALLOW_REMOTE = parseBool(process.env.ROWAN_ALLOW_REMOTE);
+const CAMERA_PROXY_ALLOW_REMOTE = parseBool(process.env.CAMERA_PROXY_ALLOW_REMOTE);
+const CAMERA_PROXY_ALLOWLIST = String(process.env.CAMERA_PROXY_ALLOWLIST || '')
+  .split(',')
+  .map((v) => v.trim().toLowerCase())
+  .filter(Boolean);
+const CAMERA_PROXY_TIMEOUT_MS = Math.max(1000, parsePositiveInt(process.env.CAMERA_PROXY_TIMEOUT_MS, 7000));
+const CAMERA_PROXY_MAX_BYTES = Math.max(64 * 1024, parsePositiveInt(process.env.CAMERA_PROXY_MAX_BYTES, 5 * 1024 * 1024));
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -212,6 +219,52 @@ async function writeStateWithIntegrity(incomingState) {
 
   await fsp.writeFile(STATE_PATH, JSON.stringify(next, null, 2), 'utf8');
   return next.__integrity;
+}
+
+function isAllowedCameraHost(hostname) {
+  if (!hostname) return false;
+  const host = String(hostname || '').trim().toLowerCase();
+  if (!host) return false;
+  if (!CAMERA_PROXY_ALLOWLIST.length) return false;
+  return CAMERA_PROXY_ALLOWLIST.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+}
+
+function isPrivateCameraHost(hostname) {
+  const host = String(hostname || '').trim().toLowerCase();
+  if (!host) return false;
+  if (host === 'localhost' || host.endsWith('.local')) return true;
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    if (host.startsWith('10.')) return true;
+    if (host.startsWith('127.')) return true;
+    if (host.startsWith('192.168.')) return true;
+    const second = Number(host.split('.')[1]);
+    if (host.startsWith('172.') && second >= 16 && second <= 31) return true;
+  }
+  return false;
+}
+
+function isCameraProxyTargetAllowed(targetUrl) {
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { ok: false, code: 'invalid_protocol', message: 'Only http/https camera URLs are allowed.' };
+    }
+
+    const host = parsed.hostname;
+    if (isAllowedCameraHost(host)) return { ok: true };
+
+    if (isPrivateCameraHost(host)) {
+      return { ok: true };
+    }
+
+    return {
+      ok: false,
+      code: 'host_not_allowed',
+      message: 'Camera host is not in local/private ranges or CAMERA_PROXY_ALLOWLIST.',
+    };
+  } catch {
+    return { ok: false, code: 'invalid_url', message: 'Invalid camera URL.' };
+  }
 }
 
 async function relayRowanMessage(text) {
@@ -431,6 +484,86 @@ async function handleApiRowanSend(req, res) {
   });
 }
 
+async function handleApiCameraSnapshot(req, res) {
+  if (req.method !== 'GET') {
+    return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/camera-snapshot?url=...' });
+  }
+
+  if (!CAMERA_PROXY_ALLOW_REMOTE && !isLocalRequest(req)) {
+    return sendJson(res, 403, {
+      ok: false,
+      error: 'local_only',
+      message: 'Camera proxy is local-only by default. Set CAMERA_PROXY_ALLOW_REMOTE=1 to allow remote requests.',
+    });
+  }
+
+  const reqUrl = new URL(req.url || '/api/camera-snapshot', `http://localhost:${PORT}`);
+  const targetUrl = String(reqUrl.searchParams.get('url') || '').trim();
+  if (!targetUrl) {
+    return sendJson(res, 400, { ok: false, error: 'missing_url', message: 'Query parameter "url" is required.' });
+  }
+
+  const targetCheck = isCameraProxyTargetAllowed(targetUrl);
+  if (!targetCheck.ok) {
+    return sendJson(res, 403, { ok: false, error: targetCheck.code, message: targetCheck.message });
+  }
+
+  let upstream;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CAMERA_PROXY_TIMEOUT_MS);
+  try {
+    upstream = await fetch(targetUrl, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'mission-control-lite-camera-proxy/1.0',
+        'Accept': 'image/*,*/*;q=0.8',
+      },
+    });
+  } catch (err) {
+    return sendJson(res, 502, { ok: false, error: 'upstream_fetch_failed', message: String(err?.message || err) });
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!upstream.ok) {
+    return sendJson(res, 502, {
+      ok: false,
+      error: 'upstream_http_error',
+      message: `Camera source returned HTTP ${upstream.status}.`,
+    });
+  }
+
+  const contentType = String(upstream.headers.get('content-type') || 'application/octet-stream');
+  const contentLength = Number(upstream.headers.get('content-length') || 0);
+  if (contentLength && contentLength > CAMERA_PROXY_MAX_BYTES) {
+    return sendJson(res, 413, {
+      ok: false,
+      error: 'payload_too_large',
+      message: `Snapshot exceeds CAMERA_PROXY_MAX_BYTES (${CAMERA_PROXY_MAX_BYTES}).`,
+    });
+  }
+
+  const arrayBuf = await upstream.arrayBuffer();
+  const body = Buffer.from(arrayBuf);
+  if (body.length > CAMERA_PROXY_MAX_BYTES) {
+    return sendJson(res, 413, {
+      ok: false,
+      error: 'payload_too_large',
+      message: `Snapshot exceeds CAMERA_PROXY_MAX_BYTES (${CAMERA_PROXY_MAX_BYTES}).`,
+    });
+  }
+
+  res.writeHead(200, {
+    'Content-Type': contentType,
+    'Content-Length': String(body.length),
+    'Cache-Control': 'no-store, max-age=0',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  res.end(body);
+}
+
 function safePathFromUrl(urlPath) {
   const pathname = decodeURIComponent((urlPath || '/').split('?')[0]);
   const rel = pathname === '/' ? '/index.html' : pathname;
@@ -469,6 +602,7 @@ async function handleStatic(req, res) {
 const server = http.createServer(async (req, res) => {
   if ((req.url || '').startsWith('/api/state')) return handleApiState(req, res);
   if ((req.url || '').startsWith('/api/rowan-send')) return handleApiRowanSend(req, res);
+  if ((req.url || '').startsWith('/api/camera-snapshot')) return handleApiCameraSnapshot(req, res);
   return handleStatic(req, res);
 });
 
@@ -477,4 +611,5 @@ server.listen(PORT, () => {
   console.log(`Shared state file: ${STATE_PATH}`);
   console.log(`State backup dir: ${BACKUPS_DIR} (retain latest ${BACKUP_RETENTION})`);
   console.log(`Voice-to-Rowan relay: ${ROWAN_RELAY_URL ? 'configured' : 'not configured'} (${ROWAN_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
+  console.log(`Camera snapshot proxy: enabled (${CAMERA_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; allowlist entries: ${CAMERA_PROXY_ALLOWLIST.length})`);
 });

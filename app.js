@@ -56,6 +56,15 @@ const seed = {
     volume: 0.7,
     isPlaying: false,
   },
+  cameraFeed: {
+    sourceUrl: '',
+    mode: 'stream', // stream | snapshot
+    refreshIntervalSec: 5,
+    active: false,
+    status: 'idle', // idle | loading | live | error
+    lastError: '',
+    useProxy: true,
+  },
   changelog: [],
   shortcuts: [
     {
@@ -103,6 +112,8 @@ let streamIframePlayer = null;
 let youtubeApiLoading = false;
 let youtubePlayerReady = false;
 let pendingYoutubeAction = null;
+let cameraSnapshotTimer = null;
+let cameraSnapshotBust = 0;
 let voiceNoteRecognizer = null;
 let voiceNoteListening = false;
 let voiceNoteSupported = false;
@@ -192,6 +203,26 @@ function load(){
     ...(state.musicPlayer || {}),
   };
   state.musicPlayer.volume = Math.min(1, Math.max(0, Number(state.musicPlayer.volume ?? 0.7)));
+
+  state.cameraFeed = {
+    sourceUrl: '',
+    mode: 'stream',
+    refreshIntervalSec: 5,
+    active: false,
+    status: 'idle',
+    lastError: '',
+    useProxy: true,
+    ...(state.cameraFeed || {}),
+  };
+  state.cameraFeed.mode = state.cameraFeed.mode === 'snapshot' ? 'snapshot' : 'stream';
+  state.cameraFeed.sourceUrl = String(state.cameraFeed.sourceUrl || '').trim();
+  const refresh = Number(state.cameraFeed.refreshIntervalSec ?? 5);
+  state.cameraFeed.refreshIntervalSec = Number.isFinite(refresh) ? Math.min(60, Math.max(1, Math.round(refresh))) : 5;
+  state.cameraFeed.status = ['idle', 'loading', 'live', 'error'].includes(state.cameraFeed.status) ? state.cameraFeed.status : 'idle';
+  state.cameraFeed.active = !!state.cameraFeed.active;
+  state.cameraFeed.lastError = String(state.cameraFeed.lastError || '').slice(0, 300);
+  state.cameraFeed.useProxy = state.cameraFeed.useProxy !== false;
+
   state.changelog = Array.isArray(state.changelog) ? state.changelog : [];
 
   const portfolioPatchNote = 'Patch: Crypto Tracker now supports portfolio holdings (qty + avg buy) with unrealized P/L summary.';
@@ -1744,6 +1775,275 @@ function renderMusicPlayer(){
   }
 }
 
+function getCameraFeedEls(){
+  const root = document.getElementById('cameraFeedWidget')?.querySelector('[data-pod="camera-feed"]') || null;
+  return {
+    root,
+    urlInput: root?.querySelector('[data-camera-role="url"]') || null,
+    modeSelect: root?.querySelector('[data-camera-role="mode"]') || null,
+    intervalInput: root?.querySelector('[data-camera-role="interval"]') || null,
+    proxyToggle: root?.querySelector('[data-camera-role="proxy"]') || null,
+    startBtn: root?.querySelector('[data-camera-role="start"]') || null,
+    stopBtn: root?.querySelector('[data-camera-role="stop"]') || null,
+    streamFrame: root?.querySelector('[data-camera-role="stream-frame"]') || null,
+    snapshotImg: root?.querySelector('[data-camera-role="snapshot-img"]') || null,
+  };
+}
+
+function setCameraFeedStatus(text){
+  const el = document.getElementById('cameraFeedStatus');
+  if (el) el.textContent = text;
+}
+
+function cameraSnapshotUrl(url){
+  const target = String(url || '').trim();
+  if (!target) return '';
+  const viaProxy = state.cameraFeed.useProxy;
+  if (viaProxy) {
+    const params = new URLSearchParams({ url: target });
+    return `/api/camera-snapshot?${params.toString()}&_cb=${Date.now()}-${cameraSnapshotBust++}`;
+  }
+  const sep = target.includes('?') ? '&' : '?';
+  return `${target}${sep}_cb=${Date.now()}-${cameraSnapshotBust++}`;
+}
+
+function stopCameraSnapshotTimer(){
+  if (cameraSnapshotTimer) {
+    clearInterval(cameraSnapshotTimer);
+    cameraSnapshotTimer = null;
+  }
+}
+
+function stopCameraFeed(options = {}){
+  const { keepStatus = false } = options;
+  stopCameraSnapshotTimer();
+  const els = getCameraFeedEls();
+  if (els.streamFrame) {
+    els.streamFrame.src = 'about:blank';
+    els.streamFrame.style.display = 'none';
+  }
+  if (els.snapshotImg) {
+    els.snapshotImg.removeAttribute('src');
+    els.snapshotImg.style.display = 'none';
+  }
+
+  state.cameraFeed.active = false;
+  if (!keepStatus) {
+    state.cameraFeed.status = 'idle';
+    state.cameraFeed.lastError = '';
+    setCameraFeedStatus('Stopped.');
+  }
+  save();
+  renderCameraFeedPod();
+}
+
+function startSnapshotMode(){
+  const els = getCameraFeedEls();
+  const sourceUrl = String(state.cameraFeed.sourceUrl || '').trim();
+  if (!sourceUrl || !els.snapshotImg) {
+    state.cameraFeed.status = 'error';
+    state.cameraFeed.lastError = 'Snapshot source URL is required.';
+    setCameraFeedStatus(state.cameraFeed.lastError);
+    save();
+    renderCameraFeedPod();
+    return;
+  }
+
+  stopCameraSnapshotTimer();
+  state.cameraFeed.active = true;
+  state.cameraFeed.status = 'loading';
+  state.cameraFeed.lastError = '';
+  setCameraFeedStatus('Loading snapshot feed…');
+  save();
+  renderCameraFeedPod();
+
+  const refreshMs = Math.max(1000, Number(state.cameraFeed.refreshIntervalSec || 5) * 1000);
+
+  const tick = () => {
+    const img = getCameraFeedEls().snapshotImg;
+    if (!img || !state.cameraFeed.active || state.cameraFeed.mode !== 'snapshot') return;
+    img.onload = () => {
+      state.cameraFeed.status = 'live';
+      state.cameraFeed.lastError = '';
+      setCameraFeedStatus(`Live (snapshot refresh every ${state.cameraFeed.refreshIntervalSec}s${state.cameraFeed.useProxy ? ' via local proxy' : ''}).`);
+      save();
+    };
+    img.onerror = () => {
+      state.cameraFeed.status = 'error';
+      state.cameraFeed.lastError = state.cameraFeed.useProxy
+        ? 'Snapshot fetch failed via local proxy (check allowlist + camera URL).'
+        : 'Snapshot fetch failed (try enabling local proxy or switch source/mode).';
+      setCameraFeedStatus(state.cameraFeed.lastError);
+      save();
+    };
+    img.src = cameraSnapshotUrl(sourceUrl);
+  };
+
+  tick();
+  cameraSnapshotTimer = setInterval(tick, refreshMs);
+}
+
+function startStreamMode(){
+  const els = getCameraFeedEls();
+  const sourceUrl = String(state.cameraFeed.sourceUrl || '').trim();
+  if (!sourceUrl || !els.streamFrame) {
+    state.cameraFeed.status = 'error';
+    state.cameraFeed.lastError = 'Camera stream URL is required.';
+    setCameraFeedStatus(state.cameraFeed.lastError);
+    save();
+    renderCameraFeedPod();
+    return;
+  }
+
+  stopCameraSnapshotTimer();
+  state.cameraFeed.active = true;
+  state.cameraFeed.status = 'loading';
+  state.cameraFeed.lastError = '';
+  setCameraFeedStatus('Loading stream embed…');
+  save();
+  renderCameraFeedPod();
+
+  const frame = getCameraFeedEls().streamFrame;
+  if (!frame) return;
+  frame.onload = () => {
+    state.cameraFeed.status = 'live';
+    state.cameraFeed.lastError = '';
+    setCameraFeedStatus('Live embed loaded (if your camera blocks framing/CORS, switch to Snapshot mode).');
+    save();
+  };
+  frame.onerror = () => {
+    state.cameraFeed.status = 'error';
+    state.cameraFeed.lastError = 'Embed failed. Camera may block framing or auth. Try Snapshot mode.';
+    setCameraFeedStatus(state.cameraFeed.lastError);
+    save();
+  };
+  frame.src = sourceUrl;
+}
+
+function startCameraFeed(){
+  const sourceUrl = String(state.cameraFeed.sourceUrl || '').trim();
+  if (!sourceUrl) {
+    state.cameraFeed.status = 'error';
+    state.cameraFeed.lastError = 'Enter a camera URL first.';
+    setCameraFeedStatus(state.cameraFeed.lastError);
+    save();
+    renderCameraFeedPod();
+    return;
+  }
+
+  if (state.cameraFeed.mode === 'snapshot') {
+    startSnapshotMode();
+    return;
+  }
+
+  startStreamMode();
+}
+
+function renderCameraFeedPod(){
+  const el = document.getElementById('cameraFeedWidget');
+  if (!el) return;
+
+  const mode = state.cameraFeed.mode === 'snapshot' ? 'snapshot' : 'stream';
+  const interval = Number(state.cameraFeed.refreshIntervalSec || 5);
+  const showSnapshot = state.cameraFeed.active && mode === 'snapshot';
+  const showStream = state.cameraFeed.active && mode === 'stream';
+
+  el.innerHTML = `
+    <div class="camera-feed-shell" data-pod="camera-feed">
+      <input data-camera-role="url" placeholder="Camera URL (http/https)" value="${escapeHtml(state.cameraFeed.sourceUrl || '')}" />
+      <div class="row-wrap">
+        <label class="camera-feed-inline-label">Mode
+          <select data-camera-role="mode" class="w-auto">
+            <option value="stream" ${mode === 'stream' ? 'selected' : ''}>Embed Stream</option>
+            <option value="snapshot" ${mode === 'snapshot' ? 'selected' : ''}>Snapshot Refresh</option>
+          </select>
+        </label>
+        <label class="camera-feed-inline-label">Refresh (sec)
+          <input data-camera-role="interval" type="number" min="1" max="60" step="1" class="w-110" value="${interval}" ${mode === 'snapshot' ? '' : 'disabled'} />
+        </label>
+        <label class="camera-feed-inline-check ${mode === 'snapshot' ? '' : 'is-disabled'}">
+          <input data-camera-role="proxy" type="checkbox" ${state.cameraFeed.useProxy ? 'checked' : ''} ${mode === 'snapshot' ? '' : 'disabled'} />
+          Use local proxy
+        </label>
+      </div>
+      <div class="row-wrap">
+        <button data-camera-role="start" class="btn">Load / Start</button>
+        <button data-camera-role="stop" class="btn ghost" ${state.cameraFeed.active ? '' : 'disabled'}>Stop</button>
+      </div>
+      <div class="camera-feed-frame-wrap mt6">
+        <iframe data-camera-role="stream-frame" title="Camera feed stream" ${showStream ? '' : 'style="display:none;"'} referrerpolicy="no-referrer"></iframe>
+        <img data-camera-role="snapshot-img" alt="Camera snapshot" ${showSnapshot ? '' : 'style="display:none;"'} />
+      </div>
+      <div class="note-meta mt6">V1 supports one active feed at a time. If embed fails, use Snapshot mode.</div>
+    </div>
+  `;
+
+  const els = getCameraFeedEls();
+
+  els.urlInput?.addEventListener('change', () => {
+    state.cameraFeed.sourceUrl = String(els.urlInput.value || '').trim();
+    save();
+  });
+
+  els.modeSelect?.addEventListener('change', () => {
+    state.cameraFeed.mode = els.modeSelect.value === 'snapshot' ? 'snapshot' : 'stream';
+    save();
+    stopCameraFeed({ keepStatus: true });
+    setCameraFeedStatus(state.cameraFeed.mode === 'snapshot'
+      ? 'Snapshot mode selected. Configure refresh + start feed.'
+      : 'Embed stream mode selected. Click Load / Start.');
+    state.cameraFeed.status = 'idle';
+    state.cameraFeed.lastError = '';
+    save();
+    renderCameraFeedPod();
+  });
+
+  els.intervalInput?.addEventListener('change', () => {
+    const next = Number(els.intervalInput.value || 5);
+    state.cameraFeed.refreshIntervalSec = Number.isFinite(next) ? Math.min(60, Math.max(1, Math.round(next))) : 5;
+    save();
+  });
+
+  els.proxyToggle?.addEventListener('change', () => {
+    state.cameraFeed.useProxy = !!els.proxyToggle.checked;
+    save();
+  });
+
+  els.startBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    state.cameraFeed.sourceUrl = String(els.urlInput?.value || '').trim();
+    save();
+    startCameraFeed();
+  });
+
+  els.stopBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    stopCameraFeed();
+  });
+
+  if (showStream && els.streamFrame) {
+    els.streamFrame.src = state.cameraFeed.sourceUrl;
+  }
+
+  if (showSnapshot && els.snapshotImg) {
+    els.snapshotImg.src = cameraSnapshotUrl(state.cameraFeed.sourceUrl);
+  }
+
+  if (state.cameraFeed.status === 'error' && state.cameraFeed.lastError) {
+    setCameraFeedStatus(state.cameraFeed.lastError);
+  } else if (state.cameraFeed.status === 'loading') {
+    setCameraFeedStatus('Loading camera feed…');
+  } else if (state.cameraFeed.status === 'live') {
+    setCameraFeedStatus(mode === 'snapshot'
+      ? `Live (snapshot refresh every ${state.cameraFeed.refreshIntervalSec}s${state.cameraFeed.useProxy ? ' via local proxy' : ''}).`
+      : 'Live embed active.');
+  } else if (!state.cameraFeed.active) {
+    setCameraFeedStatus('Ready. Paste a camera URL and click Load / Start.');
+  }
+}
+
 function setVoiceNoteStatus(text){
   const el = document.getElementById('voiceNoteStatus');
   if (el) el.textContent = text;
@@ -2258,7 +2558,7 @@ window.onYouTubeIframeAPIReady = function(){
   initYouTubePlayerIfReady();
 };
 
-function renderAll(){ applyTheme(); renderDateTime(); renderCalendar(); renderCalendarRemindersPanel(); renderTodayReminders(); renderSettings(); renderProjects(); renderStats(); renderIdeas(); renderNotes(); renderBoard(); renderMusicPlayer(); renderVoiceNotePod(); renderVoiceToRowanPod(); renderShortcutsPod(); renderShortcutsSettings(); populateProjectSelect(); save(); }
+function renderAll(){ applyTheme(); renderDateTime(); renderCalendar(); renderCalendarRemindersPanel(); renderTodayReminders(); renderSettings(); renderProjects(); renderStats(); renderIdeas(); renderNotes(); renderBoard(); renderMusicPlayer(); renderCameraFeedPod(); renderVoiceNotePod(); renderVoiceToRowanPod(); renderShortcutsPod(); renderShortcutsSettings(); populateProjectSelect(); save(); }
 
 function renderProjects(){
   const wrap = document.getElementById('projectDirectory');
@@ -3414,6 +3714,11 @@ if (!state.changelog.some((c) => c.message === youtubePlaybackReliabilityPatch))
 const stopControlIsolationPatch = 'Regression guard: Voice Note and Music pod Stop controls are now pod-scoped and isolated so each Stop action only targets its own subsystem.';
 if (!state.changelog.some((c) => c.message === stopControlIsolationPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: stopControlIsolationPatch });
+}
+
+const cameraFeedPatch = 'Added Camera Feed pod (V1): single active feed with Embed Stream mode plus Snapshot Refresh fallback (configurable interval + optional local proxy relay).';
+if (!state.changelog.some((c) => c.message === cameraFeedPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: cameraFeedPatch });
 }
 
 renderAll();

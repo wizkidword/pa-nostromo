@@ -11,6 +11,7 @@ It combines project tracking + utility pods in one lightweight web app:
 - Reminders + timer/alarm
 - Weather + NBA scores + Crypto watchlist
 - Music player (stream/YouTube/local file)
+- Camera Feed pod (embed stream + snapshot refresh fallback)
 - Voice notes (Chrome SpeechRecognition)
 - Cross-browser shared state (Brave + Chrome) via local disk-backed API
 
@@ -88,7 +89,7 @@ Mission Control now includes a built-in state safety pack to prevent accidental 
 - `index.html` - UI shell
 - `styles.css` - styles
 - `app.js` - app logic
-- `server.js` - local static server + `/api/state` + `/api/rowan-send`
+- `server.js` - local static server + `/api/state` + `/api/rowan-send` + `/api/camera-snapshot`
 - `data/state.json` - shared persisted state
 - `assets/social/*` - local social media logo SVGs
 
@@ -119,6 +120,44 @@ That means one-time local setup is enough; no repeated inline env exports are ne
 If `ROWAN_RELAY_URL` is missing, `/api/rowan-send` returns a clear error (`relay_not_configured`).
 In the UI, the draft is preserved and the user gets fallback actions (copy draft / open chat), so no speech text is lost.
 
+## Camera Feed pod (V1)
+
+Camera Feed is a single-feed utility pod for local/network camera URLs.
+
+### Supported modes
+
+1. **Embed Stream mode** (default)
+   - Loads URL directly into an iframe.
+   - Works for embeddable web streams/pages (including some MJPEG/HLS players).
+   - If source blocks iframe embedding (`X-Frame-Options`/CSP/auth), status will fail and you should use Snapshot mode.
+
+2. **Snapshot Refresh mode**
+   - Fetches image snapshots repeatedly at a configurable interval (1-60 seconds).
+   - Useful for cameras exposing a still-image endpoint or when direct embedding is blocked.
+   - Optional **Use local proxy** routes snapshots via `/api/camera-snapshot` for CORS/network compatibility.
+
+### Proxy safety model (`/api/camera-snapshot`)
+
+- Local-only by default (`CAMERA_PROXY_ALLOW_REMOTE=0`)
+- Not an open proxy:
+  - only `http/https`
+  - allows private/local hosts by default (e.g. `192.168.x.x`, `10.x.x.x`, `localhost`, `*.local`)
+  - public hosts require explicit allowlist entries (`CAMERA_PROXY_ALLOWLIST`)
+- Request timeout + max payload size limits are enforced (`CAMERA_PROXY_TIMEOUT_MS`, `CAMERA_PROXY_MAX_BYTES`)
+
+### Camera config env keys
+
+- `CAMERA_PROXY_ALLOWLIST` (comma-separated public hosts)
+- `CAMERA_PROXY_ALLOW_REMOTE` (`0` default)
+- `CAMERA_PROXY_TIMEOUT_MS` (default `7000`)
+- `CAMERA_PROXY_MAX_BYTES` (default `5242880`)
+
+### Limitations (V1)
+
+- One active camera feed at a time.
+- No built-in authentication manager for camera credentials.
+- Browser autoplay/embed restrictions still apply to some camera vendors.
+
 ## Production deployment notes
 
 - Do **not** commit `.env` / `.env.local` (already gitignored).
@@ -132,6 +171,7 @@ Early alpha. Built for real daily use and rapid iteration.
 
 ## Patch Notes
 
+- 2026-03-11: Camera Feed pod (V1): added single-feed camera utility with Embed Stream mode + Snapshot Refresh fallback (configurable interval), persisted camera settings/state, and optional local-only `/api/camera-snapshot` relay with host allowlist + payload/timeout guardrails.
 - 2026-03-11: State Safety Pack hardening: automatic versioned pre-write backups (`data/backups` with retention prune), integrity metadata (`savedAt` + checksum), guarded overwrite override paths for manual import/restore, new backup list + restore APIs, and Settings UI export/import controls with confirmation.
 - 2026-03-11: Turnkey local relay config update: `server.js` now auto-loads `.env` / `.env.local` (without overriding shell env), added `.env.example`, documented one-command startup via `npm start`, and kept `/api/rowan-send` local-only hardening defaults intact.
 - 2026-03-11: Voice-to-Rowan relay bridge upgrade: added `POST /api/rowan-send` with validated input, explicit relay env config, local-only default hardening, and UI primary transport shift to server relay with preserved-draft fallback path.
