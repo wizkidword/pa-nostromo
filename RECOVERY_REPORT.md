@@ -2,7 +2,7 @@
 
 Date: 2026-03-11
 Repo: `project-mission-control-lite`
-Audit window: commits from 2026-03-10 → HEAD (`41bfa2f`)
+Audit window: commits from 2026-03-10 → HEAD (`e48d403`)
 
 ## Scope
 Validated expected functionality from last-night commits and checked whether each feature is still present and wired in current runtime/UI paths.
@@ -10,6 +10,16 @@ Validated expected functionality from last-night commits and checked whether eac
 ---
 
 ## Expected Feature Checklist (from commit history) + Current Status
+
+### 0) GitHub quick-link + dashboard preview docs
+**Reference commit:**
+- `9aae016` — add GitHub quick-link icon and README preview section
+
+**Found status:** ✅ Present
+- UI: project cards render repo/app links, and `index.html` includes the GitHub quick-link icon entry path from `assets/social/github.svg`
+- Docs: README preview section still present
+
+---
 
 ### 1) Task edit modal (full-field updates)
 **Reference commit:**
@@ -124,7 +134,7 @@ Recovery code changes required: **none**.
 ---
 
 ## Files Touched During Recovery
-- `RECOVERY_REPORT.md` (added)
+- `RECOVERY_REPORT.md` (added, then corrected during QA gate)
 
 No application JS/CSS/HTML/server code changes were necessary.
 
