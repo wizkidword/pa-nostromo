@@ -173,6 +173,13 @@ body.theme-light .social-icon-link img {
   padding: 2px 2px 6px;
   cursor: grab;
   scroll-behavior: smooth;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.project-grid::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .project-grid:active { cursor: grabbing; }
@@ -310,6 +317,13 @@ body.theme-light .social-icon-link img {
   padding-bottom: 6px;
   cursor: grab;
   scroll-behavior: smooth;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.board::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .board:active { cursor: grabbing; }
