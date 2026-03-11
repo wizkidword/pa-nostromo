@@ -2018,7 +2018,7 @@ function renderShortcutsPod(){
       <button class="btn ghost" id="shortcutFilterAllBtn" type="button">Show all</button>
       <span class="note-meta">Filter by project:</span>
     </div>
-    <div class="shortcut-project-checklist">${filterRows}</div>
+    <div class="shortcut-project-checklist shortcut-filter-checklist">${filterRows}</div>
     <div id="shortcutDropzone" class="shortcut-dropzone" title="Drop bookmark/link here to create a shortcut">
       Drop a bookmark or link here to create a shortcut
     </div>
@@ -2805,6 +2805,11 @@ if (!state.changelog.some((c) => c.message === shortcutsPatch)) {
 const shortcutsUxPatch = 'Shortcuts UX update: wider pod layout, denser shortcut cards, and drag/drop bookmark creation that defaults to currently checked shortcut project filters (or Global if none selected).';
 if (!state.changelog.some((c) => c.message === shortcutsUxPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: shortcutsUxPatch });
+}
+
+const shortcutsFilterViewportPatch = 'Shortcuts filter viewport polish: project filter checklist is capped to ~2 rows with hidden scrollbar while remaining wheel/trackpad/touch scrollable to preserve space for shortcut cards.';
+if (!state.changelog.some((c) => c.message === shortcutsFilterViewportPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: shortcutsFilterViewportPatch });
 }
 
 const markdownEditorPatch = 'Markdown editor helpers added for Notes + Edit Task next action (toolbar + safe formatted preview) with future rich-text adapter seam.';
