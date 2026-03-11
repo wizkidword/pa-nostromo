@@ -50,7 +50,7 @@ const seed = {
   musicPlayer: {
     sourceType: 'stream', // stream | local
     currentStreamUrl: '',
-    streamMode: 'unknown', // youtube | direct | unknown
+    streamMode: 'unknown', // youtube | direct | embed | unknown
     favoriteStreamUrl: '',
     currentTrackName: '',
     volume: 0.7,
@@ -1452,7 +1452,8 @@ function loadStreamIntoPlayer(url){
   const { iframe, audio } = getMusicEls();
   if (!iframe || !audio) return;
 
-  const ytId = extractYoutubeId(url);
+  const rawUrl = String(url || '').trim();
+  const ytId = extractYoutubeId(rawUrl);
   if (ytId) {
     state.musicPlayer.streamMode = 'youtube';
     audio.pause();
@@ -1466,13 +1467,13 @@ function loadStreamIntoPlayer(url){
 
   state.musicPlayer.streamMode = 'direct';
   iframe.src = '';
-  audio.src = url;
+  audio.src = rawUrl;
   audio.volume = state.musicPlayer.volume;
   setMusicStatus('Direct stream URL loaded in HTML5 audio player.');
 }
 
 function playMusic(){
-  const { audio } = getMusicEls();
+  const { audio, iframe } = getMusicEls();
   if (state.musicPlayer.sourceType === 'local') {
     if (!audio?.src) {
       setMusicStatus('Pick a local audio file first.');
@@ -1504,13 +1505,32 @@ function playMusic(){
     return;
   }
 
+  if (state.musicPlayer.streamMode === 'embed') {
+    if (iframe && iframe.src !== url) iframe.src = url;
+    state.musicPlayer.isPlaying = true;
+    save();
+    setMusicStatus('Embed stream active. Use controls inside the embedded player if needed.');
+    return;
+  }
+
   if (audio) {
     if (!audio.src) audio.src = url;
     audio.play().then(() => {
       state.musicPlayer.isPlaying = true;
       save();
       setMusicStatus('Playing direct stream URL via HTML5 audio.');
-    }).catch(() => setMusicStatus('Direct stream playback blocked or unsupported by browser/CORS.'));
+    }).catch(() => {
+      if (iframe) {
+        state.musicPlayer.streamMode = 'embed';
+        audio.pause();
+        iframe.src = url;
+        state.musicPlayer.isPlaying = true;
+        save();
+        setMusicStatus('Direct audio playback failed; switched to embedded stream mode. Use controls inside the embedded player.');
+        return;
+      }
+      setMusicStatus('Direct stream playback blocked or unsupported by browser/CORS.');
+    });
   }
 }
 
@@ -1518,7 +1538,7 @@ function pauseMusic(){
   const { audio } = getMusicEls();
   if (state.musicPlayer.sourceType === 'local' || state.musicPlayer.streamMode === 'direct') {
     audio?.pause();
-  } else if (streamIframePlayer?.pauseVideo) {
+  } else if (state.musicPlayer.streamMode === 'youtube' && streamIframePlayer?.pauseVideo) {
     streamIframePlayer.pauseVideo();
   }
   state.musicPlayer.isPlaying = false;
@@ -1527,14 +1547,16 @@ function pauseMusic(){
 }
 
 function stopMusic(){
-  const { audio } = getMusicEls();
+  const { audio, iframe } = getMusicEls();
   if (state.musicPlayer.sourceType === 'local' || state.musicPlayer.streamMode === 'direct') {
     if (audio) {
       audio.pause();
       audio.currentTime = 0;
     }
-  } else if (streamIframePlayer?.stopVideo) {
+  } else if (state.musicPlayer.streamMode === 'youtube' && streamIframePlayer?.stopVideo) {
     streamIframePlayer.stopVideo();
+  } else if (state.musicPlayer.streamMode === 'embed' && iframe) {
+    iframe.src = '';
   }
   state.musicPlayer.isPlaying = false;
   save();
@@ -3274,6 +3296,11 @@ if (!state.changelog.some((c) => c.message === markdownToolbarUxPatch)) {
 const stateSafetyPatch = 'State Safety Pack: automatic pre-write versioned backups + restore APIs + checksum metadata + Settings export/import controls with explicit overwrite confirmation.';
 if (!state.changelog.some((c) => c.message === stateSafetyPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: stateSafetyPatch });
+}
+
+const musicStreamCompatibilityPatch = 'Patch: Music Player stream compatibility restored — non-direct live stream URLs now auto-fallback to embedded iframe mode while keeping YouTube and local audio behavior intact.';
+if (!state.changelog.some((c) => c.message === musicStreamCompatibilityPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: musicStreamCompatibilityPatch });
 }
 
 renderAll();
