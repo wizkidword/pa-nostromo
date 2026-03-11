@@ -55,6 +55,10 @@ This allows state sharing across browsers on the same machine.
 
 Early alpha. Built for real daily use and rapid iteration.
 
+## Patch Notes
+
+- 2026-03-10: Crypto Tracker portfolio mode (manual holdings per watched coin: quantity + average buy) with per-coin position/cost/P&L and a compact total portfolio summary.
+
 ## Roadmap (short)
 
 - Smart merge/version conflict handling for multi-tab saves

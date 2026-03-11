@@ -41,6 +41,7 @@ const seed = {
   reminders: [],
   settings: { ...DEFAULT_SETTINGS },
   cryptoWatchlist: ['bitcoin', 'ethereum'],
+  cryptoHoldings: {},
   musicPlayer: {
     sourceType: 'stream', // stream | local
     currentStreamUrl: '',
@@ -148,6 +149,20 @@ function load(){
       .map((v) => cryptoIdAliases[v] || v)
   )];
 
+  const holdingsRaw = (state.cryptoHoldings && typeof state.cryptoHoldings === 'object') ? state.cryptoHoldings : {};
+  state.cryptoHoldings = {};
+  for (const [coinIdRaw, holding] of Object.entries(holdingsRaw)) {
+    const coinIdNorm = String(coinIdRaw || '').trim().toLowerCase();
+    const coinId = cryptoIdAliases[coinIdNorm] || coinIdNorm;
+    if (!coinId) continue;
+    const quantity = Number(holding?.quantity ?? 0);
+    const avgBuyPrice = Number(holding?.avgBuyPrice ?? holding?.averageBuyPrice ?? 0);
+    state.cryptoHoldings[coinId] = {
+      quantity: Number.isFinite(quantity) && quantity >= 0 ? quantity : 0,
+      avgBuyPrice: Number.isFinite(avgBuyPrice) && avgBuyPrice >= 0 ? avgBuyPrice : 0,
+    };
+  }
+
   state.musicPlayer = {
     sourceType: 'stream',
     currentStreamUrl: '',
@@ -160,6 +175,12 @@ function load(){
   };
   state.musicPlayer.volume = Math.min(1, Math.max(0, Number(state.musicPlayer.volume ?? 0.7)));
   state.changelog = Array.isArray(state.changelog) ? state.changelog : [];
+
+  const portfolioPatchNote = 'Patch: Crypto Tracker now supports portfolio holdings (qty + avg buy) with unrealized P/L summary.';
+  if (!state.changelog.some((entry) => entry?.message === portfolioPatchNote)) {
+    state.changelog.unshift({ id: id(), ts: now(), message: portfolioPatchNote });
+    state.changelog = state.changelog.slice(0, 200);
+  }
 
   // Ensure reminder task exists for pod drag/drop idea.
   const mission = (state.projects || []).find((p) => p.name === 'Mission Control Dashboard');
@@ -404,6 +425,14 @@ function formatUsdPrice(value){
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   })}`;
+}
+
+function formatSignedUsd(value){
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  if (n > 0) return `+${formatUsdPrice(n)}`;
+  if (n < 0) return `-${formatUsdPrice(Math.abs(n))}`;
+  return formatUsdPrice(0);
 }
 
 function playAlarmTone(){
@@ -834,22 +863,55 @@ async function renderCrypto(){
       watch = await watchRes.json();
     }
 
+    let totalValue = 0;
+    let totalCostBasis = 0;
+
     const row = (c) => {
       const change = Number(c.price_change_percentage_24h || 0);
       const color = change >= 0 ? '#22c55e' : '#ef4444';
+      const coinId = String(c.id || '').toLowerCase();
+      const holding = state.cryptoHoldings?.[coinId] || { quantity: 0, avgBuyPrice: 0 };
+      const quantity = Number(holding.quantity || 0);
+      const avgBuyPrice = Number(holding.avgBuyPrice || 0);
+      const currentPrice = Number(c.current_price || 0);
+
+      const positionValue = quantity * currentPrice;
+      const costBasis = quantity * avgBuyPrice;
+      const pnl = positionValue - costBasis;
+      const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
+
+      totalValue += positionValue;
+      totalCostBasis += costBasis;
+
+      const pnlColor = pnl >= 0 ? '#22c55e' : '#ef4444';
+
       return `
         <div class="change-log-item" style="margin-bottom:8px;">
           <div class="row-between-wrap">
             <strong>${escapeHtml((c.symbol || '').toUpperCase())} · ${formatUsdPrice(c.current_price)}</strong>
             <span style="color:${color};font-weight:700;">${change.toFixed(2)}%</span>
           </div>
-          <div class="note-meta row-between-wrap">
+          <div class="note-meta row-between-wrap" style="margin-top:4px;">
             <span>${escapeHtml(c.name || c.id || '')} · MCap: $${Number(c.market_cap || 0).toLocaleString()}</span>
             <button class="btn ghost" data-crypto-remove="${escapeHtml(c.id)}">Remove</button>
+          </div>
+          <div class="row-wrap" style="margin-top:6px;gap:6px;">
+            <label class="note-meta">Qty <input data-crypto-qty="${escapeHtml(c.id)}" type="number" min="0" step="any" value="${Number.isFinite(quantity) ? quantity : 0}" style="width:110px;" /></label>
+            <label class="note-meta">Avg $ <input data-crypto-avg="${escapeHtml(c.id)}" type="number" min="0" step="any" value="${Number.isFinite(avgBuyPrice) ? avgBuyPrice : 0}" style="width:120px;" /></label>
+          </div>
+          <div class="note-meta" style="margin-top:6px;line-height:1.4;">
+            Position: ${formatUsdPrice(positionValue)} · Cost: ${formatUsdPrice(costBasis)}
+            <span style="color:${pnlColor};font-weight:700;"> · P/L: ${formatSignedUsd(pnl)} (${pnl > 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</span>
           </div>
         </div>
       `;
     };
+
+    const rowsHtml = watch.length ? watch.map((c) => row(c)).join('') : '<div class="note-meta">No watchlist coins yet.</div>';
+
+    const totalPnl = totalValue - totalCostBasis;
+    const totalPnlPct = totalCostBasis > 0 ? (totalPnl / totalCostBasis) * 100 : 0;
+    const totalPnlColor = totalPnl >= 0 ? '#22c55e' : '#ef4444';
 
     el.innerHTML = `
       <div class="row-wrap" style="margin-bottom:8px;">
@@ -858,8 +920,15 @@ async function renderCrypto(){
         <button id="cryptoDirRefreshBtn" class="btn ghost">Refresh List</button>
       </div>
       <div id="cryptoAddHint" class="note-meta"></div>
+      <div class="change-log-item mt8" style="margin-bottom:8px;">
+        <div><strong>💼 Portfolio</strong></div>
+        <div class="note-meta" style="line-height:1.4;margin-top:4px;">
+          Value: ${formatUsdPrice(totalValue)} · Cost: ${formatUsdPrice(totalCostBasis)}
+          <span style="color:${totalPnlColor};font-weight:700;"> · Unrealized: ${formatSignedUsd(totalPnl)} (${totalPnl > 0 ? '+' : ''}${totalPnlPct.toFixed(2)}%)</span>
+        </div>
+      </div>
       <div class="mt8"><strong>👀 Watchlist</strong></div>
-      <div>${watch.length ? watch.map((c) => row(c)).join('') : '<div class="note-meta">No watchlist coins yet.</div>'}</div>
+      <div>${rowsHtml}</div>
     `;
 
     const addInput = document.getElementById('cryptoAddInput');
@@ -899,6 +968,7 @@ async function renderCrypto(){
         return;
       }
       if (!state.cryptoWatchlist.includes(id)) state.cryptoWatchlist.push(id);
+      if (!state.cryptoHoldings[id]) state.cryptoHoldings[id] = { quantity: 0, avgBuyPrice: 0 };
       if (addInput) addInput.value = '';
       save();
       renderCrypto();
@@ -917,13 +987,38 @@ async function renderCrypto(){
         const id = btn.getAttribute('data-crypto-remove');
         if (!id) return;
         state.cryptoWatchlist = state.cryptoWatchlist.filter((x) => x !== id);
+        delete state.cryptoHoldings[id];
+        save();
+        renderCrypto();
+      });
+    });
+
+    el.querySelectorAll('[data-crypto-qty]').forEach((input) => {
+      input.addEventListener('change', () => {
+        const coinId = String(input.getAttribute('data-crypto-qty') || '').toLowerCase();
+        if (!coinId) return;
+        const qty = Number(input.value);
+        if (!state.cryptoHoldings[coinId]) state.cryptoHoldings[coinId] = { quantity: 0, avgBuyPrice: 0 };
+        state.cryptoHoldings[coinId].quantity = Number.isFinite(qty) && qty >= 0 ? qty : 0;
+        save();
+        renderCrypto();
+      });
+    });
+
+    el.querySelectorAll('[data-crypto-avg]').forEach((input) => {
+      input.addEventListener('change', () => {
+        const coinId = String(input.getAttribute('data-crypto-avg') || '').toLowerCase();
+        if (!coinId) return;
+        const avg = Number(input.value);
+        if (!state.cryptoHoldings[coinId]) state.cryptoHoldings[coinId] = { quantity: 0, avgBuyPrice: 0 };
+        state.cryptoHoldings[coinId].avgBuyPrice = Number.isFinite(avg) && avg >= 0 ? avg : 0;
         save();
         renderCrypto();
       });
     });
 
     const ts = document.getElementById('cryptoUpdatedAt');
-    if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()} (watchlist only · auto: every 15 min)`;
+    if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()} (watchlist + portfolio · auto: every 15 min)`;
   } catch {
     el.textContent = 'Crypto data unavailable right now.';
     const ts = document.getElementById('cryptoUpdatedAt');
