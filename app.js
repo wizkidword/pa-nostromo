@@ -1824,23 +1824,51 @@ function showVoiceToRowanFallbackTools(show){
 }
 
 async function sendVoiceToRowanMessage(text){
+  let relayResponse = null;
+  let relayPayload = null;
+  let relayError = null;
+
+  try {
+    relayResponse = await fetch('/api/rowan-send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+
+    try {
+      relayPayload = await relayResponse.json();
+    } catch {}
+
+    if (relayResponse.ok && relayPayload?.ok) {
+      return { transport: relayPayload.transport || 'rowan-relay' };
+    }
+  } catch (err) {
+    relayError = err;
+  }
+
   if (typeof window.sendMissionControlChatMessage === 'function') {
     await window.sendMissionControlChatMessage(text);
-    return { transport: 'window.sendMissionControlChatMessage' };
+    return { transport: 'window.sendMissionControlChatMessage (fallback)' };
   }
 
   if (typeof window.sendRowanChatMessage === 'function') {
     await window.sendRowanChatMessage(text);
-    return { transport: 'window.sendRowanChatMessage' };
+    return { transport: 'window.sendRowanChatMessage (fallback)' };
   }
 
   const bridge = sendVoiceToRowanViaParentBridge(text);
   if (bridge.ok) {
-    return { transport: bridge.transport };
+    return { transport: `${bridge.transport} (fallback)` };
   }
 
-  const err = new Error(`Rowan chat bridge unavailable (${bridge.reason}).`);
-  err.code = 'ROWAN_BRIDGE_UNAVAILABLE';
+  const reason = relayPayload?.message
+    || relayPayload?.error
+    || (relayResponse ? `HTTP ${relayResponse.status}` : '')
+    || String(relayError?.message || '')
+    || bridge.reason
+    || 'relay unavailable';
+  const err = new Error(`Rowan relay unavailable (${reason}).`);
+  err.code = relayPayload?.error === 'relay_not_configured' ? 'ROWAN_RELAY_NOT_CONFIGURED' : 'ROWAN_BRIDGE_UNAVAILABLE';
   throw err;
 }
 
@@ -2025,11 +2053,15 @@ function renderVoiceToRowanPod(){
       showVoiceToRowanFallbackTools(false);
       setVoiceToRowanStatus(`Sent to Rowan chat via ${result.transport}.`);
     } catch (err) {
-      if (err?.code === 'ROWAN_BRIDGE_UNAVAILABLE') {
+      if (err?.code === 'ROWAN_BRIDGE_UNAVAILABLE' || err?.code === 'ROWAN_RELAY_NOT_CONFIGURED') {
         showVoiceToRowanFallbackTools(true);
-        setVoiceToRowanStatus('Send bridge unavailable. Draft preserved — use Copy draft, then paste into chat.');
+        if (err?.code === 'ROWAN_RELAY_NOT_CONFIGURED') {
+          setVoiceToRowanStatus('Relay is not configured on this server. Draft preserved — use Copy draft, then paste into chat.');
+        } else {
+          setVoiceToRowanStatus(`Relay send failed. Draft preserved — ${String(err?.message || err)}. Use Copy draft as fallback.`);
+        }
       } else {
-        setVoiceToRowanStatus(`Could not send: ${String(err?.message || err)}.`);
+        setVoiceToRowanStatus(`Could not send: ${String(err?.message || err)}. Draft preserved.`);
       }
     } finally {
       if (sendBtn) sendBtn.disabled = false;
@@ -3104,6 +3136,11 @@ if (!state.changelog.some((c) => c.message === voiceToRowanPatch)) {
 const voiceToRowanTransportPatch = 'Voice to Rowan transport patch: Send now uses fallback chain (direct window hooks → parent/top postMessage bridge) with preserved draft + one-click copy guidance when bridge is unavailable.';
 if (!state.changelog.some((c) => c.message === voiceToRowanTransportPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: voiceToRowanTransportPatch });
+}
+
+const voiceToRowanRelayPatch = 'Voice to Rowan relay bridge upgrade: primary send path now targets POST /api/rowan-send with explicit server-side relay config, actionable failures, and fallback transport tools while preserving manual-send behavior.';
+if (!state.changelog.some((c) => c.message === voiceToRowanRelayPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: voiceToRowanRelayPatch });
 }
 
 const taskEditPatch = 'Board update: task cards now support Edit via modal for all task fields, including project/column reassignment.';
