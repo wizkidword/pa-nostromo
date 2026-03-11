@@ -1,25 +1,61 @@
 const http = require('http');
+const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 
-const PORT = Number(process.env.PORT || 4187);
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
+
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const raw = fs.readFileSync(filePath, 'utf8');
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const idx = trimmed.indexOf('=');
+    if (idx <= 0) continue;
+
+    const key = trimmed.slice(0, idx).trim();
+    let value = trimmed.slice(idx + 1).trim();
+
+    if (!key || process.env[key] !== undefined) continue;
+
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+
+    process.env[key] = value;
+  }
+}
+
+// Local config support (safe precedence): shell env > .env.local > .env
+loadEnvFile(path.join(ROOT, '.env'));
+loadEnvFile(path.join(ROOT, '.env.local'));
+
+const PORT = Number(process.env.PORT || 4187);
 
 function parsePositiveInt(value, fallback) {
   const num = Number(value);
   return Number.isFinite(num) && num > 0 ? Math.floor(num) : fallback;
 }
 
+function parseBool(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+const IS_PROD = String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
 const ROWAN_MAX_TEXT_LENGTH = parsePositiveInt(process.env.ROWAN_SEND_MAX_TEXT_LENGTH, 2000);
 const ROWAN_RELAY_URL = String(process.env.ROWAN_RELAY_URL || '').trim();
 const ROWAN_RELAY_TIMEOUT_MS = Math.max(1000, parsePositiveInt(process.env.ROWAN_RELAY_TIMEOUT_MS, 8000));
 const ROWAN_RELAY_AUTH_BEARER = String(process.env.ROWAN_RELAY_AUTH_BEARER || '').trim();
 const ROWAN_RELAY_AUTH_HEADER = String(process.env.ROWAN_RELAY_AUTH_HEADER || 'Authorization').trim() || 'Authorization';
-const ROWAN_RELAY_OPENCLAW_CHANNEL = String(process.env.ROWAN_RELAY_OPENCLAW_CHANNEL || '').trim();
-const ROWAN_RELAY_OPENCLAW_TARGET = String(process.env.ROWAN_RELAY_OPENCLAW_TARGET || '').trim();
-const ROWAN_ALLOW_REMOTE = String(process.env.ROWAN_ALLOW_REMOTE || '').trim() === '1';
+const ROWAN_RELAY_OPENCLAW_CHANNEL = String(process.env.ROWAN_RELAY_OPENCLAW_CHANNEL || (IS_PROD ? '' : 'webchat')).trim();
+const ROWAN_RELAY_OPENCLAW_TARGET = String(process.env.ROWAN_RELAY_OPENCLAW_TARGET || (IS_PROD ? '' : 'agent:main:main')).trim();
+const ROWAN_ALLOW_REMOTE = parseBool(process.env.ROWAN_ALLOW_REMOTE);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

@@ -3143,6 +3143,11 @@ if (!state.changelog.some((c) => c.message === voiceToRowanRelayPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: voiceToRowanRelayPatch });
 }
 
+const voiceToRowanTurnkeyConfigPatch = 'Voice-to-Rowan turnkey setup patch: local `.env` / `.env.local` relay config is now first-class (one-time setup + npm start), while preserving local-only relay security defaults.';
+if (!state.changelog.some((c) => c.message === voiceToRowanTurnkeyConfigPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: voiceToRowanTurnkeyConfigPatch });
+}
+
 const taskEditPatch = 'Board update: task cards now support Edit via modal for all task fields, including project/column reassignment.';
 if (!state.changelog.some((c) => c.message === taskEditPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: taskEditPatch });
