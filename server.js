@@ -514,7 +514,7 @@ async function handleApiCameraSnapshot(req, res) {
   try {
     upstream = await fetch(targetUrl, {
       method: 'GET',
-      redirect: 'follow',
+      redirect: 'manual',
       signal: controller.signal,
       headers: {
         'User-Agent': 'mission-control-lite-camera-proxy/1.0',
@@ -525,6 +525,14 @@ async function handleApiCameraSnapshot(req, res) {
     return sendJson(res, 502, { ok: false, error: 'upstream_fetch_failed', message: String(err?.message || err) });
   } finally {
     clearTimeout(timeout);
+  }
+
+  if (upstream.status >= 300 && upstream.status < 400) {
+    return sendJson(res, 502, {
+      ok: false,
+      error: 'redirect_not_allowed',
+      message: 'Camera source redirects are blocked by proxy safety policy.',
+    });
   }
 
   if (!upstream.ok) {

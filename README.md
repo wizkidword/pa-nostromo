@@ -144,6 +144,7 @@ Camera Feed is a single-feed utility pod for local/network camera URLs.
   - allows private/local hosts by default (e.g. `192.168.x.x`, `10.x.x.x`, `localhost`, `*.local`)
   - public hosts require explicit allowlist entries (`CAMERA_PROXY_ALLOWLIST`)
 - Request timeout + max payload size limits are enforced (`CAMERA_PROXY_TIMEOUT_MS`, `CAMERA_PROXY_MAX_BYTES`)
+- Upstream redirects are blocked to prevent allowlist bypass/open-proxy chaining
 
 ### Camera config env keys
 
