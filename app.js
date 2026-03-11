@@ -1554,7 +1554,13 @@ function playMusic(){
   if (state.musicPlayer.streamMode === 'youtube') {
     pendingYoutubeAction = 'play';
     ensureYoutubeApi();
-    if (window.YT?.Player && !streamIframePlayer) initYouTubePlayerIfReady();
+
+    // Urgent race/stale-instance guard:
+    // Re-init when player is missing OR not ready to avoid dead "loading" state
+    // after pod re-renders that replace the iframe element.
+    if (window.YT?.Player && (!streamIframePlayer || !youtubePlayerReady)) {
+      initYouTubePlayerIfReady();
+    }
 
     if (!runPendingYoutubeAction()) {
       setMusicStatus('YouTube player is loading — play will start automatically when ready.');
