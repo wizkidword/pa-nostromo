@@ -14,7 +14,7 @@ const payload = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
 
 payload.__writeControl = {
   overrideDowngrade: true,
-  source: 'qa_reset_script',
+  source: 'manual_import',
 };
 
 const baseUrl = process.env.MC_BASE_URL || 'http://localhost:4187';
