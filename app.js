@@ -3814,7 +3814,41 @@ window.onYouTubeIframeAPIReady = function(){
   initYouTubePlayerIfReady();
 };
 
-function renderAll(){ applyTheme(); renderDateTime(); renderCalendar(); renderCalendarRemindersPanel(); renderTodayReminders(); renderSettings(); renderProjects(); renderStats(); renderIdeas(); renderNotes(); renderBoard(); renderMusicPlayer(); renderCameraFeedPod(); renderLiveStreamsPod(); renderVoiceNotePod(); renderVoiceToRowanPod(); renderShortcutsPod(); renderShortcutsSettings(); renderRss({ skipFetch: true }); populateProjectSelect(); }
+function getPodRegistry(){
+  return window.MissionControlModules?.podRegistry || null;
+}
+
+function renderPodWithFallback(podId, legacyRender){
+  const registry = getPodRegistry();
+  if (registry && typeof registry.render === 'function') {
+    const result = registry.render(podId, { state, legacyRender });
+    if (result?.ok) return;
+  }
+  if (typeof legacyRender === 'function') legacyRender();
+}
+
+function renderAll(){
+  applyTheme();
+  renderPodWithFallback('date-time', renderDateTime);
+  renderPodWithFallback('calendar', renderCalendar);
+  renderCalendarRemindersPanel();
+  renderTodayReminders();
+  renderSettings();
+  renderProjects();
+  renderStats();
+  renderIdeas();
+  renderNotes();
+  renderBoard();
+  renderMusicPlayer();
+  renderCameraFeedPod();
+  renderLiveStreamsPod();
+  renderVoiceNotePod();
+  renderVoiceToRowanPod();
+  renderShortcutsPod();
+  renderShortcutsSettings();
+  renderRss({ skipFetch: true });
+  populateProjectSelect();
+}
 
 function renderProjects(){
   const wrap = document.getElementById('projectDirectory');
@@ -5005,6 +5039,11 @@ if (!state.changelog.some((c) => c.message === stopControlIsolationPatch)) {
 const sentinelStabilizationPatch = 'Sentinel stabilization pass: render side-effects decoupled from persistence via commitState(), startup shared-sync hydration lock added to prevent stale overwrite races, and QA smoke-check docs/guardrails added.';
 if (!state.changelog.some((c) => c.message === sentinelStabilizationPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: sentinelStabilizationPatch });
+}
+
+const phase1aFoundationPatch = 'Phase 1A modular foundation: added pod contract/registry/layout/persistence scaffolding + adapter pods (Date/Calendar/Weather) with legacy render fallback for non-migrated pods.';
+if (!state.changelog.some((c) => c.message === phase1aFoundationPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: phase1aFoundationPatch });
 }
 
 const cameraFeedPatch = 'Added Camera Feed pod (V1): single active feed with Embed Stream mode plus Snapshot Refresh fallback (configurable interval + optional local proxy relay).';
