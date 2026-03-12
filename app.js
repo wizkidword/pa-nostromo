@@ -1624,14 +1624,37 @@ function renderRssListFromState(){
 }
 
 function mergeRssItems(existingItems, incomingItems){
+  // Deduplicate by stable natural key first (guid/link), then by id.
+  // This prevents stale "Untitled" rows from lingering when title parsing improves.
   const map = new Map();
+
+  const naturalKey = (item) => {
+    const guid = String(item?.guid || '').trim();
+    const link = String(item?.link || '').trim();
+    if (guid) return `g:${guid}`;
+    if (link) return `l:${link}`;
+    return `i:${String(item?.id || '').trim()}`;
+  };
+
+  const prefer = (a, b) => {
+    if (!a) return b;
+    if (!b) return a;
+    const aUntitled = String(a.title || '').trim().toLowerCase() === 'untitled';
+    const bUntitled = String(b.title || '').trim().toLowerCase() === 'untitled';
+    if (aUntitled && !bUntitled) return b;
+    if (bUntitled && !aUntitled) return a;
+    return b; // prefer newer incoming/update by default
+  };
+
   for (const item of existingItems || []) {
-    if (!item?.id) continue;
-    map.set(item.id, item);
+    if (!item?.id && !item?.link && !item?.guid) continue;
+    const key = naturalKey(item);
+    map.set(key, item);
   }
   for (const item of incomingItems || []) {
-    if (!item?.id) continue;
-    map.set(item.id, item);
+    if (!item?.id && !item?.link && !item?.guid) continue;
+    const key = naturalKey(item);
+    map.set(key, prefer(map.get(key), item));
   }
 
   return [...map.values()].sort((a, b) => {
@@ -1653,6 +1676,7 @@ async function renderRss(options = {}){
         const feedConfig = feedByUrl.get(item.feedUrl) || {};
         return {
           id: String(item.id || '').trim(),
+          guid: String(item.guid || '').trim(),
           feedId: String(feedConfig.id || ''),
           title: String(item.title || 'Untitled').trim() || 'Untitled',
           link: String(item.link || '').trim(),
