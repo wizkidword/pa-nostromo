@@ -69,6 +69,24 @@ const seed = {
     viewportWidth: 640,
     viewportHeight: 360,
   },
+  liveStreams: {
+    sourceType: 'youtube', // youtube | twitch | kick | vaughn | generic | local
+    inputs: {
+      youtube: '',
+      twitch: '',
+      kick: '',
+      vaughn: '',
+      generic: '',
+      local: '',
+    },
+    active: false,
+    status: 'idle', // idle | loading | live | error
+    lastError: '',
+    embedUrl: '',
+    externalUrl: '',
+    renderMode: 'iframe', // iframe | video
+    presets: [],
+  },
   rss: {
     feeds: [],
     items: [],
@@ -254,6 +272,53 @@ function load(){
   state.cameraFeed.viewportHeight = Number.isFinite(Number(state.cameraFeed.viewportHeight))
     ? Math.min(900, Math.max(180, Math.round(Number(state.cameraFeed.viewportHeight))))
     : 360;
+
+  state.liveStreams = {
+    sourceType: 'youtube',
+    inputs: {
+      youtube: '',
+      twitch: '',
+      kick: '',
+      vaughn: '',
+      generic: '',
+      local: '',
+    },
+    active: false,
+    status: 'idle',
+    lastError: '',
+    embedUrl: '',
+    externalUrl: '',
+    renderMode: 'iframe',
+    presets: [],
+    ...(state.liveStreams || {}),
+  };
+  state.liveStreams.sourceType = ['youtube', 'twitch', 'kick', 'vaughn', 'generic', 'local'].includes(state.liveStreams.sourceType)
+    ? state.liveStreams.sourceType
+    : 'youtube';
+  const liveInputs = (state.liveStreams.inputs && typeof state.liveStreams.inputs === 'object') ? state.liveStreams.inputs : {};
+  state.liveStreams.inputs = {
+    youtube: String(liveInputs.youtube || '').trim(),
+    twitch: String(liveInputs.twitch || '').trim(),
+    kick: String(liveInputs.kick || '').trim(),
+    vaughn: String(liveInputs.vaughn || '').trim(),
+    generic: String(liveInputs.generic || '').trim(),
+    local: String(liveInputs.local || '').trim(),
+  };
+  state.liveStreams.active = !!state.liveStreams.active;
+  state.liveStreams.status = ['idle', 'loading', 'live', 'error'].includes(state.liveStreams.status) ? state.liveStreams.status : 'idle';
+  state.liveStreams.lastError = String(state.liveStreams.lastError || '').slice(0, 300);
+  state.liveStreams.embedUrl = String(state.liveStreams.embedUrl || '').trim();
+  state.liveStreams.externalUrl = String(state.liveStreams.externalUrl || '').trim();
+  state.liveStreams.renderMode = ['iframe', 'video'].includes(state.liveStreams.renderMode) ? state.liveStreams.renderMode : 'iframe';
+  state.liveStreams.presets = Array.isArray(state.liveStreams.presets)
+    ? state.liveStreams.presets.slice(0, 20).map((p) => ({
+      id: String(p?.id || id()),
+      name: String(p?.name || '').trim().slice(0, 40),
+      sourceType: ['youtube', 'twitch', 'kick', 'vaughn', 'generic', 'local'].includes(p?.sourceType) ? p.sourceType : 'youtube',
+      value: String(p?.value || '').trim().slice(0, 500),
+      createdAt: String(p?.createdAt || now()),
+    })).filter((p) => p.name && p.value)
+    : [];
 
   state.rss = {
     feeds: [],
@@ -2584,6 +2649,371 @@ function renderCameraFeedPod(){
   }
 }
 
+function liveSourceLabel(type){
+  const labels = {
+    youtube: 'YouTube Live',
+    twitch: 'Twitch',
+    kick: 'Kick',
+    vaughn: 'Vaughn Live',
+    generic: 'Generic RTMP/HLS/M3U8 URL',
+    local: 'Local source URL',
+  };
+  return labels[type] || 'Live Source';
+}
+
+function parseChannelLikeInput(raw, providers = []){
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  if (!/^https?:\/\//i.test(value)) return value.replace(/^@/, '').split(/[/?#]/)[0] || '';
+  try {
+    const u = new URL(value);
+    const host = u.hostname.toLowerCase();
+    if (providers.some((p) => host.includes(p))) {
+      const pathSeg = (u.pathname || '').split('/').filter(Boolean);
+      if (pathSeg.length) return pathSeg[pathSeg.length - 1].replace(/^@/, '');
+    }
+  } catch {}
+  return value.replace(/^@/, '').split(/[/?#]/)[0] || '';
+}
+
+function buildLiveStreamTarget(){
+  const sourceType = state.liveStreams.sourceType;
+  const inputValue = String(state.liveStreams.inputs[sourceType] || '').trim();
+  if (!inputValue) {
+    return { error: `Enter a ${liveSourceLabel(sourceType)} value first.` };
+  }
+
+  if (sourceType === 'youtube') {
+    if (/^https?:\/\//i.test(inputValue)) {
+      const ytId = parseYouTubeVideoId(inputValue);
+      if (ytId) {
+        return {
+          embedUrl: `https://www.youtube.com/embed/${encodeURIComponent(ytId)}?autoplay=1&playsinline=1`,
+          externalUrl: inputValue,
+          renderMode: 'iframe',
+          providerNote: 'YouTube URL detected. Embedded video ID mode.',
+        };
+      }
+      const channel = parseChannelLikeInput(inputValue, ['youtube.com', 'youtu.be']);
+      if (channel) {
+        return {
+          embedUrl: `https://www.youtube.com/embed/live_stream?channel=${encodeURIComponent(channel)}&autoplay=1`,
+          externalUrl: inputValue,
+          renderMode: 'iframe',
+          providerNote: 'YouTube channel/live embed mode.',
+        };
+      }
+    }
+    const channel = parseChannelLikeInput(inputValue, ['youtube.com', 'youtu.be']);
+    if (!channel) return { error: 'Invalid YouTube channel/video input.' };
+    return {
+      embedUrl: `https://www.youtube.com/embed/live_stream?channel=${encodeURIComponent(channel)}&autoplay=1`,
+      externalUrl: `https://www.youtube.com/@${encodeURIComponent(channel)}/live`,
+      renderMode: 'iframe',
+      providerNote: 'YouTube channel embed mode.',
+    };
+  }
+
+  if (sourceType === 'twitch') {
+    const channel = parseChannelLikeInput(inputValue, ['twitch.tv']);
+    if (!channel) return { error: 'Invalid Twitch channel input.' };
+    const parent = encodeURIComponent(window.location.hostname || 'localhost');
+    return {
+      embedUrl: `https://player.twitch.tv/?channel=${encodeURIComponent(channel)}&parent=${parent}&autoplay=true`,
+      externalUrl: /^https?:\/\//i.test(inputValue) ? inputValue : `https://www.twitch.tv/${encodeURIComponent(channel)}`,
+      renderMode: 'iframe',
+      providerNote: 'Twitch embed requires allowed parent domain. If blocked, open in new tab.',
+    };
+  }
+
+  if (sourceType === 'kick') {
+    const channel = parseChannelLikeInput(inputValue, ['kick.com']);
+    if (!channel) return { error: 'Invalid Kick channel input.' };
+    return {
+      embedUrl: `https://player.kick.com/${encodeURIComponent(channel)}`,
+      externalUrl: /^https?:\/\//i.test(inputValue) ? inputValue : `https://kick.com/${encodeURIComponent(channel)}`,
+      renderMode: 'iframe',
+      providerNote: 'Kick embed mode (depends on provider framing policy).',
+    };
+  }
+
+  if (sourceType === 'vaughn') {
+    const channel = parseChannelLikeInput(inputValue, ['vaughn.live']);
+    if (!channel) return { error: 'Invalid Vaughn Live channel input.' };
+    return {
+      embedUrl: `https://vaughn.live/embed/${encodeURIComponent(channel)}`,
+      externalUrl: /^https?:\/\//i.test(inputValue) ? inputValue : `https://vaughn.live/${encodeURIComponent(channel)}`,
+      renderMode: 'iframe',
+      providerNote: 'Vaughn embed attempted; some channels may block framing.',
+    };
+  }
+
+  if (sourceType === 'generic' || sourceType === 'local') {
+    const lower = inputValue.toLowerCase();
+    if (lower.startsWith('rtmp://')) {
+      return {
+        error: 'RTMP cannot be played directly in-browser. Use an HLS/M3U8 URL or open stream URL in an external player/tab.',
+        externalUrl: inputValue,
+      };
+    }
+    const mediaLike = /\.(m3u8|mp4|webm|ogg)(\?|#|$)/i.test(inputValue);
+    if (/^https?:\/\//i.test(inputValue) || /^\//.test(inputValue) || /^\.\//.test(inputValue)) {
+      return {
+        embedUrl: inputValue,
+        externalUrl: inputValue,
+        renderMode: mediaLike ? 'video' : 'iframe',
+        providerNote: mediaLike
+          ? 'Direct media/HLS URL detected. Browser playback support depends on codec and M3U8 support.'
+          : 'URL embed mode (iframe). If blocked, open in new tab.',
+      };
+    }
+    return { error: 'Generic/Local source must be a URL (http/https) or local-relative path.' };
+  }
+
+  return { error: 'Unsupported source type.' };
+}
+
+function setLiveStreamsStatus(text){
+  const el = document.getElementById('liveStreamsStatus');
+  if (el) el.textContent = text;
+}
+
+function getLiveStreamsEls(){
+  const root = document.getElementById('liveStreamsWidget')?.querySelector('[data-pod="live-streams"]') || null;
+  return {
+    root,
+    sourceType: root?.querySelector('[data-live-role="source-type"]') || null,
+    input: root?.querySelector('[data-live-role="input"]') || null,
+    startBtn: root?.querySelector('[data-live-role="start"]') || null,
+    stopBtn: root?.querySelector('[data-live-role="stop"]') || null,
+    openBtn: root?.querySelector('[data-live-role="open"]') || null,
+    frame: root?.querySelector('[data-live-role="frame"]') || null,
+    video: root?.querySelector('[data-live-role="video"]') || null,
+    presetName: root?.querySelector('[data-live-role="preset-name"]') || null,
+    savePresetBtn: root?.querySelector('[data-live-role="save-preset"]') || null,
+    presetSelect: root?.querySelector('[data-live-role="preset-select"]') || null,
+    applyPresetBtn: root?.querySelector('[data-live-role="apply-preset"]') || null,
+  };
+}
+
+function stopLiveStream({ keepStatus = false } = {}){
+  const els = getLiveStreamsEls();
+  if (els.frame) els.frame.src = 'about:blank';
+  if (els.video) {
+    try {
+      els.video.pause();
+      els.video.removeAttribute('src');
+      els.video.load();
+    } catch {}
+  }
+  state.liveStreams.active = false;
+  state.liveStreams.embedUrl = '';
+  state.liveStreams.renderMode = 'iframe';
+  state.liveStreams.status = 'idle';
+  state.liveStreams.lastError = '';
+  save();
+  renderLiveStreamsPod();
+  if (!keepStatus) setLiveStreamsStatus('Stopped. Configure a source and click Load / Start.');
+}
+
+function startLiveStream(){
+  const target = buildLiveStreamTarget();
+  if (target.error) {
+    state.liveStreams.status = 'error';
+    state.liveStreams.lastError = target.error;
+    if (target.externalUrl) state.liveStreams.externalUrl = target.externalUrl;
+    state.liveStreams.active = false;
+    save();
+    renderLiveStreamsPod();
+    setLiveStreamsStatus(`${target.error}${state.liveStreams.externalUrl ? ' Use Open in new tab when applicable.' : ''}`);
+    return;
+  }
+
+  state.liveStreams.status = 'loading';
+  state.liveStreams.lastError = '';
+  state.liveStreams.active = true;
+  state.liveStreams.embedUrl = target.embedUrl;
+  state.liveStreams.externalUrl = target.externalUrl || target.embedUrl;
+  state.liveStreams.renderMode = target.renderMode || 'iframe';
+  save();
+  renderLiveStreamsPod();
+  setLiveStreamsStatus(`Loading ${liveSourceLabel(state.liveStreams.sourceType)}… ${target.providerNote || ''}`);
+}
+
+function renderLiveStreamsPod(){
+  const el = document.getElementById('liveStreamsWidget');
+  if (!el) return;
+
+  const sourceType = state.liveStreams.sourceType;
+  const inputValue = String(state.liveStreams.inputs[sourceType] || '');
+  const placeholders = {
+    youtube: 'Channel, @handle, or YouTube URL',
+    twitch: 'Channel name or twitch.tv/channel URL',
+    kick: 'Channel name or kick.com/channel URL',
+    vaughn: 'Channel name or vaughn.live/channel URL',
+    generic: 'https://... (HLS/M3U8/MP4 or embeddable page)',
+    local: 'http://127.0.0.1:... or /local/path',
+  };
+  const presetOptions = ['<option value="">Saved presets</option>', ...state.liveStreams.presets.map((p) => (
+    `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} · ${escapeHtml(liveSourceLabel(p.sourceType))}</option>`
+  ))].join('');
+  const isVideo = state.liveStreams.active && state.liveStreams.renderMode === 'video';
+  const isFrame = state.liveStreams.active && state.liveStreams.renderMode === 'iframe';
+
+  el.innerHTML = `
+    <div class="live-streams-shell" data-pod="live-streams">
+      <label class="camera-feed-inline-label">Source
+        <select data-live-role="source-type" class="w-auto">
+          <option value="youtube" ${sourceType === 'youtube' ? 'selected' : ''}>YouTube Live</option>
+          <option value="twitch" ${sourceType === 'twitch' ? 'selected' : ''}>Twitch</option>
+          <option value="kick" ${sourceType === 'kick' ? 'selected' : ''}>Kick</option>
+          <option value="vaughn" ${sourceType === 'vaughn' ? 'selected' : ''}>Vaughn Live</option>
+          <option value="generic" ${sourceType === 'generic' ? 'selected' : ''}>Generic RTMP/HLS/M3U8 URL</option>
+          <option value="local" ${sourceType === 'local' ? 'selected' : ''}>Local source URL</option>
+        </select>
+      </label>
+      <input data-live-role="input" placeholder="${escapeHtml(placeholders[sourceType])}" value="${escapeHtml(inputValue)}" />
+      <div class="row-wrap">
+        <button data-live-role="start" class="btn">Load / Start</button>
+        <button data-live-role="stop" class="btn ghost" ${state.liveStreams.active ? '' : 'disabled'}>Stop</button>
+        <button data-live-role="open" class="btn ghost" ${state.liveStreams.externalUrl ? '' : 'disabled'}>Open in new tab</button>
+      </div>
+      <div class="row-wrap">
+        <input data-live-role="preset-name" placeholder="Preset name (optional)" class="w-180" />
+        <button data-live-role="save-preset" class="btn ghost">Save Preset</button>
+        <select data-live-role="preset-select" class="w-auto">${presetOptions}</select>
+        <button data-live-role="apply-preset" class="btn ghost">Apply</button>
+      </div>
+      <div class="live-streams-frame-wrap mt6">
+        <iframe data-live-role="frame" title="Live stream" referrerpolicy="no-referrer" allow="autoplay; fullscreen" ${isFrame ? '' : 'style="display:none;"'}></iframe>
+        <video data-live-role="video" controls autoplay playsinline ${isVideo ? '' : 'style="display:none;"'}></video>
+      </div>
+      <div class="note-meta mt6">Some providers block iframe embeds with X-Frame-Options/CSP. If playback fails or stays blank, use <strong>Open in new tab</strong>.</div>
+    </div>
+  `;
+
+  const els = getLiveStreamsEls();
+
+  els.sourceType?.addEventListener('change', () => {
+    state.liveStreams.sourceType = els.sourceType.value;
+    state.liveStreams.status = 'idle';
+    state.liveStreams.lastError = '';
+    save();
+    renderLiveStreamsPod();
+    setLiveStreamsStatus(`${liveSourceLabel(state.liveStreams.sourceType)} selected. Enter source and click Load / Start.`);
+  });
+
+  els.input?.addEventListener('change', () => {
+    state.liveStreams.inputs[state.liveStreams.sourceType] = String(els.input.value || '').trim();
+    save();
+  });
+
+  els.startBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    state.liveStreams.inputs[state.liveStreams.sourceType] = String(els.input?.value || '').trim();
+    save();
+    startLiveStream();
+  });
+
+  els.stopBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    stopLiveStream();
+  });
+
+  els.openBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!state.liveStreams.externalUrl) return;
+    window.open(state.liveStreams.externalUrl, '_blank', 'noopener,noreferrer');
+  });
+
+  els.savePresetBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const value = String(els.input?.value || '').trim();
+    const name = String(els.presetName?.value || '').trim();
+    if (!value) {
+      setLiveStreamsStatus('Preset save skipped: enter a source value first.');
+      return;
+    }
+    const finalName = name || `${liveSourceLabel(state.liveStreams.sourceType)} ${new Date().toLocaleTimeString()}`;
+    state.liveStreams.presets.unshift({
+      id: id(),
+      name: finalName.slice(0, 40),
+      sourceType: state.liveStreams.sourceType,
+      value: value.slice(0, 500),
+      createdAt: now(),
+    });
+    state.liveStreams.presets = state.liveStreams.presets.slice(0, 20);
+    save();
+    renderLiveStreamsPod();
+    setLiveStreamsStatus(`Preset saved: ${finalName.slice(0, 40)}.`);
+  });
+
+  els.applyPresetBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const selectedId = String(els.presetSelect?.value || '');
+    const preset = state.liveStreams.presets.find((p) => p.id === selectedId);
+    if (!preset) {
+      setLiveStreamsStatus('Pick a saved preset first.');
+      return;
+    }
+    state.liveStreams.sourceType = preset.sourceType;
+    state.liveStreams.inputs[preset.sourceType] = preset.value;
+    save();
+    renderLiveStreamsPod();
+    setLiveStreamsStatus(`Applied preset: ${preset.name}.`);
+  });
+
+  if (isFrame && els.frame && state.liveStreams.embedUrl) {
+    const timeoutId = setTimeout(() => {
+      if (state.liveStreams.active && state.liveStreams.status === 'loading') {
+        state.liveStreams.status = 'error';
+        state.liveStreams.lastError = 'Embed did not become ready (possibly blocked by provider framing policy).';
+        save();
+        setLiveStreamsStatus(`${state.liveStreams.lastError} Use Open in new tab.`);
+      }
+    }, 7000);
+    els.frame.addEventListener('load', () => {
+      clearTimeout(timeoutId);
+      state.liveStreams.status = 'live';
+      state.liveStreams.lastError = '';
+      save();
+      setLiveStreamsStatus(`Live stream loaded (${liveSourceLabel(state.liveStreams.sourceType)}). If playback is blocked, open in new tab.`);
+    }, { once: true });
+    els.frame.src = state.liveStreams.embedUrl;
+  }
+
+  if (isVideo && els.video && state.liveStreams.embedUrl) {
+    const onLoaded = () => {
+      state.liveStreams.status = 'live';
+      state.liveStreams.lastError = '';
+      save();
+      setLiveStreamsStatus(`Live media loaded (${liveSourceLabel(state.liveStreams.sourceType)}).`);
+    };
+    const onError = () => {
+      state.liveStreams.status = 'error';
+      state.liveStreams.lastError = 'Browser could not play this media URL (codec/CORS/format issue).';
+      save();
+      setLiveStreamsStatus(`${state.liveStreams.lastError} Try Open in new tab.`);
+    };
+    els.video.addEventListener('loadeddata', onLoaded, { once: true });
+    els.video.addEventListener('error', onError, { once: true });
+    els.video.src = state.liveStreams.embedUrl;
+  }
+
+  if (state.liveStreams.status === 'error' && state.liveStreams.lastError) {
+    setLiveStreamsStatus(`${state.liveStreams.lastError}${state.liveStreams.externalUrl ? ' Use Open in new tab if needed.' : ''}`);
+  } else if (state.liveStreams.status === 'loading') {
+    setLiveStreamsStatus(`Loading ${liveSourceLabel(sourceType)}…`);
+  } else if (!state.liveStreams.active) {
+    setLiveStreamsStatus('Ready. Select a source preset, enter channel/URL, then click Load / Start.');
+  }
+}
+
 function setVoiceNoteStatus(text){
   const el = document.getElementById('voiceNoteStatus');
   if (el) el.textContent = text;
@@ -3098,7 +3528,7 @@ window.onYouTubeIframeAPIReady = function(){
   initYouTubePlayerIfReady();
 };
 
-function renderAll(){ applyTheme(); renderDateTime(); renderCalendar(); renderCalendarRemindersPanel(); renderTodayReminders(); renderSettings(); renderProjects(); renderStats(); renderIdeas(); renderNotes(); renderBoard(); renderMusicPlayer(); renderCameraFeedPod(); renderVoiceNotePod(); renderVoiceToRowanPod(); renderShortcutsPod(); renderShortcutsSettings(); renderRss({ skipFetch: true }); populateProjectSelect(); }
+function renderAll(){ applyTheme(); renderDateTime(); renderCalendar(); renderCalendarRemindersPanel(); renderTodayReminders(); renderSettings(); renderProjects(); renderStats(); renderIdeas(); renderNotes(); renderBoard(); renderMusicPlayer(); renderCameraFeedPod(); renderLiveStreamsPod(); renderVoiceNotePod(); renderVoiceToRowanPod(); renderShortcutsPod(); renderShortcutsSettings(); renderRss({ skipFetch: true }); populateProjectSelect(); }
 
 function renderProjects(){
   const wrap = document.getElementById('projectDirectory');
@@ -4309,6 +4739,11 @@ if (!state.changelog.some((c) => c.message === cameraResizePatch)) {
 const rssPodPatch = 'Added Personalized RSS Feed pod (V1): server-side feed fetch, settings feed manager, mark-read + show-read controls, manual refresh, and persisted feed/read preferences.';
 if (!state.changelog.some((c) => c.message === rssPodPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: rssPodPatch });
+}
+
+const liveStreamsPatch = 'Added Live Streams pod (V1): 6 source presets (YouTube/Twitch/Kick/Vaughn/Generic/Local), explicit embed-fallback status messaging, and persisted source inputs/presets.';
+if (!state.changelog.some((c) => c.message === liveStreamsPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: liveStreamsPatch });
 }
 
 save('startup_patch_seed', { pushShared: false });
