@@ -65,6 +65,8 @@ const seed = {
     lastError: '',
     useProxy: true,
     deviceId: '',
+    viewportWidth: 640,
+    viewportHeight: 360,
   },
   changelog: [],
   shortcuts: [
@@ -118,6 +120,9 @@ let cameraSnapshotBust = 0;
 let cameraLocalStream = null;
 let cameraDeviceList = [];
 let cameraDeviceRefreshInFlight = false;
+const CAMERA_VIEWPORT_DEFAULT = { width: 640, height: 360 };
+const CAMERA_VIEWPORT_MIN = { width: 280, height: 180 };
+const CAMERA_VIEWPORT_MAX = { width: 1200, height: 900 };
 let voiceNoteRecognizer = null;
 let voiceNoteListening = false;
 let voiceNoteSupported = false;
@@ -219,6 +224,8 @@ function load(){
     lastError: '',
     useProxy: true,
     deviceId: '',
+    viewportWidth: 640,
+    viewportHeight: 360,
     ...(state.cameraFeed || {}),
   };
   state.cameraFeed.mode = ['stream', 'snapshot', 'local'].includes(state.cameraFeed.mode) ? state.cameraFeed.mode : 'stream';
@@ -230,6 +237,12 @@ function load(){
   state.cameraFeed.lastError = String(state.cameraFeed.lastError || '').slice(0, 300);
   state.cameraFeed.useProxy = state.cameraFeed.useProxy !== false;
   state.cameraFeed.deviceId = String(state.cameraFeed.deviceId || '');
+  state.cameraFeed.viewportWidth = Number.isFinite(Number(state.cameraFeed.viewportWidth))
+    ? Math.min(1200, Math.max(280, Math.round(Number(state.cameraFeed.viewportWidth))))
+    : 640;
+  state.cameraFeed.viewportHeight = Number.isFinite(Number(state.cameraFeed.viewportHeight))
+    ? Math.min(900, Math.max(180, Math.round(Number(state.cameraFeed.viewportHeight))))
+    : 360;
 
   state.changelog = Array.isArray(state.changelog) ? state.changelog : [];
 
@@ -1808,6 +1821,68 @@ function renderMusicPlayer(){
   }
 }
 
+function clampCameraViewport(width, height, containerEl){
+  const containerWidth = Math.max(CAMERA_VIEWPORT_MIN.width, Math.floor((containerEl?.clientWidth || CAMERA_VIEWPORT_MAX.width) - 2));
+  const maxWidth = Math.min(CAMERA_VIEWPORT_MAX.width, containerWidth);
+  const maxHeight = Math.min(CAMERA_VIEWPORT_MAX.height, Math.max(CAMERA_VIEWPORT_MIN.height, Math.floor(window.innerHeight * 0.7) || CAMERA_VIEWPORT_MAX.height));
+  return {
+    width: Math.min(maxWidth, Math.max(CAMERA_VIEWPORT_MIN.width, Math.round(Number(width) || CAMERA_VIEWPORT_DEFAULT.width))),
+    height: Math.min(maxHeight, Math.max(CAMERA_VIEWPORT_MIN.height, Math.round(Number(height) || CAMERA_VIEWPORT_DEFAULT.height))),
+  };
+}
+
+function getCameraViewportSize(containerEl){
+  return clampCameraViewport(
+    Number(state.cameraFeed.viewportWidth || CAMERA_VIEWPORT_DEFAULT.width),
+    Number(state.cameraFeed.viewportHeight || CAMERA_VIEWPORT_DEFAULT.height),
+    containerEl
+  );
+}
+
+function persistCameraViewport(width, height, containerEl){
+  const next = clampCameraViewport(width, height, containerEl);
+  state.cameraFeed.viewportWidth = next.width;
+  state.cameraFeed.viewportHeight = next.height;
+  save();
+  return next;
+}
+
+function bindCameraResizeHandle(els){
+  if (!els?.resizeHandle || !els?.frameWrap) return;
+  const containerEl = els.root;
+
+  els.resizeHandle.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startWidth = els.frameWrap.offsetWidth;
+    const startHeight = els.frameWrap.offsetHeight;
+
+    const onMove = (moveEvent) => {
+      const dx = moveEvent.clientX - startX;
+      const dy = moveEvent.clientY - startY;
+      const next = clampCameraViewport(startWidth + dx, startHeight + dy, containerEl);
+      els.frameWrap.style.width = `${next.width}px`;
+      els.frameWrap.style.height = `${next.height}px`;
+    };
+
+    const onUp = (upEvent) => {
+      const dx = upEvent.clientX - startX;
+      const dy = upEvent.clientY - startY;
+      const next = persistCameraViewport(startWidth + dx, startHeight + dy, containerEl);
+      els.frameWrap.style.width = `${next.width}px`;
+      els.frameWrap.style.height = `${next.height}px`;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp, { once: true });
+  });
+}
+
 function getCameraFeedEls(){
   const root = document.getElementById('cameraFeedWidget')?.querySelector('[data-pod="camera-feed"]') || null;
   return {
@@ -1818,6 +1893,9 @@ function getCameraFeedEls(){
     proxyToggle: root?.querySelector('[data-camera-role="proxy"]') || null,
     startBtn: root?.querySelector('[data-camera-role="start"]') || null,
     stopBtn: root?.querySelector('[data-camera-role="stop"]') || null,
+    resetSizeBtn: root?.querySelector('[data-camera-role="reset-size"]') || null,
+    frameWrap: root?.querySelector('[data-camera-role="frame-wrap"]') || null,
+    resizeHandle: root?.querySelector('[data-camera-role="resize-handle"]') || null,
     streamFrame: root?.querySelector('[data-camera-role="stream-frame"]') || null,
     snapshotImg: root?.querySelector('[data-camera-role="snapshot-img"]') || null,
     localVideo: root?.querySelector('[data-camera-role="local-video"]') || null,
@@ -2112,6 +2190,7 @@ function renderCameraFeedPod(){
   const localDeviceOptions = [`<option value="">Default camera</option>`, ...cameraDeviceList.map((d) => (
     `<option value="${escapeHtml(d.deviceId)}" ${localDeviceValue === d.deviceId ? 'selected' : ''}>${escapeHtml(d.label)}</option>`
   ))].join('');
+  const viewport = getCameraViewportSize(el);
 
   el.innerHTML = `
     <div class="camera-feed-shell" data-pod="camera-feed">
@@ -2142,17 +2221,20 @@ function renderCameraFeedPod(){
       <div class="row-wrap">
         <button data-camera-role="start" class="btn">Load / Start</button>
         <button data-camera-role="stop" class="btn ghost" ${state.cameraFeed.active ? '' : 'disabled'}>Stop</button>
+        <button data-camera-role="reset-size" class="btn ghost">Reset Size</button>
       </div>
-      <div class="camera-feed-frame-wrap mt6">
+      <div class="camera-feed-frame-wrap mt6" data-camera-role="frame-wrap" style="width:min(100%, ${viewport.width}px); height:${viewport.height}px;">
         <iframe data-camera-role="stream-frame" title="Camera feed stream" ${showStream ? '' : 'style="display:none;"'} referrerpolicy="no-referrer"></iframe>
         <img data-camera-role="snapshot-img" alt="Camera snapshot" ${showSnapshot ? '' : 'style="display:none;"'} />
         <video data-camera-role="local-video" autoplay playsinline muted ${showLocal ? '' : 'style="display:none;"'}></video>
+        <button class="camera-feed-resize-handle" data-camera-role="resize-handle" aria-label="Resize camera feed" title="Drag to resize" type="button"></button>
       </div>
       <div class="note-meta mt6">V1 supports one active feed at a time. If embed fails, use Snapshot mode. Local Webcam uses browser permission${localSupportHint}.</div>
     </div>
   `;
 
   const els = getCameraFeedEls();
+  bindCameraResizeHandle(els);
 
   if (mode === 'local' && !cameraDeviceRefreshInFlight && navigator?.mediaDevices?.enumerateDevices) {
     cameraDeviceRefreshInFlight = true;
@@ -2214,6 +2296,17 @@ function renderCameraFeedPod(){
     event.preventDefault();
     event.stopPropagation();
     stopCameraFeed();
+  });
+
+  els.resetSizeBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const next = persistCameraViewport(CAMERA_VIEWPORT_DEFAULT.width, CAMERA_VIEWPORT_DEFAULT.height, els.root);
+    if (els.frameWrap) {
+      els.frameWrap.style.width = `min(100%, ${next.width}px)`;
+      els.frameWrap.style.height = `${next.height}px`;
+    }
+    setCameraFeedStatus('Camera viewport size reset to default.');
   });
 
   if (showStream && els.streamFrame) {
@@ -3933,6 +4026,11 @@ if (!state.changelog.some((c) => c.message === cameraFeedPatch)) {
 const cameraLocalWebcamPatch = 'Patch: Camera Feed now includes Local Webcam (Browser) mode with getUserMedia start/stop controls, status/error states, and optional camera device selection.';
 if (!state.changelog.some((c) => c.message === cameraLocalWebcamPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: cameraLocalWebcamPatch });
+}
+
+const cameraResizePatch = 'Patch: Camera Feed pod is now drag-resizable (bottom-right handle) with persisted viewport size and one-click reset to default.';
+if (!state.changelog.some((c) => c.message === cameraResizePatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: cameraResizePatch });
 }
 
 save('startup_patch_seed', { pushShared: false });
