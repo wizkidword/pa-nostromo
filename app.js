@@ -29,6 +29,53 @@ const DEFAULT_SETTINGS = {
   defaultTaskColumn: 'inbox',
 };
 
+const DEFAULT_UTILITY_LAYOUT_ROWS = [
+  ['shortcuts'],
+  ['date-time', 'calendar', 'weather'],
+  ['nba-scores', 'crypto-tracker', 'rss-feed'],
+  ['camera-feed', 'live-streams'],
+  ['voice-note', 'voice-to-rowan', 'music-player'],
+];
+
+function createDefaultUtilityLayoutState(){
+  return {
+    utilityRows: DEFAULT_UTILITY_LAYOUT_ROWS.map((row) => [...row]),
+    visibility: Object.fromEntries(DEFAULT_UTILITY_LAYOUT_ROWS.flat().map((podId) => [podId, true])),
+  };
+}
+
+function normalizeUtilityLayoutState(layoutInput, knownPodIds = []){
+  const defaults = createDefaultUtilityLayoutState();
+  const fallbackRows = defaults.utilityRows;
+  const fallbackIds = fallbackRows.flat();
+  const incomingRows = Array.isArray(layoutInput?.utilityRows) ? layoutInput.utilityRows : fallbackRows;
+  const seen = new Set();
+  const rows = incomingRows
+    .map((row) => Array.isArray(row) ? row.map((v) => String(v || '').trim()).filter(Boolean) : [])
+    .map((row) => row.filter((podId) => {
+      if (seen.has(podId)) return false;
+      seen.add(podId);
+      return true;
+    }))
+    .filter((row) => row.length > 0);
+
+  const allKnown = [...new Set([...fallbackIds, ...knownPodIds.map((v) => String(v || '').trim()).filter(Boolean)])];
+  const missing = allKnown.filter((podId) => !seen.has(podId));
+  if (!rows.length) rows.push([...fallbackRows[0]]);
+  if (missing.length) rows.push(missing);
+
+  const visibilityInput = (layoutInput && typeof layoutInput.visibility === 'object' && layoutInput.visibility)
+    ? layoutInput.visibility
+    : {};
+  const visibility = {};
+  const rowIds = rows.flat();
+  for (const podId of rowIds) {
+    visibility[podId] = visibilityInput[podId] !== false;
+  }
+
+  return { utilityRows: rows, visibility };
+}
+
 const REQUIRED_PROJECTS = [
   { name: 'Blast From The Ads', summary: 'Vintage ad content pipeline to social + WordPress', status: 'active', appLink: '', repoLink: '' },
   { name: 'Radio Map (Leaflet)', summary: 'Interactive radio station map web app', status: 'active', appLink: 'http://localhost:3399', repoLink: '' },
@@ -100,6 +147,7 @@ const seed = {
     lastError: '',
   },
   changelog: [],
+  layout: createDefaultUtilityLayoutState(),
   shortcuts: [
     {
       id: id(),
@@ -204,6 +252,7 @@ function load(){
   state.settings.shortcutsFilterProjectIds = Array.isArray(state.settings.shortcutsFilterProjectIds)
     ? state.settings.shortcutsFilterProjectIds
     : [];
+  state.layout = normalizeUtilityLayoutState(state.layout);
   state.cryptoWatchlist = Array.isArray(state.cryptoWatchlist) ? state.cryptoWatchlist : ['bitcoin', 'ethereum'];
 
   // Migration: repair legacy/ambiguous crypto watchlist ids from older resolver behavior.
@@ -885,6 +934,7 @@ function renderSettings(){
     taskColumnSelect.value = state.settings.defaultTaskColumn;
   }
 
+  renderPodVisibilitySettings();
   mountRssSettingsFeeds();
 }
 
@@ -3827,8 +3877,98 @@ function renderPodWithFallback(podId, legacyRender){
   if (typeof legacyRender === 'function') legacyRender();
 }
 
+function getUtilityPodCards(){
+  return [...document.querySelectorAll('[data-pod-id]')];
+}
+
+function getUtilityPodTitle(podId){
+  const el = document.querySelector(`[data-pod-id="${podId}"] h2`);
+  return String(el?.textContent || podId).trim();
+}
+
+function ensureLayoutIncludesKnownPods(){
+  const knownIds = getUtilityPodCards().map((el) => String(el.dataset.podId || '').trim()).filter(Boolean);
+  state.layout = normalizeUtilityLayoutState(state.layout, knownIds);
+}
+
+function applyUtilityLayoutToDom(){
+  const rows = [...document.querySelectorAll('[data-layout-row]')];
+  if (!rows.length) return;
+
+  ensureLayoutIncludesKnownPods();
+
+  const cardMap = new Map(getUtilityPodCards().map((el) => [String(el.dataset.podId || '').trim(), el]));
+  const normalizedRows = state.layout.utilityRows;
+
+  rows.forEach((rowEl, index) => {
+    const ordered = normalizedRows[index] || [];
+    const frag = document.createDocumentFragment();
+    ordered.forEach((podId) => {
+      const card = cardMap.get(podId);
+      if (!card) return;
+      frag.appendChild(card);
+      cardMap.delete(podId);
+    });
+
+    if (index === rows.length - 1) {
+      for (const card of [...cardMap.values()]) {
+        frag.appendChild(card);
+        cardMap.delete(String(card.dataset.podId || '').trim());
+      }
+    }
+
+    rowEl.appendChild(frag);
+  });
+
+  getUtilityPodCards().forEach((card) => {
+    const podId = String(card.dataset.podId || '').trim();
+    const visible = state.layout.visibility?.[podId] !== false;
+    card.classList.toggle('is-hidden', !visible);
+    card.setAttribute('aria-hidden', visible ? 'false' : 'true');
+  });
+}
+
+function renderPodVisibilitySettings(){
+  const wrap = document.getElementById('settingsPodVisibilityList');
+  if (!wrap) return;
+
+  ensureLayoutIncludesKnownPods();
+  const rows = state.layout.utilityRows;
+  wrap.innerHTML = rows.map((row, rowIndex) => row.map((podId, podIndex) => {
+    const checked = state.layout.visibility?.[podId] !== false ? 'checked' : '';
+    const upDisabled = podIndex === 0 ? 'disabled' : '';
+    const downDisabled = podIndex === row.length - 1 ? 'disabled' : '';
+    return `
+      <div class="pod-toggle-row">
+        <label>
+          <input type="checkbox" data-pod-visibility="${escapeHtml(podId)}" ${checked} />
+          ${escapeHtml(getUtilityPodTitle(podId))}
+          <div class="pod-toggle-meta">${escapeHtml(podId)} · Row ${rowIndex + 1}</div>
+        </label>
+        <div class="pod-toggle-actions">
+          <button class="btn ghost" data-pod-move="up" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" ${upDisabled}>↑</button>
+          <button class="btn ghost" data-pod-move="down" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" ${downDisabled}>↓</button>
+        </div>
+      </div>
+    `;
+  }).join('')).join('');
+}
+
+function movePodWithinRow(rowIndex, podIndex, direction){
+  const row = state.layout.utilityRows?.[rowIndex];
+  if (!Array.isArray(row)) return false;
+  const targetIndex = direction === 'up' ? podIndex - 1 : podIndex + 1;
+  if (targetIndex < 0 || targetIndex >= row.length) return false;
+  const copy = [...row];
+  const [item] = copy.splice(podIndex, 1);
+  copy.splice(targetIndex, 0, item);
+  state.layout.utilityRows[rowIndex] = copy;
+  return true;
+}
+
 function renderAll(){
   applyTheme();
+  applyUtilityLayoutToDom();
   renderPodWithFallback('date-time', renderDateTime);
   renderPodWithFallback('calendar', renderCalendar);
   renderCalendarRemindersPanel();
@@ -4606,6 +4746,30 @@ document.getElementById('settingRssInterval')?.addEventListener('change', (e)=> 
   save('rss_interval_changed');
 });
 
+document.getElementById('settingsPodVisibilityList')?.addEventListener('change', (e) => {
+  const checkbox = e.target?.closest?.('[data-pod-visibility]');
+  if (!checkbox) return;
+  const podId = String(checkbox.dataset.podVisibility || '').trim();
+  if (!podId) return;
+  state.layout.visibility[podId] = !!checkbox.checked;
+  save('pod_visibility_toggled');
+  applyUtilityLayoutToDom();
+  renderPodVisibilitySettings();
+});
+
+document.getElementById('settingsPodVisibilityList')?.addEventListener('click', (e) => {
+  const btn = e.target?.closest?.('[data-pod-move]');
+  if (!btn) return;
+  const rowIndex = Number(btn.dataset.podRow);
+  const podIndex = Number(btn.dataset.podIndex);
+  const direction = String(btn.dataset.podMove || '');
+  if (!Number.isInteger(rowIndex) || !Number.isInteger(podIndex)) return;
+  if (!movePodWithinRow(rowIndex, podIndex, direction)) return;
+  save('pod_layout_reordered');
+  applyUtilityLayoutToDom();
+  renderPodVisibilitySettings();
+});
+
 document.getElementById('addRssFeedBtn')?.addEventListener('click', async () => {
   const urlInput = document.getElementById('rssFeedUrlInput');
   const tagInput = document.getElementById('rssFeedTagInput');
@@ -5044,6 +5208,11 @@ if (!state.changelog.some((c) => c.message === sentinelStabilizationPatch)) {
 const phase1aFoundationPatch = 'Phase 1A modular foundation: added pod contract/registry/layout/persistence scaffolding + adapter pods (Date/Calendar/Weather) with legacy render fallback for non-migrated pods.';
 if (!state.changelog.some((c) => c.message === phase1aFoundationPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: phase1aFoundationPatch });
+}
+
+const phase1bLayoutPatch = 'Phase 1B layout + visibility: persisted utility pod row order and per-pod show/hide toggles in Settings with hydration-safe shared state sync.';
+if (!state.changelog.some((c) => c.message === phase1bLayoutPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: phase1bLayoutPatch });
 }
 
 const cameraFeedPatch = 'Added Camera Feed pod (V1): single active feed with Embed Stream mode plus Snapshot Refresh fallback (configurable interval + optional local proxy relay).';

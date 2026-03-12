@@ -230,6 +230,39 @@ body.theme-light .social-icon-link img {
   height: 100%;
 }
 
+.utility-card.is-hidden {
+  display: none;
+}
+
+.pod-toggle-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.pod-toggle-row:last-child {
+  border-bottom: none;
+}
+
+.pod-toggle-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pod-toggle-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.pod-toggle-actions .btn {
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
 .utility-card-shortcuts {
   grid-column: span 2;
 }

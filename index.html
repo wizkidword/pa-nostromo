@@ -96,6 +96,11 @@
       <div id="settingsShortcutsList" class="change-log-list"></div>
 
       <hr class="settings-divider" />
+      <h3 class="m0">Utility Pods</h3>
+      <p class="note-meta">Show/hide utility pods and reorder within each row.</p>
+      <div id="settingsPodVisibilityList" class="change-log-list"></div>
+
+      <hr class="settings-divider" />
       <button id="toggleChangeLogBtn" class="btn ghost settings-toggle-start">Show Patch Notes</button>
       <div id="changeLogSection" style="display:none">
         <h3 class="m0">Change Log (Patch Notes)</h3>
@@ -109,16 +114,16 @@
     </div>
   </aside>
 
-  <section class="utils-layout">
-    <div class="utils-row">
-      <div class="card utility-card utility-card-full utility-card-shortcuts">
+  <section id="utilityPodsLayout" class="utils-layout">
+    <div class="utils-row" data-layout-row="utility-row-1">
+      <div class="card utility-card utility-card-full utility-card-shortcuts" data-pod-id="shortcuts">
         <h2>🔗 Shortcuts</h2>
         <div id="shortcutsWidget" class="widget-block">Loading shortcuts...</div>
       </div>
     </div>
 
-    <div class="utils-row">
-      <div class="card utility-card">
+    <div class="utils-row" data-layout-row="utility-row-2">
+      <div class="card utility-card" data-pod-id="date-time">
         <h2>📅 Date & Time</h2>
         <div id="dateTimeWidget" class="widget-block"></div>
         <div class="row-wrap mt10">
@@ -128,7 +133,7 @@
         </div>
         <div id="alarmStatus" class="note-meta mt6">No active timer</div>
       </div>
-      <div class="card utility-card">
+      <div class="card utility-card" data-pod-id="calendar">
         <h2>🗓️ Calendar</h2>
         <div id="calendarWidget" class="widget-block"></div>
         <div id="calendarSelectedDate" class="note-meta mt8"></div>
@@ -139,7 +144,7 @@
         </div>
         <div id="calendarDayReminders" class="change-log-list mt8"></div>
       </div>
-      <div class="card utility-card">
+      <div class="card utility-card" data-pod-id="weather">
         <div class="row-between-wrap">
           <h2>🌤️ Local Weather (44224)</h2>
           <button id="weatherRefreshBtn" class="btn ghost">Refresh</button>
@@ -149,8 +154,8 @@
       </div>
     </div>
 
-    <div class="utils-row">
-      <div class="card utility-card">
+    <div class="utils-row" data-layout-row="utility-row-3">
+      <div class="card utility-card" data-pod-id="nba-scores">
         <div class="row-between-wrap">
           <h2>🏀 NBA Scores (Today · EST)</h2>
           <button id="nbaRefreshBtn" class="btn ghost">Refresh</button>
@@ -158,7 +163,7 @@
         <div id="nbaScoresWidget" class="widget-block">Loading NBA scores...</div>
         <div id="nbaUpdatedAt" class="note-meta mt6"></div>
       </div>
-      <div class="card utility-card">
+      <div class="card utility-card" data-pod-id="crypto-tracker">
         <div class="row-between-wrap">
           <h2>₿ Crypto Tracker</h2>
           <button id="cryptoRefreshBtn" class="btn ghost">Refresh</button>
@@ -166,7 +171,7 @@
         <div id="cryptoWidget" class="widget-block">Loading crypto market data...</div>
         <div id="cryptoUpdatedAt" class="note-meta mt6"></div>
       </div>
-      <div class="card utility-card">
+      <div class="card utility-card" data-pod-id="rss-feed">
         <div class="row-between-wrap">
           <h2>📰 RSS Feed</h2>
           <button id="rssRefreshBtn" class="btn ghost">Refresh</button>
@@ -179,31 +184,31 @@
       </div>
     </div>
 
-    <div class="utils-row">
-      <div class="card utility-card utility-card-camera-feed">
+    <div class="utils-row" data-layout-row="utility-row-4">
+      <div class="card utility-card utility-card-camera-feed" data-pod-id="camera-feed">
         <h2>📷 Camera Feed</h2>
         <div id="cameraFeedWidget" class="widget-block"></div>
         <div id="cameraFeedStatus" class="note-meta mt6">Ready. Paste a camera URL and click Load / Start.</div>
       </div>
-      <div class="card utility-card utility-card-live-streams">
+      <div class="card utility-card utility-card-live-streams" data-pod-id="live-streams">
         <h2>📺 Live Streams</h2>
         <div id="liveStreamsWidget" class="widget-block"></div>
         <div id="liveStreamsStatus" class="note-meta mt6">Ready. Select source preset + channel/URL, then click Load / Start.</div>
       </div>
     </div>
 
-    <div class="utils-row">
-      <div class="card utility-card">
+    <div class="utils-row" data-layout-row="utility-row-5">
+      <div class="card utility-card" data-pod-id="voice-note">
         <h2>🎙️ Voice Note</h2>
         <div id="voiceNoteWidget" class="widget-block"></div>
         <div id="voiceNoteStatus" class="note-meta mt6">Ready to record.</div>
       </div>
-      <div class="card utility-card">
+      <div class="card utility-card" data-pod-id="voice-to-rowan">
         <h2>🗣️ Voice to Rowan</h2>
         <div id="voiceToRowanWidget" class="widget-block"></div>
         <div id="voiceToRowanStatus" class="note-meta mt6">Ready. Start listening, then send manually.</div>
       </div>
-      <div class="card utility-card">
+      <div class="card utility-card" data-pod-id="music-player">
         <h2>🎵 Music Player</h2>
         <div id="musicPlayerWidget" class="widget-block">Loading music player...</div>
         <div id="musicPlayerStatus" class="note-meta mt6"></div>
