@@ -11,6 +11,8 @@ const CRYPTO_FAILURE_BACKOFF_MAX_MS = 3 * 60 * 1000;
 const SHARED_STATE_API = '/api/state';
 const SHARED_STATE_BACKUPS_API = '/api/state/backups';
 const SHARED_STATE_RESTORE_API = '/api/state/restore';
+const SHARED_STATE_SYNC_EVENT_KEY = 'mission-control-shared-sync-event-v1';
+const SHARED_STATE_SYNC_CHANNEL = 'mission-control-shared-sync-channel-v1';
 const UNDO_WINDOW_MS = 12000;
 const SHORTCUT_GLOBAL_PROJECT_ID = '__global__';
 const CRYPTO_PROXY_API = '/api/crypto';
@@ -218,8 +220,16 @@ let voiceToRowanLastError = '';
 let sharedSaveTimer = null;
 let sharedHydrationResolved = false;
 let sharedPushPendingUntilHydration = false;
-let undoToken = 0;
-let undoTimer = null;
+let sharedHydrateInFlight = null;
+let sharedHydrateSeq = 0;
+let suppressCrossTabSync = false;
+let sharedSyncChannel = null;
+let undoState = {
+  actionId: '',
+  status: 'idle',
+  expiresAt: 0,
+  timer: null,
+};
 let safetyBackupsCache = [];
 let lastSafetyBackupsRefreshAt = 0;
 
@@ -522,6 +532,61 @@ function load(){
   return state;
 }
 
+
+function extractStateRevision(obj){
+  const rev = Number(obj?.__integrity?.revision || 0);
+  return Number.isFinite(rev) ? rev : 0;
+}
+
+function applyIncomingState(incoming, { render = false } = {}){
+  if (!incoming || typeof incoming !== 'object') return false;
+  suppressCrossTabSync = true;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(incoming));
+    state = load();
+  } finally {
+    suppressCrossTabSync = false;
+  }
+  if (render) renderAll();
+  return true;
+}
+
+function broadcastCrossTabSync(eventType = 'state_changed', meta = {}){
+  if (suppressCrossTabSync) return;
+  const payload = {
+    eventType,
+    ts: Date.now(),
+    reason: String(meta?.reason || ''),
+    actionId: String(meta?.actionId || ''),
+    source: 'mission-control-lite',
+  };
+
+  try {
+    localStorage.setItem(SHARED_STATE_SYNC_EVENT_KEY, JSON.stringify(payload));
+    localStorage.removeItem(SHARED_STATE_SYNC_EVENT_KEY);
+  } catch {}
+
+  try {
+    if (!sharedSyncChannel && typeof BroadcastChannel !== 'undefined') {
+      sharedSyncChannel = new BroadcastChannel(SHARED_STATE_SYNC_CHANNEL);
+    }
+    sharedSyncChannel?.postMessage(payload);
+  } catch {}
+}
+
+async function scheduleSharedHydrate(reason = 'cross_tab_sync'){
+  if (sharedHydrateInFlight) return sharedHydrateInFlight;
+  const seq = ++sharedHydrateSeq;
+  sharedHydrateInFlight = (async () => {
+    const hydrated = await hydrateStateFromSharedApi();
+    if (hydrated && seq == sharedHydrateSeq) renderAll();
+    return hydrated;
+  })().finally(() => {
+    sharedHydrateInFlight = null;
+  });
+  return sharedHydrateInFlight;
+}
+
 async function hydrateStateFromSharedApi(){
   try {
     const res = await fetch(`${SHARED_STATE_API}?_=${Date.now()}`, { cache: 'no-store' });
@@ -529,9 +594,8 @@ async function hydrateStateFromSharedApi(){
     if (!res.ok) return false;
     const remote = await res.json();
     if (!remote || typeof remote !== 'object') return false;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(remote));
-    state = load();
-    return true;
+    const applied = applyIncomingState(remote, { render: false });
+    return !!applied;
   } catch {
     return false;
   }
@@ -566,6 +630,7 @@ async function pushStateToSharedApi(reason = 'unspecified'){
 
   try {
     await writeStateToSharedApi(state);
+    broadcastCrossTabSync('state_changed', { reason });
     return true;
   } catch {
     // Local fallback only
@@ -614,36 +679,54 @@ function exportStateSnapshot(){
   downloadJsonFile(`pa-nostromo-state-${stamp}.json`, state);
 }
 
-function clearUndoPrompt(){
-  undoToken += 1;
-  if (undoTimer) clearTimeout(undoTimer);
-  undoTimer = null;
+function clearUndoPrompt(status = 'cleared'){
+  if (undoState.timer) clearTimeout(undoState.timer);
+  undoState = {
+    actionId: '',
+    status,
+    expiresAt: 0,
+    timer: null,
+  };
   const bar = document.getElementById('stateSafetyUndoBar');
   if (bar) bar.hidden = true;
 }
 
-function offerUndoAction({ label, undoFn }){
+function offerUndoAction({ label, undoFn, actionId = '' }){
   const bar = document.getElementById('stateSafetyUndoBar');
   const text = document.getElementById('stateSafetyUndoText');
   const btn = document.getElementById('stateSafetyUndoBtn');
   if (!bar || !text || !btn || typeof undoFn !== 'function') return;
 
-  const token = ++undoToken;
-  if (undoTimer) clearTimeout(undoTimer);
+  if (undoState.timer) clearTimeout(undoState.timer);
+  const resolvedActionId = String(actionId || `undo-${Date.now()}`);
+  undoState = {
+    actionId: resolvedActionId,
+    status: 'offered',
+    expiresAt: Date.now() + UNDO_WINDOW_MS,
+    timer: null,
+  };
 
   text.textContent = label;
   bar.hidden = false;
 
   btn.onclick = () => {
-    if (token !== undoToken) return;
-    clearUndoPrompt();
+    if (undoState.actionId !== resolvedActionId) return;
+    if (undoState.status !== 'offered') return;
+    if (Date.now() > undoState.expiresAt) {
+      clearUndoPrompt('expired');
+      return;
+    }
+    clearUndoPrompt('undone');
     undoFn();
     commitState('destructive_action_undo_restored');
+    broadcastCrossTabSync('undo_restored', { actionId: resolvedActionId, reason: 'destructive_action_undo_restored' });
   };
 
-  undoTimer = setTimeout(() => {
-    if (token !== undoToken) return;
-    clearUndoPrompt();
+  undoState.timer = setTimeout(() => {
+    if (undoState.actionId !== resolvedActionId) return;
+    if (undoState.status !== 'offered') return;
+    clearUndoPrompt('expired');
+    broadcastCrossTabSync('undo_expired', { actionId: resolvedActionId, reason: 'undo_window_expired' });
   }, UNDO_WINDOW_MS);
 }
 
@@ -656,7 +739,9 @@ function deleteWithUndo({ collection, itemId, reason, buildUndoLabel }){
   const [removed] = list.splice(idx, 1);
   commitState(reason);
 
+  const actionId = `delete:${String(removed?.id || itemId)}:${Date.now()}`;
   offerUndoAction({
+    actionId,
     label: typeof buildUndoLabel === 'function' ? buildUndoLabel(removed) : 'Item deleted. Undo?',
     undoFn: () => {
       const next = collection();
@@ -665,6 +750,7 @@ function deleteWithUndo({ collection, itemId, reason, buildUndoLabel }){
       if (!exists) next.splice(Math.min(idx, next.length), 0, removed);
     },
   });
+  broadcastCrossTabSync('destructive_action_deleted', { actionId, reason });
 
   return true;
 }
@@ -727,7 +813,9 @@ async function refreshStateSafetyBackups(force = false){
           });
           const payload = await resp.json();
           if (!resp.ok || !payload?.ok) throw new Error(payload?.message || payload?.error || `HTTP ${resp.status}`);
-          await hydrateStateFromSharedApi();
+          clearUndoPrompt('restore_applied');
+          await scheduleSharedHydrate('manual_restore_applied');
+          broadcastCrossTabSync('state_restored', { reason: 'manual_restore_applied' });
           logChange(`Restored state from backup ${backupFile}`);
           await refreshStateSafetyBackups(true);
           alert(`State restored. Pre-restore snapshot: ${payload.preRestoreSnapshot || 'created'}`);
@@ -765,9 +853,8 @@ async function importStateSnapshotFromFile(file){
     },
   });
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(incoming));
-  state = load();
-  renderAll();
+  applyIncomingState(incoming, { render: true });
+  broadcastCrossTabSync('state_imported', { reason: 'manual_import' });
 }
 
 function projectName(projectId){ return state.projects.find(p=>p.id===projectId)?.name || 'Unknown'; }
@@ -1834,6 +1921,7 @@ function mountRssSettingsFeeds(){
       state.rss.readItemIds = state.rss.readItemIds.filter((itemId) => !removedItemIds.has(itemId));
       commitState('rss_feed_removed');
       offerUndoAction({
+        actionId: `rss:${removedFeed?.id || 'feed'}:${Date.now()}`,
         label: `RSS feed removed (${removedFeed?.tag || 'General'}). Undo?`,
         undoFn: () => {
           const exists = state.rss.feeds.some((f) => f.id === removedFeed.id);
@@ -5560,14 +5648,19 @@ enableProjectDragScroll();
 enableBoardDragScroll();
 
 window.addEventListener('storage', (event) => {
-  if (event.key !== STORAGE_KEY || !event.newValue) return;
-  try {
-    const incoming = JSON.parse(event.newValue);
-    if (!incoming || typeof incoming !== 'object') return;
-    state = load();
-    renderAll();
-  } catch {}
+  if (event.key === SHARED_STATE_SYNC_EVENT_KEY && event.newValue) {
+    scheduleSharedHydrate('storage_sync_event');
+  }
 });
+
+try {
+  if (typeof BroadcastChannel !== 'undefined') {
+    sharedSyncChannel = new BroadcastChannel(SHARED_STATE_SYNC_CHANNEL);
+    sharedSyncChannel.addEventListener('message', () => {
+      scheduleSharedHydrate('broadcast_channel_sync');
+    });
+  }
+} catch {}
 
 window.__MISSION_CONTROL_QA__ = {
   resetLocalState(){
@@ -5578,6 +5671,9 @@ window.__MISSION_CONTROL_QA__ = {
   },
   debugSnapshot(){
     return window.__MISSION_CONTROL_DEBUG__?.snapshot?.() || {};
+  },
+  undoDebug(){
+    return { ...undoState, timer: !!undoState.timer };
   },
 };
 
