@@ -656,24 +656,24 @@ function applyTheme(){
 function setupWeatherTimer(){
   if (weatherTimer) clearInterval(weatherTimer);
   const mins = Number(state.settings.weatherIntervalMin || 15);
-  weatherTimer = setInterval(renderWeather, mins * 60 * 1000);
+  weatherTimer = setInterval(renderWeatherPod, mins * 60 * 1000);
 }
 
 function setupNbaTimer(){
   if (nbaTimer) clearInterval(nbaTimer);
   // Auto-refresh every 15 minutes (+ manual refresh button)
-  nbaTimer = setInterval(renderNbaScores, NBA_REFRESH_MS);
+  nbaTimer = setInterval(renderNbaPod, NBA_REFRESH_MS);
 }
 
 function setupCryptoTimer(){
   if (cryptoTimer) clearInterval(cryptoTimer);
-  cryptoTimer = setInterval(renderCrypto, CRYPTO_REFRESH_MS);
+  cryptoTimer = setInterval(() => renderCryptoPod(), CRYPTO_REFRESH_MS);
 }
 
 function setupRssTimer(){
   if (rssTimer) clearInterval(rssTimer);
   const mins = Number(state.rss?.refreshIntervalMin || RSS_DEFAULT_REFRESH_MIN);
-  rssTimer = setInterval(() => renderRss(), Math.max(5, mins) * 60 * 1000);
+  rssTimer = setInterval(() => renderRssPod(), Math.max(5, mins) * 60 * 1000);
 }
 
 function flushPendingChanges(){
@@ -1540,7 +1540,7 @@ function renderCryptoWidget(el, watch){
     if (!state.cryptoHoldings[id]) state.cryptoHoldings[id] = { quantity: 0, avgBuyPrice: 0 };
     if (addInput) addInput.value = '';
     save();
-    renderCrypto();
+    renderCryptoPod();
   });
 
   document.getElementById('cryptoDirRefreshBtn')?.addEventListener('click', async () => {
@@ -1558,7 +1558,7 @@ function renderCryptoWidget(el, watch){
       state.cryptoWatchlist = state.cryptoWatchlist.filter((x) => x !== id);
       delete state.cryptoHoldings[id];
       save();
-      renderCrypto();
+      renderCryptoPod();
     });
   });
 
@@ -1570,7 +1570,7 @@ function renderCryptoWidget(el, watch){
       if (!state.cryptoHoldings[coinId]) state.cryptoHoldings[coinId] = { quantity: 0, avgBuyPrice: 0 };
       state.cryptoHoldings[coinId].quantity = Number.isFinite(qty) && qty >= 0 ? qty : 0;
       save();
-      renderCrypto();
+      renderCryptoPod();
     });
   });
 
@@ -1582,7 +1582,7 @@ function renderCryptoWidget(el, watch){
       if (!state.cryptoHoldings[coinId]) state.cryptoHoldings[coinId] = { quantity: 0, avgBuyPrice: 0 };
       state.cryptoHoldings[coinId].avgBuyPrice = Number.isFinite(avg) && avg >= 0 ? avg : 0;
       save();
-      renderCrypto();
+      renderCryptoPod();
     });
   });
 }
@@ -1689,7 +1689,7 @@ function mountRssSettingsFeeds(){
       state.rss.readItemIds = state.rss.readItemIds.filter((itemId) => state.rss.items.some((item) => item.id === itemId));
       save('rss_feed_removed');
       mountRssSettingsFeeds();
-      renderRss({ skipFetch: true });
+      renderRssPod({ skipFetch: true });
     });
   });
 }
@@ -3877,6 +3877,22 @@ function renderPodWithFallback(podId, legacyRender){
   if (typeof legacyRender === 'function') legacyRender();
 }
 
+function renderWeatherPod(){
+  renderPodWithFallback('weather', renderWeather);
+}
+
+function renderNbaPod(){
+  renderPodWithFallback('nba-scores', renderNbaScores);
+}
+
+function renderCryptoPod(options = {}){
+  renderPodWithFallback('crypto-tracker', () => renderCrypto(options));
+}
+
+function renderRssPod(options = {}){
+  renderPodWithFallback('rss-feed', () => renderRss(options));
+}
+
 function getUtilityPodCards(){
   return [...document.querySelectorAll('[data-pod-id]')];
 }
@@ -3986,7 +4002,7 @@ function renderAll(){
   renderVoiceToRowanPod();
   renderShortcutsPod();
   renderShortcutsSettings();
-  renderRss({ skipFetch: true });
+  renderRssPod({ skipFetch: true });
   populateProjectSelect();
 }
 
@@ -4790,7 +4806,7 @@ document.getElementById('addRssFeedBtn')?.addEventListener('click', async () => 
   if (tagInput) tagInput.value = '';
   save('rss_feed_added');
   mountRssSettingsFeeds();
-  await renderRss();
+  await renderRssPod();
 });
 
 document.getElementById('settingFullscreen')?.addEventListener('change', async (e)=> {
@@ -5252,30 +5268,30 @@ if (!state.changelog.some((c) => c.message === liveStreamsPhase2APatch)) {
 
 save('startup_patch_seed', { pushShared: false });
 renderAll();
-renderWeather();
-renderNbaScores();
-renderCrypto();
-renderRss();
+renderWeatherPod();
+renderNbaPod();
+renderCryptoPod();
+renderRssPod();
 setInterval(renderDateTime, 1000);
 setupWeatherTimer();
 setupNbaTimer();
 setupCryptoTimer();
 setupRssTimer();
-document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => renderWeather());
-document.getElementById('nbaRefreshBtn')?.addEventListener('click', () => renderNbaScores());
+document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => renderWeatherPod());
+document.getElementById('nbaRefreshBtn')?.addEventListener('click', () => renderNbaPod());
 document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
   if (Date.now() < cryptoRefreshCooldownUntil) {
     updateCryptoRefreshButton();
     return;
   }
   startCryptoRefreshCooldown();
-  renderCrypto({ manual: true });
+  renderCryptoPod({ manual: true });
 });
-document.getElementById('rssRefreshBtn')?.addEventListener('click', () => renderRss());
+document.getElementById('rssRefreshBtn')?.addEventListener('click', () => renderRssPod());
 document.getElementById('rssShowReadToggle')?.addEventListener('change', (e) => {
   state.rss.showRead = !!e.target.checked;
   save('rss_show_read_toggled');
-  renderRss({ skipFetch: true });
+  renderRssPod({ skipFetch: true });
 });
 updateCryptoRefreshButton();
 
@@ -5322,10 +5338,10 @@ hydrateStateFromSharedApi().then((hydrated) => {
   }
 
   renderAll();
-  renderWeather();
-  renderNbaScores();
-  renderCrypto();
-  renderRss();
+  renderWeatherPod();
+  renderNbaPod();
+  renderCryptoPod();
+  renderRssPod();
   setupWeatherTimer();
   setupNbaTimer();
   setupCryptoTimer();
