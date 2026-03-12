@@ -1,8 +1,6 @@
 const STORAGE_KEY = 'mission-control-lite-v1';
 const LOCAL_ZIP = '44224';
 const LOCAL_TZ = 'America/New_York';
-const NBA_REFRESH_MS = 5 * 60 * 1000;
-const CRYPTO_REFRESH_MS = 15 * 60 * 1000;
 const RSS_DEFAULT_REFRESH_MIN = 30;
 const CRYPTO_DIR_CACHE_KEY = 'mission-control-crypto-directory-v1';
 const CRYPTO_DIR_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -173,10 +171,6 @@ const seed = {
 };
 
 let state = load();
-let weatherTimer = null;
-let nbaTimer = null;
-let cryptoTimer = null;
-let rssTimer = null;
 let coinDirectory = [];
 let topSymbolMap = new Map();
 let cryptoRefreshCooldownUntil = 0;
@@ -654,26 +648,27 @@ function applyTheme(){
 }
 
 function setupWeatherTimer(){
-  if (weatherTimer) clearInterval(weatherTimer);
-  const mins = Number(state.settings.weatherIntervalMin || 15);
-  weatherTimer = setInterval(renderWeatherPod, mins * 60 * 1000);
+  const registry = getPodRegistry();
+  if (registry?.destroy) registry.destroy('weather', { state });
+  syncUtilityPodLifecycle();
 }
 
 function setupNbaTimer(){
-  if (nbaTimer) clearInterval(nbaTimer);
-  // Auto-refresh every 15 minutes (+ manual refresh button)
-  nbaTimer = setInterval(renderNbaPod, NBA_REFRESH_MS);
+  const registry = getPodRegistry();
+  if (registry?.destroy) registry.destroy('nba-scores', { state });
+  syncUtilityPodLifecycle();
 }
 
 function setupCryptoTimer(){
-  if (cryptoTimer) clearInterval(cryptoTimer);
-  cryptoTimer = setInterval(() => renderCryptoPod(), CRYPTO_REFRESH_MS);
+  const registry = getPodRegistry();
+  if (registry?.destroy) registry.destroy('crypto-tracker', { state });
+  syncUtilityPodLifecycle();
 }
 
 function setupRssTimer(){
-  if (rssTimer) clearInterval(rssTimer);
-  const mins = Number(state.rss?.refreshIntervalMin || RSS_DEFAULT_REFRESH_MIN);
-  rssTimer = setInterval(() => renderRssPod(), Math.max(5, mins) * 60 * 1000);
+  const registry = getPodRegistry();
+  if (registry?.destroy) registry.destroy('rss-feed', { state });
+  syncUtilityPodLifecycle();
 }
 
 function flushPendingChanges(){
@@ -3868,13 +3863,30 @@ function getPodRegistry(){
   return window.MissionControlModules?.podRegistry || null;
 }
 
-function renderPodWithFallback(podId, legacyRender){
+function runPodLifecycleAction(action, podId, legacyRender, extraCtx = {}){
   const registry = getPodRegistry();
-  if (registry && typeof registry.render === 'function') {
-    const result = registry.render(podId, { state, legacyRender });
-    if (result?.ok) return;
+  const invoke = registry && typeof registry[action] === 'function' ? registry[action].bind(registry) : null;
+  if (!invoke) {
+    if (action === 'mount' || action === 'refresh' || action === 'render') {
+      if (typeof legacyRender === 'function') legacyRender();
+      return { ok: true, reason: 'legacy_fallback' };
+    }
+    return { ok: true, reason: 'no_registry' };
   }
-  if (typeof legacyRender === 'function') legacyRender();
+
+  const result = invoke(podId, { state, legacyRender, ...extraCtx });
+  if (result?.ok) return result;
+
+  if ((action === 'mount' || action === 'refresh' || action === 'render') && typeof legacyRender === 'function') {
+    legacyRender();
+    return { ok: true, reason: 'legacy_fallback' };
+  }
+
+  return result;
+}
+
+function renderPodWithFallback(podId, legacyRender){
+  return runPodLifecycleAction('mount', podId, legacyRender);
 }
 
 function renderWeatherPod(){
@@ -3891,6 +3903,27 @@ function renderCryptoPod(options = {}){
 
 function renderRssPod(options = {}){
   renderPodWithFallback('rss-feed', () => renderRss(options));
+}
+
+function getUtilityPodLegacyRenderer(podId){
+  if (podId === 'weather') return () => renderWeather();
+  if (podId === 'nba-scores') return () => renderNbaScores();
+  if (podId === 'crypto-tracker') return () => renderCrypto();
+  if (podId === 'rss-feed') return () => renderRss();
+  return null;
+}
+
+function syncUtilityPodLifecycle(){
+  const managed = ['weather', 'nba-scores', 'crypto-tracker', 'rss-feed'];
+  managed.forEach((podId) => {
+    const visible = state.layout?.visibility?.[podId] !== false;
+    const legacyRender = getUtilityPodLegacyRenderer(podId);
+    if (visible) {
+      runPodLifecycleAction('mount', podId, legacyRender, { visible: true, trigger: 'layout_sync' });
+    } else {
+      runPodLifecycleAction('destroy', podId, legacyRender, { visible: false, trigger: 'layout_sync' });
+    }
+  });
 }
 
 function getUtilityPodCards(){
@@ -3942,6 +3975,8 @@ function applyUtilityLayoutToDom(){
     card.classList.toggle('is-hidden', !visible);
     card.setAttribute('aria-hidden', visible ? 'false' : 'true');
   });
+
+  syncUtilityPodLifecycle();
 }
 
 function renderPodVisibilitySettings(){
@@ -4002,7 +4037,7 @@ function renderAll(){
   renderVoiceToRowanPod();
   renderShortcutsPod();
   renderShortcutsSettings();
-  renderRssPod({ skipFetch: true });
+  syncUtilityPodLifecycle();
   populateProjectSelect();
 }
 
@@ -5268,15 +5303,7 @@ if (!state.changelog.some((c) => c.message === liveStreamsPhase2APatch)) {
 
 save('startup_patch_seed', { pushShared: false });
 renderAll();
-renderWeatherPod();
-renderNbaPod();
-renderCryptoPod();
-renderRssPod();
 setInterval(renderDateTime, 1000);
-setupWeatherTimer();
-setupNbaTimer();
-setupCryptoTimer();
-setupRssTimer();
 document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => renderWeatherPod());
 document.getElementById('nbaRefreshBtn')?.addEventListener('click', () => renderNbaPod());
 document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
@@ -5338,13 +5365,5 @@ hydrateStateFromSharedApi().then((hydrated) => {
   }
 
   renderAll();
-  renderWeatherPod();
-  renderNbaPod();
-  renderCryptoPod();
-  renderRssPod();
-  setupWeatherTimer();
-  setupNbaTimer();
-  setupCryptoTimer();
-  setupRssTimer();
   flushPendingSharedPush('startup_flush_pending_after_hydration');
 });
