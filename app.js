@@ -183,6 +183,16 @@ let cryptoRefreshCooldownUntil = 0;
 let cryptoRefreshCooldownTimer = null;
 let cryptoFailureCount = 0;
 let cryptoBackoffUntil = 0;
+const POLLING_BACKOFF_BASE_MS = 20 * 1000;
+const POLLING_BACKOFF_MAX_MS = 3 * 60 * 1000;
+const POLLING_DIAG_LOG_MIN_MS = 60 * 1000;
+const TRANSIENT_UPSTREAM_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const pollingFailureState = {
+  weather: { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
+  'nba-scores': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
+  'rss-feed': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
+  'crypto-tracker': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
+};
 let changeLogVisible = false;
 let changeLogLimit = 10;
 let pendingChanges = [];
@@ -1193,12 +1203,24 @@ function renderSettings(){
   if (settingsPanel?.classList.contains('open')) refreshStateSafetyBackups();
 }
 
-async function renderWeather(){
+async function renderWeather(options = {}){
   const el = document.getElementById('weatherWidget');
   if (!el) return;
+  const manual = !!options.manual;
+  const ts = document.getElementById('weatherUpdatedAt');
+  const weatherBackoff = pollingBackoffState('weather').backoffUntil - Date.now();
+  if (!manual && weatherBackoff > 0) {
+    if (ts) ts.textContent = `Updated: waiting ${Math.ceil(weatherBackoff / 1000)}s before retry`;
+    return;
+  }
   try {
     // 1) Resolve ZIP to precise lat/lon (US ZIP endpoint)
     const zipRes = await fetch(`https://api.zippopotam.us/us/${LOCAL_ZIP}`);
+    if (!zipRes.ok) {
+      const err = new Error(`ZIP lookup failed (${zipRes.status})`);
+      err.status = zipRes.status;
+      throw err;
+    }
     const zipJson = await zipRes.json();
     const place = zipJson?.places?.[0];
     const lat = Number(place?.latitude);
@@ -1207,6 +1229,11 @@ async function renderWeather(){
     // 2) Pull current + daily weather from Open-Meteo
     const wxUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&timezone=${encodeURIComponent(LOCAL_TZ)}`;
     const wxRes = await fetch(wxUrl);
+    if (!wxRes.ok) {
+      const err = new Error(`Weather upstream failed (${wxRes.status})`);
+      err.status = wxRes.status;
+      throw err;
+    }
     const wx = await wxRes.json();
 
     const current = wx?.current || {};
@@ -1262,12 +1289,12 @@ async function renderWeather(){
       <div style="margin-top:8px"><strong>3-Day Forecast</strong></div>
       <div class="forecast-row">${forecast}</div>
     `;
-    const ts = document.getElementById('weatherUpdatedAt');
+    clearPollingBackoff('weather');
     if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()}`;
-  } catch {
+  } catch (error) {
+    const backoffMs = registerPollingFailure('weather', error, 'Weather service temporarily unavailable');
     el.textContent = 'Weather unavailable right now.';
-    const ts = document.getElementById('weatherUpdatedAt');
-    if (ts) ts.textContent = 'Update failed';
+    if (ts) ts.textContent = `Update delayed: retry in ${Math.ceil(backoffMs / 1000)}s`;
   }
 }
 
@@ -1282,20 +1309,33 @@ function estDateYmdCompact(){
   return `${get('year')}${get('month')}${get('day')}`;
 }
 
-async function renderNbaScores(){
+async function renderNbaScores(options = {}){
   const el = document.getElementById('nbaScoresWidget');
   if (!el) return;
+
+  const manual = !!options.manual;
+  const ts = document.getElementById('nbaUpdatedAt');
+  const nbaBackoff = pollingBackoffState('nba-scores').backoffUntil - Date.now();
+  if (!manual && nbaBackoff > 0) {
+    if (ts) ts.textContent = `Updated: waiting ${Math.ceil(nbaBackoff / 1000)}s before retry`;
+    return;
+  }
 
   try {
     const dateKey = estDateYmdCompact();
     const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${dateKey}`;
     const res = await fetch(url);
+    if (!res.ok) {
+      const err = new Error(`NBA upstream failed (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
     const data = await res.json();
     const events = Array.isArray(data?.events) ? data.events : [];
 
     if (!events.length) {
       el.innerHTML = '<div class="note-meta">No NBA games scheduled for today.</div>';
-      const ts = document.getElementById('nbaUpdatedAt');
+      clearPollingBackoff('nba-scores');
       if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()} (EST today)`;
       return;
     }
@@ -1339,12 +1379,12 @@ async function renderNbaScores(){
     }).join('');
 
     el.innerHTML = `<div class="scroll-box nba-scroll">${cards}</div>`;
-    const ts = document.getElementById('nbaUpdatedAt');
+    clearPollingBackoff('nba-scores');
     if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()} (auto: every 15 min)`;
-  } catch {
+  } catch (error) {
+    const backoffMs = registerPollingFailure('nba-scores', error, 'NBA feed temporarily unavailable');
     el.textContent = 'NBA scores unavailable right now.';
-    const ts = document.getElementById('nbaUpdatedAt');
-    if (ts) ts.textContent = 'Update failed';
+    if (ts) ts.textContent = `Update delayed: retry in ${Math.ceil(backoffMs / 1000)}s`;
   }
 }
 
@@ -1484,6 +1524,47 @@ function setCryptoWatchCache(payload){
   try {
     localStorage.setItem(CRYPTO_WATCH_CACHE_KEY, JSON.stringify(payload));
   } catch {}
+}
+
+function isTransientPollingFailure(error){
+  const status = Number(error?.status || 0);
+  if (status && TRANSIENT_UPSTREAM_STATUS.has(status)) return true;
+  const msg = String(error?.message || '').toLowerCase();
+  return msg.includes('network')
+    || msg.includes('timeout')
+    || msg.includes('temporar')
+    || msg.includes('upstream')
+    || msg.includes('failed to fetch')
+    || msg.includes('fetch failed');
+}
+
+function pollingBackoffState(podId){
+  return pollingFailureState[podId] || (pollingFailureState[podId] = { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' });
+}
+
+function clearPollingBackoff(podId){
+  const slot = pollingBackoffState(podId);
+  slot.count = 0;
+  slot.backoffUntil = 0;
+}
+
+function registerPollingFailure(podId, error, reasonForUser){
+  const slot = pollingBackoffState(podId);
+  slot.count += 1;
+  const backoffMs = Math.min(POLLING_BACKOFF_BASE_MS * (2 ** (slot.count - 1)), POLLING_BACKOFF_MAX_MS);
+  slot.backoffUntil = Date.now() + backoffMs;
+
+  if (isTransientPollingFailure(error)) {
+    const nowTs = Date.now();
+    const reason = String(reasonForUser || error?.message || 'Transient upstream failure').slice(0, 180);
+    if ((nowTs - slot.lastLogAt >= POLLING_DIAG_LOG_MIN_MS) || slot.lastReason !== reason) {
+      slot.lastLogAt = nowTs;
+      slot.lastReason = reason;
+      console.warn(`[${podId}] transient upstream fetch failure (backoff ${Math.ceil(backoffMs / 1000)}s): ${reason}`);
+    }
+  }
+
+  return backoffMs;
 }
 
 function formatCryptoError(error){
@@ -1877,6 +1958,7 @@ async function renderCrypto(options = {}){
     setCryptoWatchCache({ updatedAt, watch, provider });
     cryptoFailureCount = 0;
     cryptoBackoffUntil = 0;
+    clearPollingBackoff('crypto-tracker');
 
     const providerLabel = CRYPTO_PROVIDER_LABELS[provider] || provider;
     if (ts) ts.textContent = `Updated: ${new Date(updatedAt).toLocaleTimeString()} (watchlist + portfolio · auto: every 15 min) · Data: ${providerLabel}`;
@@ -1885,6 +1967,7 @@ async function renderCrypto(options = {}){
     const backoffMs = Math.min(CRYPTO_FAILURE_BACKOFF_BASE_MS * (2 ** (cryptoFailureCount - 1)), CRYPTO_FAILURE_BACKOFF_MAX_MS);
     cryptoBackoffUntil = Date.now() + backoffMs;
     const reason = formatCryptoError(error);
+    registerPollingFailure('crypto-tracker', error, reason);
 
     const cached = getCryptoWatchCache();
     if (cached?.watch?.length) {
@@ -2068,9 +2151,13 @@ function mergeRssItems(existingItems, incomingItems){
 
 async function renderRss(options = {}){
   const skipFetch = !!options.skipFetch;
+  const manual = !!options.manual;
   const hasFeeds = Array.isArray(state.rss?.feeds) && state.rss.feeds.length > 0;
+  const rssBackoff = pollingBackoffState('rss-feed').backoffUntil - Date.now();
 
-  if (!skipFetch && hasFeeds) {
+  if (!skipFetch && hasFeeds && !manual && rssBackoff > 0) {
+    state.rss.lastError = `Update delayed: retry in ${Math.ceil(rssBackoff / 1000)}s`;
+  } else if (!skipFetch && hasFeeds) {
     try {
       const payload = await fetchRssFeedBundle();
       const feedByUrl = new Map(state.rss.feeds.map((f) => [f.url, f]));
@@ -2096,9 +2183,12 @@ async function renderRss(options = {}){
       state.rss.lastError = Array.isArray(payload.errors) && payload.errors.length
         ? `${payload.errors.length} feed(s) failed`
         : '';
+      clearPollingBackoff('rss-feed');
       save('rss_refresh_success');
     } catch (err) {
-      state.rss.lastError = String(err?.message || err || 'RSS refresh failed').slice(0, 200);
+      const reason = String(err?.message || err || 'RSS refresh failed').slice(0, 200);
+      const backoffMs = registerPollingFailure('rss-feed', err, reason);
+      state.rss.lastError = `Update delayed: ${reason} (retry in ${Math.ceil(backoffMs / 1000)}s)`;
       save('rss_refresh_failed');
     }
   }
@@ -4181,12 +4271,12 @@ function renderPodWithFallback(podId, legacyRender){
 
 function renderWeatherPod(options = {}){
   if (options.manual) debugCounters?.bumpRefresh?.('weather', 'manual_refresh');
-  renderPodWithFallback('weather', renderWeather);
+  renderPodWithFallback('weather', () => renderWeather(options));
 }
 
 function renderNbaPod(options = {}){
   if (options.manual) debugCounters?.bumpRefresh?.('nba-scores', 'manual_refresh');
-  renderPodWithFallback('nba-scores', renderNbaScores);
+  renderPodWithFallback('nba-scores', () => renderNbaScores(options));
 }
 
 function renderCryptoPod(options = {}){
