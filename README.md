@@ -11,7 +11,7 @@ It combines project tracking + utility pods in one lightweight web app:
 - Reminders + timer/alarm
 - Weather + NBA scores + Crypto watchlist
 - Music player (stream/YouTube/local file)
-- Camera Feed pod (embed stream + snapshot refresh fallback)
+- Camera Feed pod (embed stream + snapshot refresh + local browser webcam mode)
 - Voice notes (Chrome SpeechRecognition)
 - Cross-browser shared state (Brave + Chrome) via local disk-backed API
 
@@ -56,6 +56,16 @@ Open: `http://localhost:4187`
 - API endpoint: `GET/POST /api/state`
 
 This allows state sharing across browsers on the same machine.
+
+## Sentinel Stabilization Pass (2026-03-11)
+
+This pass focused on low-risk reliability hardening without changing user-facing workflows:
+
+- `renderAll()` is now UI-only (no hidden persistence side effect).
+- New explicit `commitState(reason)` helper handles write-path persistence.
+- Shared-state push now has a startup hydration lock to avoid stale local overwrite races.
+- Added static guardrails: `npm run lint` (`scripts/guardrails-check.js`) + CI workflow.
+- Added reproducible smoke-check checklist under `docs/qa/smoke-stabilization-2026-03.md`.
 
 ## State Safety & Recovery
 
@@ -122,7 +132,7 @@ In the UI, the draft is preserved and the user gets fallback actions (copy draft
 
 ## Camera Feed pod (V1)
 
-Camera Feed is a single-feed utility pod for local/network camera URLs.
+Camera Feed is a single-feed utility pod for network camera URLs and browser-local webcams.
 
 ### Supported modes
 
@@ -135,6 +145,19 @@ Camera Feed is a single-feed utility pod for local/network camera URLs.
    - Fetches image snapshots repeatedly at a configurable interval (1-60 seconds).
    - Useful for cameras exposing a still-image endpoint or when direct embedding is blocked.
    - Optional **Use local proxy** routes snapshots via `/api/camera-snapshot` for CORS/network compatibility.
+
+3. **Local Webcam (Browser) mode**
+   - Uses `navigator.mediaDevices.getUserMedia({ video: true, audio: false })` in-browser.
+   - Renders a live `<video>` feed directly inside the pod.
+   - Start/Stop cleanly opens/closes media tracks.
+   - Optional webcam device picker (when supported) lets you select a camera and persists selection.
+
+### Local webcam permissions / support notes
+
+- Browser must support `mediaDevices.getUserMedia` (modern Chrome/Brave/Edge/Firefox).
+- Camera access usually requires secure context (`https://`) or localhost.
+- If permission is denied, pod status reports the denial and no stream is started.
+- If camera hardware is missing/busy, status reports a clear error.
 
 ### Proxy safety model (`/api/camera-snapshot`)
 
@@ -172,6 +195,8 @@ Early alpha. Built for real daily use and rapid iteration.
 
 ## Patch Notes
 
+- 2026-03-11: Sentinel stabilization pass: decoupled render pipeline from persistence via explicit `commitState(reason)`, added startup shared-sync hydration lock to prevent stale overwrite races, introduced guardrail static checks/CI, and documented smoke checks for startup sync race + stop-button isolation.
+- 2026-03-11: Camera Feed pod local-webcam patch: added **Local Webcam (Browser)** mode using `getUserMedia`, in-pod `<video>` live rendering, clean media-track start/stop lifecycle, status/error handling for permission/support/hardware issues, and optional persisted webcam device selection.
 - 2026-03-11: Camera Feed pod (V1): added single-feed camera utility with Embed Stream mode + Snapshot Refresh fallback (configurable interval), persisted camera settings/state, and optional local-only `/api/camera-snapshot` relay with host allowlist + payload/timeout guardrails.
 - 2026-03-11: State Safety Pack hardening: automatic versioned pre-write backups (`data/backups` with retention prune), integrity metadata (`savedAt` + checksum), guarded overwrite override paths for manual import/restore, new backup list + restore APIs, and Settings UI export/import controls with confirmation.
 - 2026-03-11: Turnkey local relay config update: `server.js` now auto-loads `.env` / `.env.local` (without overriding shell env), added `.env.example`, documented one-command startup via `npm start`, and kept `/api/rowan-send` local-only hardening defaults intact.

@@ -5,7 +5,9 @@
   "description": "Local-first swiss-army dashboard",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "lint": "node scripts/guardrails-check.js",
+    "check": "node --check app.js && node --check server.js && npm run lint"
   },
   "license": "MIT"
 }

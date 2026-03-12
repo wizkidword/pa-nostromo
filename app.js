@@ -133,6 +133,8 @@ let voiceToRowanDraft = '';
 let voiceToRowanManualStop = false;
 let voiceToRowanLastError = '';
 let sharedSaveTimer = null;
+let sharedHydrationResolved = false;
+let sharedPushPendingUntilHydration = false;
 
 function id(){ return Math.random().toString(36).slice(2,10); }
 function now(){ return new Date().toISOString(); }
@@ -369,18 +371,42 @@ async function writeStateToSharedApi(payload){
   return res.json().catch(() => null);
 }
 
-async function pushStateToSharedApi(){
+async function pushStateToSharedApi(reason = 'unspecified'){
+  if (!sharedHydrationResolved) {
+    sharedPushPendingUntilHydration = true;
+    return false;
+  }
+
   try {
     await writeStateToSharedApi(state);
+    return true;
   } catch {
     // Local fallback only
+    return false;
   }
 }
 
-function save(){
+function flushPendingSharedPush(reason = 'hydration_resolved'){
+  if (!sharedHydrationResolved || !sharedPushPendingUntilHydration) return;
+  sharedPushPendingUntilHydration = false;
+  pushStateToSharedApi(reason);
+}
+
+function save(reason = 'unspecified'){
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   if (sharedSaveTimer) clearTimeout(sharedSaveTimer);
-  sharedSaveTimer = setTimeout(() => { pushStateToSharedApi(); }, 300);
+  sharedSaveTimer = setTimeout(() => {
+    if (!sharedHydrationResolved) {
+      sharedPushPendingUntilHydration = true;
+      return;
+    }
+    pushStateToSharedApi(reason);
+  }, 300);
+}
+
+function commitState(reason = 'state_commit', { render = true } = {}){
+  save(reason);
+  if (render) renderAll();
 }
 
 function downloadJsonFile(filename, obj){
@@ -682,7 +708,7 @@ function renderCalendarRemindersPanel(){
   list.querySelectorAll('[data-rem-del]').forEach((b)=>{
     b.addEventListener('click', ()=>{
       state.reminders = state.reminders.filter((x)=>x.id!==b.dataset.remDel);
-      renderAll();
+      commitState('calendar_reminder_deleted');
     });
   });
 }
@@ -2331,7 +2357,7 @@ function ensureVoiceNoteRecognizer(){
       voiceNoteManualStop = false;
       voiceNoteAutoRestartLeft = 0;
       setVoiceNoteStatus('Saved as new note: "Voice Note".');
-      renderAll();
+      commitState('voice_note_saved');
       return;
     }
     voiceNoteManualStop = false;
@@ -2735,7 +2761,7 @@ window.onYouTubeIframeAPIReady = function(){
   initYouTubePlayerIfReady();
 };
 
-function renderAll(){ applyTheme(); renderDateTime(); renderCalendar(); renderCalendarRemindersPanel(); renderTodayReminders(); renderSettings(); renderProjects(); renderStats(); renderIdeas(); renderNotes(); renderBoard(); renderMusicPlayer(); renderCameraFeedPod(); renderVoiceNotePod(); renderVoiceToRowanPod(); renderShortcutsPod(); renderShortcutsSettings(); populateProjectSelect(); save(); }
+function renderAll(){ applyTheme(); renderDateTime(); renderCalendar(); renderCalendarRemindersPanel(); renderTodayReminders(); renderSettings(); renderProjects(); renderStats(); renderIdeas(); renderNotes(); renderBoard(); renderMusicPlayer(); renderCameraFeedPod(); renderVoiceNotePod(); renderVoiceToRowanPod(); renderShortcutsPod(); renderShortcutsSettings(); populateProjectSelect(); }
 
 function renderProjects(){
   const wrap = document.getElementById('projectDirectory');
@@ -2878,7 +2904,7 @@ function renderNotes(){
     btn.addEventListener('click', (e)=>{
       const card = e.target.closest('.note-card');
       state.notes = state.notes.filter(n=>n.id!==card.dataset.noteId);
-      renderAll();
+      commitState('note_deleted');
     });
   });
 
@@ -2889,7 +2915,7 @@ function renderNotes(){
       if (!note) return;
       note.pinned = !note.pinned;
       note.updatedAt = now();
-      renderAll();
+      commitState('note_pin_toggled');
     });
   });
 
@@ -2910,7 +2936,7 @@ function renderNotes(){
         createdAt: now(),
         updatedAt: now(),
       });
-      renderAll();
+      commitState('note_converted_to_task');
     });
   });
 }
@@ -3078,7 +3104,7 @@ function renderShortcutsPod(){
       });
 
       logChange(`Created shortcut from drop: ${title}`);
-      renderAll();
+      commitState('shortcut_created_from_drop');
     });
   }
 }
@@ -3116,7 +3142,7 @@ function renderShortcutsSettings(){
       sc.enabled = sc.enabled === false;
       sc.updatedAt = now();
       logChange(`${sc.enabled ? 'Enabled' : 'Disabled'} shortcut: ${sc.title}`);
-      renderAll();
+      commitState('shortcut_toggled');
     });
   });
   document.querySelectorAll('[data-shortcut-delete]').forEach((btn) => {
@@ -3126,7 +3152,7 @@ function renderShortcutsSettings(){
       if (!confirm(`Delete shortcut "${sc.title}"?`)) return;
       state.shortcuts = state.shortcuts.filter((x) => x.id !== sc.id);
       logChange(`Deleted shortcut: ${sc.title}`);
-      renderAll();
+      commitState('shortcut_deleted');
     });
   });
 }
@@ -3362,7 +3388,7 @@ function renderBoard(){
       if(!task) return;
       task.column = drop.dataset.col;
       task.updatedAt = now();
-      renderAll();
+      commitState('task_column_changed_drag');
     });
   });
 }
@@ -3470,7 +3496,7 @@ document.getElementById('closeSettingsBtn')?.addEventListener('click', ()=> {
 document.getElementById('settingTheme')?.addEventListener('change', (e)=> {
   state.settings.theme = e.target.value;
   logChange(`Theme changed to ${e.target.value}`);
-  renderAll();
+  commitState('theme_changed');
 });
 
 document.getElementById('settingWeatherInterval')?.addEventListener('change', (e)=> {
@@ -3562,7 +3588,7 @@ document.getElementById('addNoteBtn').onclick = ()=> {
     createdAt: now(),
     updatedAt: now(),
   });
-  renderAll();
+  commitState('note_added');
 };
 
 document.getElementById('addIdeaBtn')?.addEventListener('click', () => {
@@ -3573,7 +3599,7 @@ document.getElementById('addIdeaBtn')?.addEventListener('click', () => {
   state.ideas = state.ideas.slice(0, 200);
   if (input) input.value = '';
   logChange('Saved new idea to Ideas Box');
-  renderAll();
+  commitState('idea_added');
 });
 
 document.getElementById('notesSearch')?.addEventListener('input', () => renderNotes());
@@ -3619,7 +3645,7 @@ shortcutForm?.addEventListener('submit', (e) => {
   }
 
   shortcutDialog?.close();
-  renderAll();
+  commitState('shortcut_form_submitted');
 });
 
 document.getElementById('projectForm').addEventListener('submit', e=>{
@@ -3636,7 +3662,7 @@ document.getElementById('projectForm').addEventListener('submit', e=>{
   });
   projectDialog.close();
   e.target.reset();
-  renderAll();
+  commitState('project_created');
 });
 
 document.getElementById('taskForm').addEventListener('submit', e=>{
@@ -3658,7 +3684,7 @@ document.getElementById('taskForm').addEventListener('submit', e=>{
   e.target.reset();
   const colSel = document.querySelector('#taskForm select[name="column"]');
   if (colSel) colSel.value = state.settings.defaultTaskColumn;
-  renderAll();
+  commitState('task_created');
 });
 
 editTaskForm?.addEventListener('submit', (e) => {
@@ -3681,7 +3707,7 @@ editTaskForm?.addEventListener('submit', (e) => {
 
   editTaskDialog?.close();
   logChange(`Edited task: ${task.title}`);
-  renderAll();
+  commitState('task_edited');
 });
 
 function enableProjectDragScroll(){
@@ -3893,6 +3919,11 @@ if (!state.changelog.some((c) => c.message === stopControlIsolationPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: stopControlIsolationPatch });
 }
 
+const sentinelStabilizationPatch = 'Sentinel stabilization pass: render side-effects decoupled from persistence via commitState(), startup shared-sync hydration lock added to prevent stale overwrite races, and QA smoke-check docs/guardrails added.';
+if (!state.changelog.some((c) => c.message === sentinelStabilizationPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: sentinelStabilizationPatch });
+}
+
 const cameraFeedPatch = 'Added Camera Feed pod (V1): single active feed with Embed Stream mode plus Snapshot Refresh fallback (configurable interval + optional local proxy relay).';
 if (!state.changelog.some((c) => c.message === cameraFeedPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: cameraFeedPatch });
@@ -3903,6 +3934,7 @@ if (!state.changelog.some((c) => c.message === cameraLocalWebcamPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: cameraLocalWebcamPatch });
 }
 
+save('startup_patch_seed');
 renderAll();
 renderWeather();
 renderNbaScores();
@@ -3933,7 +3965,7 @@ document.getElementById('addCalendarReminderBtn')?.addEventListener('click', () 
   state.reminders.push({ id: id(), date: selectedCalendarDate, time, text, createdAt: now() });
   if (textEl) textEl.value = '';
   if (timeEl) timeEl.value = '';
-  renderAll();
+  commitState('calendar_reminder_added');
 });
 
 document.getElementById('startAlarmBtn')?.addEventListener('click', () => {
@@ -3956,9 +3988,12 @@ enableBoardDragScroll();
 
 // Cross-browser sync bootstrap: pull shared disk-backed state if available.
 hydrateStateFromSharedApi().then((hydrated) => {
+  sharedHydrationResolved = true;
+
   if (!hydrated) {
     // Seed the shared store from the first browser that opens the dashboard.
-    pushStateToSharedApi();
+    pushStateToSharedApi('startup_seed_no_remote_state');
+    flushPendingSharedPush('startup_flush_pending_after_seed');
     return;
   }
 
@@ -3969,4 +4004,5 @@ hydrateStateFromSharedApi().then((hydrated) => {
   setupWeatherTimer();
   setupNbaTimer();
   setupCryptoTimer();
+  flushPendingSharedPush('startup_flush_pending_after_hydration');
 });
