@@ -2686,7 +2686,12 @@ function normalizeVaughnInput(raw){
     .split(/[/?#]/)[0]
     .replace(/[^a-z0-9_-]/gi, '');
 
-  if (!/^https?:\/\//i.test(value)) {
+  const looksLikeVaughnUrl = /^(?:https?:\/\/)?(?:www\.)?vaughn\.live\//i.test(value);
+  const urlCandidate = /^https?:\/\//i.test(value)
+    ? value
+    : (looksLikeVaughnUrl ? `https://${value.replace(/^\/+/, '')}` : '');
+
+  if (!urlCandidate) {
     const channel = sanitizeChannel(value);
     if (!channel) return null;
     return {
@@ -2697,9 +2702,9 @@ function normalizeVaughnInput(raw){
   }
 
   try {
-    const u = new URL(value);
+    const u = new URL(urlCandidate);
     const host = u.hostname.toLowerCase();
-    if (!host.includes('vaughn.live')) return null;
+    if (!(host === 'vaughn.live' || host.endsWith('.vaughn.live'))) return null;
     const pathSeg = (u.pathname || '').split('/').filter(Boolean).map((s) => s.replace(/^@/, ''));
     if (!pathSeg.length) return null;
 

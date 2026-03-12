@@ -244,7 +244,7 @@ Live Streams V1 is a provider-preset stream launcher designed for transparent em
 - **YouTube Live:** uses YouTube embed endpoints; channel/live resolution works best with channel IDs or valid live/video URLs.
 - **Twitch:** embed requires `parent=<current-hostname>`; playback can fail if your host isn’t accepted by Twitch embed policy.
 - **Kick:** embed attempted via provider player endpoints; some channels may block framing.
-- **Vaughn:** channel names and common Vaughn URLs (page/embed/popout forms) are normalized to explicit `https://vaughn.live/embed/<channel>` for iframe use; some channels may still block framing.
+- **Vaughn:** channel names and common Vaughn URLs (page/embed/popout forms, with or without protocol) are normalized to explicit `https://vaughn.live/embed/<channel>` for iframe use; some channels may still block framing.
 - **Generic URL:** `rtmp://` is not browser-playable directly (status prompts fallback); HLS/MP4/WebM may work depending on browser codec/HLS support.
 - **Local URL:** intended for local-hosted stream pages/media (e.g., LAN service or localhost); browser mixed-content/CORS/autoplay rules still apply.
 
