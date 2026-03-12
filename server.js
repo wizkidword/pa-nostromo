@@ -614,9 +614,8 @@ function excerptSummary(summary, maxLen = 80) {
 }
 
 function deriveTitleFromUrlish(candidate, feedUrl) {
-  const urlCandidate = String(candidate || '').trim();
-  try {
-    const parsed = new URL(urlCandidate || feedUrl);
+  const tryParse = (value) => {
+    const parsed = new URL(String(value || '').trim());
     const host = parsed.hostname.replace(/^www\./i, '');
     const pathPart = parsed.pathname
       .split('/')
@@ -626,12 +625,22 @@ function deriveTitleFromUrlish(candidate, feedUrl) {
       .replace(/[-_]+/g, ' ')
       .replace(/\.[a-z0-9]{1,6}$/i, '')
       .trim();
-
     if (decodedPath) return `${host} — ${decodedPath}`;
-    return host || 'Untitled';
-  } catch {
-    return 'Untitled';
-  }
+    return host || '';
+  };
+
+  // First try candidate (link/guid). If it isn't a real URL (e.g., tag: GUID), fallback to feed URL.
+  try {
+    const fromCandidate = tryParse(candidate);
+    if (fromCandidate) return fromCandidate;
+  } catch {}
+
+  try {
+    const fromFeed = tryParse(feedUrl);
+    if (fromFeed) return `${fromFeed} item`;
+  } catch {}
+
+  return 'Feed item';
 }
 
 function extractTagValue(block, tags) {

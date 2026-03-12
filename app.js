@@ -1629,10 +1629,11 @@ function mergeRssItems(existingItems, incomingItems){
   const map = new Map();
 
   const naturalKey = (item) => {
-    const guid = String(item?.guid || '').trim();
     const link = String(item?.link || '').trim();
-    if (guid) return `g:${guid}`;
+    const guid = String(item?.guid || '').trim();
+    // Prefer link as primary key: most stable across parser revisions/providers.
     if (link) return `l:${link}`;
+    if (guid) return `g:${guid}`;
     return `i:${String(item?.id || '').trim()}`;
   };
 
