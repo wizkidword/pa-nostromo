@@ -9,7 +9,7 @@ It combines project tracking + utility pods in one lightweight web app:
 - Project directory + kanban board
 - Notes and ideas capture
 - Reminders + timer/alarm
-- Weather + NBA scores + Crypto watchlist
+- Weather + NBA scores + Crypto watchlist + personalized RSS feed
 - Music player (stream/YouTube/local file)
 - Camera Feed pod (embed stream + snapshot refresh + local browser webcam mode)
 - Voice notes (Chrome SpeechRecognition)
@@ -99,7 +99,7 @@ Mission Control now includes a built-in state safety pack to prevent accidental 
 - `index.html` - UI shell
 - `styles.css` - styles
 - `app.js` - app logic
-- `server.js` - local static server + `/api/state` + `/api/rowan-send` + `/api/camera-snapshot`
+- `server.js` - local static server + `/api/state` + `/api/rowan-send` + `/api/camera-snapshot` + `/api/rss/fetch`
 - `data/state.json` - shared persisted state
 - `assets/social/*` - local social media logo SVGs
 
@@ -129,6 +129,39 @@ That means one-time local setup is enough; no repeated inline env exports are ne
 
 If `ROWAN_RELAY_URL` is missing, `/api/rowan-send` returns a clear error (`relay_not_configured`).
 In the UI, the draft is preserved and the user gets fallback actions (copy draft / open chat), so no speech text is lost.
+
+## RSS Feed pod (V1)
+
+Personalized RSS Feed adds a headline-first reading queue with read-state controls and server-side feed fetching to avoid browser CORS issues.
+
+### Setup
+
+1. Open **Settings → RSS Feeds**.
+2. Add one or more feed URLs (`http`/`https`).
+3. Optionally add a tag/category per feed.
+4. Choose RSS auto-refresh interval (default: every 30 minutes).
+
+### Usage
+
+- Use **Refresh** in the RSS pod for manual fetch.
+- Click **Mark read** on an item to remove it from the active list immediately.
+- Toggle **Show read** to reveal/hide previously read items.
+- Headlines open source links in a new tab (`target="_blank"`).
+
+### Persistence
+
+RSS V1 persists in shared dashboard state:
+- configured feed sources (`rss.feeds`)
+- fetched items (`rss.items`)
+- read state (`rss.readItemIds`)
+- show-read preference + refresh interval
+
+### Server endpoint
+
+- `POST /api/rss/fetch` with `{ "feeds": ["https://..."] }`
+- local-only by default (`RSS_FETCH_ALLOW_REMOTE=0`)
+- guarded by timeout and max payload size limits (`RSS_FETCH_TIMEOUT_MS`, `RSS_FETCH_MAX_BYTES`, `RSS_FETCH_MAX_FEEDS`)
+- per-feed errors are returned without failing the whole batch
 
 ## Camera Feed pod (V1)
 
@@ -195,6 +228,7 @@ Early alpha. Built for real daily use and rapid iteration.
 
 ## Patch Notes
 
+- 2026-03-11: Personalized RSS Feed pod (V1): added server-side RSS fetch/parse endpoint, Settings feed manager (add/remove + optional tag), manual refresh + configurable auto-refresh, mark-read behavior that removes items from active list immediately, and persisted read/show-read/source state.
 - 2026-03-11: Sentinel stabilization pass: decoupled render pipeline from persistence via explicit `commitState(reason)`, added startup shared-sync hydration lock to prevent stale overwrite races, introduced guardrail static checks/CI, and documented smoke checks for startup sync race + stop-button isolation.
 - 2026-03-11: Camera Feed pod local-webcam patch: added **Local Webcam (Browser)** mode using `getUserMedia`, in-pod `<video>` live rendering, clean media-track start/stop lifecycle, status/error handling for permission/support/hardware issues, and optional persisted webcam device selection.
 - 2026-03-11: Camera Feed pod (V1): added single-feed camera utility with Embed Stream mode + Snapshot Refresh fallback (configurable interval), persisted camera settings/state, and optional local-only `/api/camera-snapshot` relay with host allowlist + payload/timeout guardrails.

@@ -66,6 +66,22 @@
       </label>
 
       <hr class="settings-divider" />
+      <h3 class="m0">RSS Feeds</h3>
+      <label>RSS auto-refresh interval
+        <select id="settingRssInterval">
+          <option value="15">Every 15 minutes</option>
+          <option value="30">Every 30 minutes</option>
+          <option value="60">Every 60 minutes</option>
+        </select>
+      </label>
+      <div class="row-wrap">
+        <input id="rssFeedUrlInput" placeholder="https://example.com/feed.xml" />
+        <input id="rssFeedTagInput" placeholder="Tag (optional)" class="w-130" />
+        <button id="addRssFeedBtn" class="btn">+ Add Feed</button>
+      </div>
+      <div id="settingsRssFeedsList" class="change-log-list"></div>
+
+      <hr class="settings-divider" />
       <h3 class="m0">State Safety</h3>
       <p class="note-meta">Export a full backup anytime. Import requires explicit confirmation and may overwrite newer shared state.</p>
       <div class="row-wrap">
@@ -149,6 +165,17 @@
         </div>
         <div id="cryptoWidget" class="widget-block">Loading crypto market data...</div>
         <div id="cryptoUpdatedAt" class="note-meta mt6"></div>
+      </div>
+      <div class="card utility-card">
+        <div class="row-between-wrap">
+          <h2>📰 RSS Feed</h2>
+          <button id="rssRefreshBtn" class="btn ghost">Refresh</button>
+        </div>
+        <div class="row-between-wrap mt6">
+          <label class="camera-feed-inline-check"><input id="rssShowReadToggle" type="checkbox" /> Show read</label>
+        </div>
+        <div id="rssWidget" class="widget-block">Add a feed in Settings to begin.</div>
+        <div id="rssUpdatedAt" class="note-meta mt6"></div>
       </div>
     </div>
 

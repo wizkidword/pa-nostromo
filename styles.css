@@ -713,6 +713,19 @@ menu {
   opacity: 1;
 }
 
+.rss-list .change-log-item.is-read {
+  opacity: 0.72;
+}
+
+.rss-list a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.rss-list a:hover {
+  text-decoration: underline;
+}
+
 .shortcut-fieldset {
   border: 1px solid var(--border-strong);
   border-radius: 8px;

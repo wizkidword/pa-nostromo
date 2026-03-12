@@ -66,6 +66,10 @@ const CAMERA_PROXY_ALLOWLIST = String(process.env.CAMERA_PROXY_ALLOWLIST || '')
   .filter(Boolean);
 const CAMERA_PROXY_TIMEOUT_MS = Math.max(1000, parsePositiveInt(process.env.CAMERA_PROXY_TIMEOUT_MS, 7000));
 const CAMERA_PROXY_MAX_BYTES = Math.max(64 * 1024, parsePositiveInt(process.env.CAMERA_PROXY_MAX_BYTES, 5 * 1024 * 1024));
+const RSS_FETCH_ALLOW_REMOTE = parseBool(process.env.RSS_FETCH_ALLOW_REMOTE);
+const RSS_FETCH_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.RSS_FETCH_TIMEOUT_MS, 12000));
+const RSS_FETCH_MAX_BYTES = Math.max(128 * 1024, parsePositiveInt(process.env.RSS_FETCH_MAX_BYTES, 2 * 1024 * 1024));
+const RSS_FETCH_MAX_FEEDS = Math.max(1, parsePositiveInt(process.env.RSS_FETCH_MAX_FEEDS, 12));
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -572,6 +576,158 @@ async function handleApiCameraSnapshot(req, res) {
   res.end(body);
 }
 
+function decodeXmlEntities(input) {
+  return String(input || '')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#x2F;/gi, '/');
+}
+
+function stripTags(input) {
+  return decodeXmlEntities(String(input || '').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+}
+
+function extractTagValue(block, tags) {
+  const names = Array.isArray(tags) ? tags : [tags];
+  for (const name of names) {
+    const rx = new RegExp(`<${name}[^>]*>([\\s\\S]*?)<\\/${name}>`, 'i');
+    const m = block.match(rx);
+    if (m?.[1]) return m[1].trim();
+  }
+  return '';
+}
+
+function extractTagAttr(block, tagName, attrName) {
+  const rx = new RegExp(`<${tagName}[^>]*\\b${attrName}=["']([^"']+)["'][^>]*>`, 'i');
+  return block.match(rx)?.[1] || '';
+}
+
+function deriveItemId(item) {
+  const base = `${item.link || ''}|${item.guid || ''}|${item.title || ''}|${item.publishedAt || ''}`;
+  return crypto.createHash('sha1').update(base).digest('hex').slice(0, 20);
+}
+
+function parseFeedXml(xmlRaw, feedUrl) {
+  const xml = String(xmlRaw || '');
+  if (!xml.trim()) return [];
+
+  const isAtom = /<feed[\s>]/i.test(xml) && /xmlns=["'][^"']*atom/i.test(xml);
+  const channelBlock = xml.match(/<channel[\s\S]*?<\/channel>/i)?.[0] || '';
+  const feedTitle = stripTags(isAtom ? extractTagValue(xml, 'title') : extractTagValue(channelBlock, 'title')) || new URL(feedUrl).hostname;
+
+  const entryBlocks = isAtom
+    ? (xml.match(/<entry[\s\S]*?<\/entry>/gi) || [])
+    : (xml.match(/<item[\s\S]*?<\/item>/gi) || []);
+
+  return entryBlocks.slice(0, 40).map((block) => {
+    const title = stripTags(extractTagValue(block, 'title')) || 'Untitled';
+    const link = isAtom
+      ? (extractTagAttr(block, 'link', 'href') || stripTags(extractTagValue(block, 'link')))
+      : stripTags(extractTagValue(block, 'link'));
+    const guid = stripTags(extractTagValue(block, ['guid', 'id']));
+    const summaryRaw = extractTagValue(block, isAtom ? ['summary', 'content'] : ['description', 'content:encoded']);
+    const publishedRaw = extractTagValue(block, isAtom ? ['updated', 'published'] : ['pubDate', 'dc:date']);
+    const publishedAt = publishedRaw ? new Date(publishedRaw).toISOString() : '';
+    const summary = stripTags(summaryRaw).slice(0, 220);
+
+    const item = {
+      id: '',
+      title,
+      link: link.trim(),
+      summary,
+      publishedAt,
+      feedTitle,
+      feedUrl,
+      guid,
+    };
+    item.id = deriveItemId(item);
+    return item;
+  }).filter((item) => /^https?:\/\//i.test(item.link));
+}
+
+async function fetchFeedXml(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), RSS_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'mission-control-lite-rss/1.0',
+        'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const contentLength = Number(response.headers.get('content-length') || 0);
+    if (contentLength && contentLength > RSS_FETCH_MAX_BYTES) {
+      throw new Error(`Feed too large (${contentLength} bytes)`);
+    }
+
+    const arrayBuf = await response.arrayBuffer();
+    const buf = Buffer.from(arrayBuf);
+    if (buf.length > RSS_FETCH_MAX_BYTES) {
+      throw new Error(`Feed too large (${buf.length} bytes)`);
+    }
+
+    return buf.toString('utf8');
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function handleApiRssFetch(req, res) {
+  if (req.method !== 'POST') {
+    return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/rss/fetch.' });
+  }
+
+  if (!RSS_FETCH_ALLOW_REMOTE && !isLocalRequest(req)) {
+    return sendJson(res, 403, {
+      ok: false,
+      error: 'local_only',
+      message: 'RSS fetch endpoint is local-only by default. Set RSS_FETCH_ALLOW_REMOTE=1 to allow remote requests.',
+    });
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(await readBody(req));
+  } catch (err) {
+    return sendJson(res, 400, { ok: false, error: 'invalid_json', message: String(err?.message || err) });
+  }
+
+  const urls = [...new Set((Array.isArray(parsed?.feeds) ? parsed.feeds : [])
+    .map((v) => String(v || '').trim())
+    .filter((v) => /^https?:\/\//i.test(v)))].slice(0, RSS_FETCH_MAX_FEEDS);
+
+  if (!urls.length) {
+    return sendJson(res, 400, { ok: false, error: 'missing_feeds', message: 'Provide at least one valid http(s) feed URL in feeds[].' });
+  }
+
+  const items = [];
+  const errors = [];
+
+  for (const url of urls) {
+    try {
+      const xml = await fetchFeedXml(url);
+      const parsedItems = parseFeedXml(xml, url);
+      items.push(...parsedItems);
+    } catch (err) {
+      errors.push({ feedUrl: url, message: String(err?.message || err).slice(0, 180) });
+    }
+  }
+
+  return sendJson(res, 200, { ok: true, items, errors });
+}
+
 function safePathFromUrl(urlPath) {
   const pathname = decodeURIComponent((urlPath || '/').split('?')[0]);
   const rel = pathname === '/' ? '/index.html' : pathname;
@@ -611,6 +767,7 @@ const server = http.createServer(async (req, res) => {
   if ((req.url || '').startsWith('/api/state')) return handleApiState(req, res);
   if ((req.url || '').startsWith('/api/rowan-send')) return handleApiRowanSend(req, res);
   if ((req.url || '').startsWith('/api/camera-snapshot')) return handleApiCameraSnapshot(req, res);
+  if ((req.url || '').startsWith('/api/rss/fetch')) return handleApiRssFetch(req, res);
   return handleStatic(req, res);
 });
 
@@ -620,4 +777,5 @@ server.listen(PORT, () => {
   console.log(`State backup dir: ${BACKUPS_DIR} (retain latest ${BACKUP_RETENTION})`);
   console.log(`Voice-to-Rowan relay: ${ROWAN_RELAY_URL ? 'configured' : 'not configured'} (${ROWAN_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
   console.log(`Camera snapshot proxy: enabled (${CAMERA_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; allowlist entries: ${CAMERA_PROXY_ALLOWLIST.length})`);
+  console.log(`RSS fetch API: enabled (${RSS_FETCH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; max feeds/request: ${RSS_FETCH_MAX_FEEDS})`);
 });

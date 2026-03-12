@@ -3,6 +3,7 @@ const LOCAL_ZIP = '44224';
 const LOCAL_TZ = 'America/New_York';
 const NBA_REFRESH_MS = 5 * 60 * 1000;
 const CRYPTO_REFRESH_MS = 15 * 60 * 1000;
+const RSS_DEFAULT_REFRESH_MIN = 30;
 const CRYPTO_DIR_CACHE_KEY = 'mission-control-crypto-directory-v1';
 const CRYPTO_DIR_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const CRYPTO_WATCH_CACHE_KEY = 'mission-control-crypto-watch-cache-v1';
@@ -68,6 +69,15 @@ const seed = {
     viewportWidth: 640,
     viewportHeight: 360,
   },
+  rss: {
+    feeds: [],
+    items: [],
+    readItemIds: [],
+    showRead: false,
+    refreshIntervalMin: RSS_DEFAULT_REFRESH_MIN,
+    lastUpdatedAt: '',
+    lastError: '',
+  },
   changelog: [],
   shortcuts: [
     {
@@ -97,6 +107,7 @@ let state = load();
 let weatherTimer = null;
 let nbaTimer = null;
 let cryptoTimer = null;
+let rssTimer = null;
 let coinDirectory = [];
 let topSymbolMap = new Map();
 let cryptoRefreshCooldownUntil = 0;
@@ -243,6 +254,43 @@ function load(){
   state.cameraFeed.viewportHeight = Number.isFinite(Number(state.cameraFeed.viewportHeight))
     ? Math.min(900, Math.max(180, Math.round(Number(state.cameraFeed.viewportHeight))))
     : 360;
+
+  state.rss = {
+    feeds: [],
+    items: [],
+    readItemIds: [],
+    showRead: false,
+    refreshIntervalMin: RSS_DEFAULT_REFRESH_MIN,
+    lastUpdatedAt: '',
+    lastError: '',
+    ...(state.rss || {}),
+  };
+  state.rss.feeds = Array.isArray(state.rss.feeds)
+    ? state.rss.feeds.map((f) => ({
+      id: String(f?.id || id()),
+      url: String(f?.url || '').trim(),
+      tag: String(f?.tag || '').trim().slice(0, 40),
+      addedAt: f?.addedAt || now(),
+    })).filter((f) => /^https?:\/\//i.test(f.url))
+    : [];
+  state.rss.items = Array.isArray(state.rss.items)
+    ? state.rss.items.map((item) => ({
+      id: String(item?.id || '').trim(),
+      feedId: String(item?.feedId || '').trim(),
+      title: String(item?.title || 'Untitled').trim() || 'Untitled',
+      link: String(item?.link || '').trim(),
+      summary: String(item?.summary || '').trim(),
+      publishedAt: String(item?.publishedAt || '').trim(),
+      feedTitle: String(item?.feedTitle || '').trim(),
+      tag: String(item?.tag || '').trim(),
+    })).filter((item) => item.id && /^https?:\/\//i.test(item.link))
+    : [];
+  state.rss.readItemIds = [...new Set((Array.isArray(state.rss.readItemIds) ? state.rss.readItemIds : []).map((v) => String(v || '').trim()).filter(Boolean))];
+  state.rss.showRead = !!state.rss.showRead;
+  const rssRefresh = Number(state.rss.refreshIntervalMin || RSS_DEFAULT_REFRESH_MIN);
+  state.rss.refreshIntervalMin = Number.isFinite(rssRefresh) ? Math.min(180, Math.max(5, Math.round(rssRefresh))) : RSS_DEFAULT_REFRESH_MIN;
+  state.rss.lastUpdatedAt = String(state.rss.lastUpdatedAt || '');
+  state.rss.lastError = String(state.rss.lastError || '').slice(0, 300);
 
   state.changelog = Array.isArray(state.changelog) ? state.changelog : [];
 
@@ -499,6 +547,12 @@ function setupCryptoTimer(){
   cryptoTimer = setInterval(renderCrypto, CRYPTO_REFRESH_MS);
 }
 
+function setupRssTimer(){
+  if (rssTimer) clearInterval(rssTimer);
+  const mins = Number(state.rss?.refreshIntervalMin || RSS_DEFAULT_REFRESH_MIN);
+  rssTimer = setInterval(() => renderRss(), Math.max(5, mins) * 60 * 1000);
+}
+
 function flushPendingChanges(){
   if (pendingChanges.length < 3) return;
   const bundled = pendingChanges.slice(0, 3);
@@ -744,16 +798,20 @@ function renderSettings(){
   const weather = document.getElementById('settingWeatherInterval');
   const col = document.getElementById('settingDefaultTaskColumn');
   const fs = document.getElementById('settingFullscreen');
+  const rssInterval = document.getElementById('settingRssInterval');
   renderChangeLog();
   if (theme) theme.value = state.settings.theme;
   if (weather) weather.value = String(state.settings.weatherIntervalMin);
   if (col) col.value = state.settings.defaultTaskColumn;
   if (fs) fs.checked = !!document.fullscreenElement;
+  if (rssInterval) rssInterval.value = String(state.rss?.refreshIntervalMin || RSS_DEFAULT_REFRESH_MIN);
 
   const taskColumnSelect = document.querySelector('#taskForm select[name="column"]');
   if (taskColumnSelect && !taskColumnSelect.value) {
     taskColumnSelect.value = state.settings.defaultTaskColumn;
   }
+
+  mountRssSettingsFeeds();
 }
 
 async function renderWeather(){
@@ -1460,6 +1518,166 @@ async function renderCrypto(options = {}){
     el.textContent = 'Crypto data unavailable right now.';
     if (ts) ts.textContent = `Update failed: ${reason} (retry in ${Math.ceil(backoffMs / 1000)}s)`;
   }
+}
+
+async function fetchRssFeedBundle(){
+  const feedUrls = (state.rss?.feeds || []).map((f) => f.url).filter(Boolean);
+  if (!feedUrls.length) return { ok: true, items: [], errors: [] };
+
+  const res = await fetch('/api/rss/fetch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ feeds: feedUrls }),
+  });
+  const payload = await res.json();
+  if (!res.ok || payload?.ok === false) {
+    throw new Error(payload?.message || `RSS fetch failed (${res.status})`);
+  }
+  return payload;
+}
+
+function mountRssSettingsFeeds(){
+  const wrap = document.getElementById('settingsRssFeedsList');
+  if (!wrap) return;
+  const feeds = Array.isArray(state.rss?.feeds) ? state.rss.feeds : [];
+  if (!feeds.length) {
+    wrap.innerHTML = '<div class="note-meta">No feeds configured yet.</div>';
+    return;
+  }
+
+  wrap.innerHTML = feeds.map((feed) => `
+    <div class="change-log-item row-between-wrap" style="gap:8px;align-items:flex-start;">
+      <div style="min-width:0;">
+        <div style="font-weight:600;word-break:break-all;">${escapeHtml(feed.url)}</div>
+        <div class="note-meta">${escapeHtml(feed.tag || 'General')}</div>
+      </div>
+      <button class="btn note-delete" data-rss-feed-remove="${feed.id}" type="button">Remove</button>
+    </div>
+  `).join('');
+
+  wrap.querySelectorAll('[data-rss-feed-remove]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const feedId = String(btn.getAttribute('data-rss-feed-remove') || '');
+      if (!feedId) return;
+      state.rss.feeds = state.rss.feeds.filter((f) => f.id !== feedId);
+      const feedIds = new Set(state.rss.feeds.map((f) => f.id));
+      state.rss.items = state.rss.items.filter((item) => !item.feedId || feedIds.has(item.feedId));
+      state.rss.readItemIds = state.rss.readItemIds.filter((itemId) => state.rss.items.some((item) => item.id === itemId));
+      save('rss_feed_removed');
+      mountRssSettingsFeeds();
+      renderRss({ skipFetch: true });
+    });
+  });
+}
+
+function renderRssListFromState(){
+  const el = document.getElementById('rssWidget');
+  const ts = document.getElementById('rssUpdatedAt');
+  const showReadToggle = document.getElementById('rssShowReadToggle');
+  if (!el) return;
+
+  if (showReadToggle) showReadToggle.checked = !!state.rss?.showRead;
+
+  const allItems = Array.isArray(state.rss?.items) ? state.rss.items : [];
+  const readIds = new Set(Array.isArray(state.rss?.readItemIds) ? state.rss.readItemIds : []);
+  const showRead = !!state.rss?.showRead;
+  const visible = showRead ? allItems : allItems.filter((item) => !readIds.has(item.id));
+
+  if (!allItems.length) {
+    el.innerHTML = '<div class="note-meta">No feed items yet. Add a feed in Settings, then refresh.</div>';
+  } else if (!visible.length) {
+    el.innerHTML = '<div class="note-meta">All caught up. Enable “Show read” to review older items.</div>';
+  } else {
+    el.innerHTML = `<div class="rss-list">${visible.slice(0, 40).map((item) => {
+      const isRead = readIds.has(item.id);
+      const published = item.publishedAt ? new Date(item.publishedAt).toLocaleString() : 'Unknown time';
+      return `
+        <div class="change-log-item ${isRead ? 'is-read' : ''}" style="margin-bottom:8px;">
+          <div class="row-between-wrap" style="gap:8px;align-items:flex-start;">
+            <a href="${encodeURI(item.link)}" target="_blank" rel="noopener" style="font-weight:700;line-height:1.35;">${escapeHtml(item.title || 'Untitled')}</a>
+            ${isRead ? '' : `<button class="btn ghost" data-rss-read="${item.id}" type="button">Mark read</button>`}
+          </div>
+          <div class="note-meta" style="margin-top:4px;">${escapeHtml(item.feedTitle || item.tag || 'Feed')} · ${escapeHtml(published)}</div>
+          ${item.summary ? `<div class="note-meta" style="margin-top:4px;line-height:1.45;">${escapeHtml(item.summary)}</div>` : ''}
+        </div>
+      `;
+    }).join('')}</div>`;
+
+    el.querySelectorAll('[data-rss-read]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const itemId = String(btn.getAttribute('data-rss-read') || '');
+        if (!itemId) return;
+        if (!state.rss.readItemIds.includes(itemId)) state.rss.readItemIds.push(itemId);
+        save('rss_item_mark_read');
+        renderRssListFromState();
+      });
+    });
+  }
+
+  if (ts) {
+    if (state.rss?.lastUpdatedAt) {
+      ts.textContent = `Updated: ${new Date(state.rss.lastUpdatedAt).toLocaleTimeString()}${state.rss.lastError ? ` · Last error: ${state.rss.lastError}` : ''}`;
+    } else {
+      ts.textContent = state.rss?.lastError ? `Update failed: ${state.rss.lastError}` : 'Not refreshed yet.';
+    }
+  }
+}
+
+function mergeRssItems(existingItems, incomingItems){
+  const map = new Map();
+  for (const item of existingItems || []) {
+    if (!item?.id) continue;
+    map.set(item.id, item);
+  }
+  for (const item of incomingItems || []) {
+    if (!item?.id) continue;
+    map.set(item.id, item);
+  }
+
+  return [...map.values()].sort((a, b) => {
+    const ta = Date.parse(a.publishedAt || '') || 0;
+    const tb = Date.parse(b.publishedAt || '') || 0;
+    return tb - ta;
+  }).slice(0, 200);
+}
+
+async function renderRss(options = {}){
+  const skipFetch = !!options.skipFetch;
+  const hasFeeds = Array.isArray(state.rss?.feeds) && state.rss.feeds.length > 0;
+
+  if (!skipFetch && hasFeeds) {
+    try {
+      const payload = await fetchRssFeedBundle();
+      const feedByUrl = new Map(state.rss.feeds.map((f) => [f.url, f]));
+      const normalized = (Array.isArray(payload.items) ? payload.items : []).map((item) => {
+        const feedConfig = feedByUrl.get(item.feedUrl) || {};
+        return {
+          id: String(item.id || '').trim(),
+          feedId: String(feedConfig.id || ''),
+          title: String(item.title || 'Untitled').trim() || 'Untitled',
+          link: String(item.link || '').trim(),
+          summary: String(item.summary || '').trim().slice(0, 220),
+          publishedAt: String(item.publishedAt || '').trim(),
+          feedTitle: String(item.feedTitle || '').trim(),
+          tag: String(feedConfig.tag || '').trim(),
+        };
+      }).filter((item) => item.id && /^https?:\/\//i.test(item.link));
+
+      state.rss.items = mergeRssItems(state.rss.items, normalized);
+      const itemIds = new Set(state.rss.items.map((item) => item.id));
+      state.rss.readItemIds = state.rss.readItemIds.filter((itemId) => itemIds.has(itemId));
+      state.rss.lastUpdatedAt = now();
+      state.rss.lastError = Array.isArray(payload.errors) && payload.errors.length
+        ? `${payload.errors.length} feed(s) failed`
+        : '';
+      save('rss_refresh_success');
+    } catch (err) {
+      state.rss.lastError = String(err?.message || err || 'RSS refresh failed').slice(0, 200);
+      save('rss_refresh_failed');
+    }
+  }
+
+  renderRssListFromState();
 }
 
 function normalizeYoutubeId(candidate){
@@ -2855,7 +3073,7 @@ window.onYouTubeIframeAPIReady = function(){
   initYouTubePlayerIfReady();
 };
 
-function renderAll(){ applyTheme(); renderDateTime(); renderCalendar(); renderCalendarRemindersPanel(); renderTodayReminders(); renderSettings(); renderProjects(); renderStats(); renderIdeas(); renderNotes(); renderBoard(); renderMusicPlayer(); renderCameraFeedPod(); renderVoiceNotePod(); renderVoiceToRowanPod(); renderShortcutsPod(); renderShortcutsSettings(); populateProjectSelect(); }
+function renderAll(){ applyTheme(); renderDateTime(); renderCalendar(); renderCalendarRemindersPanel(); renderTodayReminders(); renderSettings(); renderProjects(); renderStats(); renderIdeas(); renderNotes(); renderBoard(); renderMusicPlayer(); renderCameraFeedPod(); renderVoiceNotePod(); renderVoiceToRowanPod(); renderShortcutsPod(); renderShortcutsSettings(); renderRss({ skipFetch: true }); populateProjectSelect(); }
 
 function renderProjects(){
   const wrap = document.getElementById('projectDirectory');
@@ -3606,6 +3824,36 @@ document.getElementById('settingDefaultTaskColumn')?.addEventListener('change', 
   save();
 });
 
+document.getElementById('settingRssInterval')?.addEventListener('change', (e)=> {
+  const mins = Number(e.target.value || RSS_DEFAULT_REFRESH_MIN);
+  state.rss.refreshIntervalMin = Number.isFinite(mins) ? Math.min(180, Math.max(5, Math.round(mins))) : RSS_DEFAULT_REFRESH_MIN;
+  setupRssTimer();
+  save('rss_interval_changed');
+});
+
+document.getElementById('addRssFeedBtn')?.addEventListener('click', async () => {
+  const urlInput = document.getElementById('rssFeedUrlInput');
+  const tagInput = document.getElementById('rssFeedTagInput');
+  const url = String(urlInput?.value || '').trim();
+  const tag = String(tagInput?.value || '').trim();
+
+  if (!/^https?:\/\//i.test(url)) {
+    alert('Please enter a valid http(s) feed URL.');
+    return;
+  }
+  if ((state.rss.feeds || []).some((f) => f.url === url)) {
+    alert('That feed URL is already added.');
+    return;
+  }
+
+  state.rss.feeds.push({ id: id(), url, tag: tag.slice(0, 40), addedAt: now() });
+  if (urlInput) urlInput.value = '';
+  if (tagInput) tagInput.value = '';
+  save('rss_feed_added');
+  mountRssSettingsFeeds();
+  await renderRss();
+});
+
 document.getElementById('settingFullscreen')?.addEventListener('change', async (e)=> {
   if (e.target.checked) {
     if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
@@ -4033,15 +4281,22 @@ if (!state.changelog.some((c) => c.message === cameraResizePatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: cameraResizePatch });
 }
 
+const rssPodPatch = 'Added Personalized RSS Feed pod (V1): server-side feed fetch, settings feed manager, mark-read + show-read controls, manual refresh, and persisted feed/read preferences.';
+if (!state.changelog.some((c) => c.message === rssPodPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: rssPodPatch });
+}
+
 save('startup_patch_seed', { pushShared: false });
 renderAll();
 renderWeather();
 renderNbaScores();
 renderCrypto();
+renderRss();
 setInterval(renderDateTime, 1000);
 setupWeatherTimer();
 setupNbaTimer();
 setupCryptoTimer();
+setupRssTimer();
 document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => renderWeather());
 document.getElementById('nbaRefreshBtn')?.addEventListener('click', () => renderNbaScores());
 document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
@@ -4051,6 +4306,12 @@ document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
   }
   startCryptoRefreshCooldown();
   renderCrypto({ manual: true });
+});
+document.getElementById('rssRefreshBtn')?.addEventListener('click', () => renderRss());
+document.getElementById('rssShowReadToggle')?.addEventListener('change', (e) => {
+  state.rss.showRead = !!e.target.checked;
+  save('rss_show_read_toggled');
+  renderRss({ skipFetch: true });
 });
 updateCryptoRefreshButton();
 
@@ -4100,8 +4361,10 @@ hydrateStateFromSharedApi().then((hydrated) => {
   renderWeather();
   renderNbaScores();
   renderCrypto();
+  renderRss();
   setupWeatherTimer();
   setupNbaTimer();
   setupCryptoTimer();
+  setupRssTimer();
   flushPendingSharedPush('startup_flush_pending_after_hydration');
 });
