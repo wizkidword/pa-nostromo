@@ -1,0 +1,53 @@
+{
+  "projects": [],
+  "tasks": [],
+  "notes": [],
+  "ideas": [],
+  "reminders": [],
+  "settings": {
+    "theme": "dark",
+    "weatherIntervalMin": 15,
+    "defaultTaskColumn": "inbox"
+  },
+  "layout": {
+    "utilityRows": [
+      ["shortcuts"],
+      ["date-time", "calendar", "weather"],
+      ["nba-scores", "crypto-tracker", "rss-feed"],
+      ["camera-feed", "live-streams"],
+      ["voice-note", "voice-to-rowan", "music-player"]
+    ],
+    "visibility": {
+      "shortcuts": true,
+      "date-time": true,
+      "calendar": true,
+      "weather": true,
+      "nba-scores": true,
+      "crypto-tracker": true,
+      "rss-feed": true,
+      "camera-feed": true,
+      "live-streams": true,
+      "voice-note": true,
+      "voice-to-rowan": true,
+      "music-player": true
+    }
+  },
+  "cryptoWatchlist": ["bitcoin", "ethereum"],
+  "cryptoHoldings": {},
+  "rss": {
+    "feeds": [],
+    "items": [],
+    "readItemIds": [],
+    "showRead": false,
+    "refreshIntervalMin": 30,
+    "lastUpdatedAt": "",
+    "lastError": ""
+  },
+  "changelog": [
+    {
+      "id": "qa-reset",
+      "ts": "2026-03-12T00:00:00.000Z",
+      "message": "QA reset baseline applied."
+    }
+  ]
+}

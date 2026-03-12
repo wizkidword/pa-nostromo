@@ -11,6 +11,8 @@ const CRYPTO_FAILURE_BACKOFF_MAX_MS = 3 * 60 * 1000;
 const SHARED_STATE_API = '/api/state';
 const SHARED_STATE_BACKUPS_API = '/api/state/backups';
 const SHORTCUT_GLOBAL_PROJECT_ID = '__global__';
+const CRYPTO_PROXY_API = '/api/crypto';
+const debugCounters = window.MissionControlModules?.debug || null;
 
 const COLUMNS = [
   ['inbox', 'Inbox'],
@@ -389,6 +391,7 @@ function load(){
       tag: String(f?.tag || '').trim().slice(0, 40),
       addedAt: f?.addedAt || now(),
     })).filter((f) => /^https?:\/\//i.test(f.url))
+      .sort((a, b) => String(a.addedAt || '').localeCompare(String(b.addedAt || '')) || String(a.id || '').localeCompare(String(b.id || '')))
     : [];
   state.rss.items = Array.isArray(state.rss.items)
     ? state.rss.items.map((item) => ({
@@ -1107,7 +1110,7 @@ async function getCoinDirectory(force = false){
     } catch {}
   }
 
-  const res = await fetch('https://api.coingecko.com/api/v3/coins/list?include_platform=false');
+  const res = await fetch(`${CRYPTO_PROXY_API}/coins/list?include_platform=false`);
   const coins = await res.json();
   coinDirectory = Array.isArray(coins) ? coins : [];
 
@@ -1272,7 +1275,7 @@ async function fetchTopSymbolMapWithFailover(){
   for (const provider of ['coingecko', 'coincap']) {
     try {
       if (provider === 'coingecko') {
-        const topMapCoins = await fetchJsonWithTimeout('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false');
+        const topMapCoins = await fetchJsonWithTimeout(`${CRYPTO_PROXY_API}/coingecko/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false`);
         if (Array.isArray(topMapCoins)) {
           for (const c of topMapCoins) {
             const sym = String(c.symbol || '').toLowerCase();
@@ -1281,7 +1284,7 @@ async function fetchTopSymbolMapWithFailover(){
           }
         }
       } else {
-        const topAssets = await fetchJsonWithTimeout('https://api.coincap.io/v2/assets?limit=300');
+        const topAssets = await fetchJsonWithTimeout(`${CRYPTO_PROXY_API}/coincap/assets?limit=300`);
         const assets = Array.isArray(topAssets?.data) ? topAssets.data : [];
         for (const a of assets) {
           const sym = String(a?.symbol || '').toLowerCase();
@@ -1304,7 +1307,7 @@ async function fetchTopSymbolMapWithFailover(){
 
 async function fetchWatchFromCoinGecko(watchIds){
   if (!watchIds.length) return [];
-  const watchUrl = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${encodeURIComponent(watchIds.join(','))}&order=market_cap_desc&sparkline=false&price_change_percentage=24h`;
+  const watchUrl = `${CRYPTO_PROXY_API}/coingecko/coins/markets?vs_currency=usd&ids=${encodeURIComponent(watchIds.join(','))}&order=market_cap_desc&sparkline=false&price_change_percentage=24h`;
   const watchRes = await fetchJsonWithTimeout(watchUrl);
   const watch = Array.isArray(watchRes) ? watchRes : [];
   return watch.map((c) => ({
@@ -1323,7 +1326,7 @@ async function fetchWatchFromCoinCap(watchIds){
   const symbols = [...new Set(watchIds.map((id) => idToSymbol.get(id)).filter(Boolean))];
   if (!symbols.length) return [];
 
-  const assetsRes = await fetchJsonWithTimeout('https://api.coincap.io/v2/assets?limit=2000');
+  const assetsRes = await fetchJsonWithTimeout(`${CRYPTO_PROXY_API}/coincap/assets?limit=2000`);
   const assets = Array.isArray(assetsRes?.data) ? assetsRes.data : [];
   const symbolSet = new Set(symbols.map((s) => String(s || '').toUpperCase()));
   const bySymbol = new Map();
@@ -1359,7 +1362,7 @@ async function fetchWatchFromCryptoCompare(watchIds){
   if (!symbols.length) return [];
 
   const fsyms = symbols.join(',');
-  const priceUrl = `https://min-api.cryptocompare.com/data/pricemultifull?fsyms=${encodeURIComponent(fsyms)}&tsyms=USD`;
+  const priceUrl = `${CRYPTO_PROXY_API}/cryptocompare/data/pricemultifull?fsyms=${encodeURIComponent(fsyms)}&tsyms=USD`;
   const res = await fetchJsonWithTimeout(priceUrl);
   const raw = res?.RAW || {};
 
@@ -1780,7 +1783,10 @@ function mergeRssItems(existingItems, incomingItems){
   return [...map.values()].sort((a, b) => {
     const ta = Date.parse(a.publishedAt || '') || 0;
     const tb = Date.parse(b.publishedAt || '') || 0;
-    return tb - ta;
+    if (tb !== ta) return tb - ta;
+    const ka = `${String(a.id || '')}|${String(a.link || '')}|${String(a.title || '')}`;
+    const kb = `${String(b.id || '')}|${String(b.link || '')}|${String(b.title || '')}`;
+    return ka.localeCompare(kb);
   }).slice(0, 200);
 }
 
@@ -3863,12 +3869,20 @@ function getPodRegistry(){
   return window.MissionControlModules?.podRegistry || null;
 }
 
+function invokeLegacyRenderSafe(legacyRender){
+  if (typeof legacyRender !== 'function') return;
+  try {
+    const out = legacyRender();
+    if (out && typeof out.then === 'function') out.catch(() => {});
+  } catch {}
+}
+
 function runPodLifecycleAction(action, podId, legacyRender, extraCtx = {}){
   const registry = getPodRegistry();
   const invoke = registry && typeof registry[action] === 'function' ? registry[action].bind(registry) : null;
   if (!invoke) {
     if (action === 'mount' || action === 'refresh' || action === 'render') {
-      if (typeof legacyRender === 'function') legacyRender();
+      invokeLegacyRenderSafe(legacyRender);
       return { ok: true, reason: 'legacy_fallback' };
     }
     return { ok: true, reason: 'no_registry' };
@@ -3877,8 +3891,8 @@ function runPodLifecycleAction(action, podId, legacyRender, extraCtx = {}){
   const result = invoke(podId, { state, legacyRender, ...extraCtx });
   if (result?.ok) return result;
 
-  if ((action === 'mount' || action === 'refresh' || action === 'render') && typeof legacyRender === 'function') {
-    legacyRender();
+  if (action === 'mount' || action === 'refresh' || action === 'render') {
+    invokeLegacyRenderSafe(legacyRender);
     return { ok: true, reason: 'legacy_fallback' };
   }
 
@@ -3889,19 +3903,23 @@ function renderPodWithFallback(podId, legacyRender){
   return runPodLifecycleAction('mount', podId, legacyRender);
 }
 
-function renderWeatherPod(){
+function renderWeatherPod(options = {}){
+  if (options.manual) debugCounters?.bumpRefresh?.('weather', 'manual_refresh');
   renderPodWithFallback('weather', renderWeather);
 }
 
-function renderNbaPod(){
+function renderNbaPod(options = {}){
+  if (options.manual) debugCounters?.bumpRefresh?.('nba-scores', 'manual_refresh');
   renderPodWithFallback('nba-scores', renderNbaScores);
 }
 
 function renderCryptoPod(options = {}){
+  if (options.manual) debugCounters?.bumpRefresh?.('crypto-tracker', 'manual_refresh');
   renderPodWithFallback('crypto-tracker', () => renderCrypto(options));
 }
 
 function renderRssPod(options = {}){
+  if (options.manual) debugCounters?.bumpRefresh?.('rss-feed', 'manual_refresh');
   renderPodWithFallback('rss-feed', () => renderRss(options));
 }
 
@@ -5304,8 +5322,8 @@ if (!state.changelog.some((c) => c.message === liveStreamsPhase2APatch)) {
 save('startup_patch_seed', { pushShared: false });
 renderAll();
 setInterval(renderDateTime, 1000);
-document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => renderWeatherPod());
-document.getElementById('nbaRefreshBtn')?.addEventListener('click', () => renderNbaPod());
+document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => renderWeatherPod({ manual: true }));
+document.getElementById('nbaRefreshBtn')?.addEventListener('click', () => renderNbaPod({ manual: true }));
 document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
   if (Date.now() < cryptoRefreshCooldownUntil) {
     updateCryptoRefreshButton();
@@ -5314,7 +5332,7 @@ document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
   startCryptoRefreshCooldown();
   renderCryptoPod({ manual: true });
 });
-document.getElementById('rssRefreshBtn')?.addEventListener('click', () => renderRssPod());
+document.getElementById('rssRefreshBtn')?.addEventListener('click', () => renderRssPod({ manual: true }));
 document.getElementById('rssShowReadToggle')?.addEventListener('change', (e) => {
   state.rss.showRead = !!e.target.checked;
   save('rss_show_read_toggled');
@@ -5352,6 +5370,28 @@ if (colSelInit) colSelInit.value = state.settings.defaultTaskColumn;
 
 enableProjectDragScroll();
 enableBoardDragScroll();
+
+window.addEventListener('storage', (event) => {
+  if (event.key !== STORAGE_KEY || !event.newValue) return;
+  try {
+    const incoming = JSON.parse(event.newValue);
+    if (!incoming || typeof incoming !== 'object') return;
+    state = load();
+    renderAll();
+  } catch {}
+});
+
+window.__MISSION_CONTROL_QA__ = {
+  resetLocalState(){
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(CRYPTO_DIR_CACHE_KEY);
+    localStorage.removeItem(CRYPTO_WATCH_CACHE_KEY);
+    location.reload();
+  },
+  debugSnapshot(){
+    return window.__MISSION_CONTROL_DEBUG__?.snapshot?.() || {};
+  },
+};
 
 // Cross-browser sync bootstrap: pull shared disk-backed state if available.
 hydrateStateFromSharedApi().then((hydrated) => {

@@ -1,6 +1,7 @@
 (function initMissionControlPodRegistry(global){
   const root = global.MissionControlModules = global.MissionControlModules || {};
   const normalizePodDefinition = root.podContract?.normalizePodDefinition;
+  const debug = root.debug;
 
   const pods = new Map();
   const runtimes = new Map();
@@ -64,6 +65,7 @@
     if (!out.ok) return out;
 
     runtime.initialized = true;
+    debug?.bumpLifecycle?.(pod.id, 'init');
     return { ok: true, podId: pod.id, phase: 'init' };
   }
 
@@ -89,8 +91,10 @@
       const mountResult = runSafely(pod.id, 'mount', () => callHook(pod.lifecycle?.mount, ctx));
       if (!mountResult.ok) return mountResult;
       runtime.mounted = true;
+      debug?.bumpLifecycle?.(pod.id, 'mount');
     }
 
+    debug?.bumpRefresh?.(pod.id, 'registry_render');
     return { ok: true, podId: pod.id, phase: 'mount' };
   }
 
@@ -107,6 +111,7 @@
     const out = runSafely(pod.id, 'refresh', () => callHook(pod.lifecycle?.refresh, ctx, pod.render));
     if (!out.ok) return out;
 
+    debug?.bumpRefresh?.(pod.id, 'registry_refresh');
     return { ok: true, podId: pod.id, phase: 'refresh' };
   }
 
@@ -121,6 +126,7 @@
     if (!out.ok) return out;
 
     runtime.mounted = false;
+    debug?.bumpLifecycle?.(pod.id, 'unmount');
     return { ok: true, podId: pod.id, phase: 'unmount' };
   }
 
@@ -140,6 +146,7 @@
     if (!out.ok) return out;
 
     runtime.initialized = false;
+    debug?.bumpLifecycle?.(pod.id, 'destroy');
     return { ok: true, podId: pod.id, phase: 'destroy' };
   }
 

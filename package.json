@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node server.js",
     "lint": "node scripts/guardrails-check.js",
-    "check": "node --check app.js && node --check server.js && npm run lint"
+    "check": "node --check app.js && node --check server.js && npm run lint",
+    "qa:reset-state": "node scripts/qa-reset-state.mjs --yes",
+    "qa:smoke:1d1": "node scripts/qa-smoke-phase-1d-1.mjs"
   },
   "license": "MIT"
 }

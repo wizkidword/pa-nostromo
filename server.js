@@ -70,6 +70,8 @@ const RSS_FETCH_ALLOW_REMOTE = parseBool(process.env.RSS_FETCH_ALLOW_REMOTE);
 const RSS_FETCH_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.RSS_FETCH_TIMEOUT_MS, 12000));
 const RSS_FETCH_MAX_BYTES = Math.max(128 * 1024, parsePositiveInt(process.env.RSS_FETCH_MAX_BYTES, 2 * 1024 * 1024));
 const RSS_FETCH_MAX_FEEDS = Math.max(1, parsePositiveInt(process.env.RSS_FETCH_MAX_FEEDS, 12));
+const CRYPTO_PROXY_ALLOW_REMOTE = parseBool(process.env.CRYPTO_PROXY_ALLOW_REMOTE);
+const CRYPTO_PROXY_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.CRYPTO_PROXY_TIMEOUT_MS, 10000));
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -682,7 +684,11 @@ function parseFeedXml(xmlRaw, feedUrl) {
     const guid = stripTags(extractTagValue(block, ['guid', 'id']));
     const summaryRaw = extractTagValue(block, isAtom ? ['summary', 'content'] : ['description', 'content:encoded']);
     const publishedRaw = extractTagValue(block, isAtom ? ['updated', 'published'] : ['pubDate', 'dc:date']);
-    const publishedAt = publishedRaw ? new Date(publishedRaw).toISOString() : '';
+    let publishedAt = '';
+    if (publishedRaw) {
+      const parsed = new Date(publishedRaw);
+      if (!Number.isNaN(parsed.getTime())) publishedAt = parsed.toISOString();
+    }
     const summary = stripTags(summaryRaw).slice(0, 220);
 
     const titleFromTag = stripTags(extractTagValue(block, 'title'));
@@ -734,6 +740,70 @@ async function fetchFeedXml(url) {
     }
 
     return buf.toString('utf8');
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+const CRYPTO_PROXY_TARGETS = [
+  { prefix: '/api/crypto/coins/list', upstream: 'https://api.coingecko.com/api/v3/coins/list' },
+  { prefix: '/api/crypto/coingecko/coins/markets', upstream: 'https://api.coingecko.com/api/v3/coins/markets' },
+  { prefix: '/api/crypto/coincap/assets', upstream: 'https://api.coincap.io/v2/assets' },
+  { prefix: '/api/crypto/cryptocompare/data/pricemultifull', upstream: 'https://min-api.cryptocompare.com/data/pricemultifull' },
+];
+
+async function handleApiCryptoProxy(req, res) {
+  if (req.method !== 'GET') {
+    return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/crypto/*.' });
+  }
+
+  if (!CRYPTO_PROXY_ALLOW_REMOTE && !isLocalRequest(req)) {
+    return sendJson(res, 403, {
+      ok: false,
+      error: 'local_only',
+      message: 'Crypto proxy endpoint is local-only by default. Set CRYPTO_PROXY_ALLOW_REMOTE=1 to allow remote requests.',
+    });
+  }
+
+  const reqUrl = new URL(req.url || '/api/crypto/coins/list', `http://localhost:${PORT}`);
+  const route = CRYPTO_PROXY_TARGETS.find((entry) => reqUrl.pathname === entry.prefix);
+  if (!route) {
+    return sendJson(res, 404, { ok: false, error: 'unknown_crypto_route', message: 'Unsupported crypto proxy route.' });
+  }
+
+  const upstreamUrl = new URL(route.upstream);
+  reqUrl.searchParams.forEach((value, key) => upstreamUrl.searchParams.set(key, value));
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CRYPTO_PROXY_TIMEOUT_MS);
+  try {
+    const upstream = await fetch(upstreamUrl, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'mission-control-lite-crypto-proxy/1.0',
+        'Accept': 'application/json, text/plain;q=0.8, */*;q=0.5',
+      },
+    });
+
+    if (!upstream.ok) {
+      return sendJson(res, upstream.status, {
+        ok: false,
+        error: 'crypto_upstream_error',
+        status: upstream.status,
+        message: `Upstream request failed (HTTP ${upstream.status}).`,
+      });
+    }
+
+    const json = await upstream.json();
+    return sendJson(res, 200, json);
+  } catch (err) {
+    const isAbort = String(err?.name || '') === 'AbortError';
+    return sendJson(res, isAbort ? 504 : 502, {
+      ok: false,
+      error: isAbort ? 'timeout' : 'crypto_proxy_fetch_failed',
+      message: isAbort ? 'Crypto upstream request timed out.' : String(err?.message || err),
+    });
   } finally {
     clearTimeout(timeout);
   }
@@ -823,6 +893,7 @@ const server = http.createServer(async (req, res) => {
   if ((req.url || '').startsWith('/api/rowan-send')) return handleApiRowanSend(req, res);
   if ((req.url || '').startsWith('/api/camera-snapshot')) return handleApiCameraSnapshot(req, res);
   if ((req.url || '').startsWith('/api/rss/fetch')) return handleApiRssFetch(req, res);
+  if ((req.url || '').startsWith('/api/crypto/')) return handleApiCryptoProxy(req, res);
   return handleStatic(req, res);
 });
 
