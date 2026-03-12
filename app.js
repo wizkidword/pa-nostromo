@@ -219,9 +219,14 @@ let voiceToRowanManualStop = false;
 let voiceToRowanLastError = '';
 let sharedSaveTimer = null;
 let sharedHydrationResolved = false;
+let sharedHydrationLastOutcome = 'pending';
 let sharedPushPendingUntilHydration = false;
 let sharedHydrateInFlight = null;
 let sharedHydrateSeq = 0;
+let sharedHydrateScheduledTimer = null;
+let sharedHydrateQueuedReason = '';
+let sharedHydrateLastRunAt = 0;
+const SHARED_HYDRATE_MIN_INTERVAL_MS = 250;
 let suppressCrossTabSync = false;
 let sharedSyncChannel = null;
 let undoState = {
@@ -574,17 +579,39 @@ function broadcastCrossTabSync(eventType = 'state_changed', meta = {}){
   } catch {}
 }
 
-async function scheduleSharedHydrate(reason = 'cross_tab_sync'){
+async function runSharedHydrateNow(){
   if (sharedHydrateInFlight) return sharedHydrateInFlight;
   const seq = ++sharedHydrateSeq;
+  sharedHydrateLastRunAt = Date.now();
   sharedHydrateInFlight = (async () => {
     const hydrated = await hydrateStateFromSharedApi();
-    if (hydrated && seq == sharedHydrateSeq) renderAll();
+    if (hydrated && seq === sharedHydrateSeq) renderAll();
     return hydrated;
   })().finally(() => {
     sharedHydrateInFlight = null;
   });
   return sharedHydrateInFlight;
+}
+
+async function scheduleSharedHydrate(reason = 'cross_tab_sync'){
+  if (sharedHydrateInFlight) return sharedHydrateInFlight;
+  const elapsed = Date.now() - sharedHydrateLastRunAt;
+  if (elapsed >= SHARED_HYDRATE_MIN_INTERVAL_MS) {
+    return runSharedHydrateNow();
+  }
+
+  sharedHydrateQueuedReason = reason;
+  if (sharedHydrateScheduledTimer) return Promise.resolve(false);
+
+  const waitMs = Math.max(0, SHARED_HYDRATE_MIN_INTERVAL_MS - elapsed);
+  sharedHydrateScheduledTimer = setTimeout(() => {
+    sharedHydrateScheduledTimer = null;
+    const queued = sharedHydrateQueuedReason || 'queued_cross_tab_sync';
+    sharedHydrateQueuedReason = '';
+    runSharedHydrateNow(queued);
+  }, waitMs);
+
+  return Promise.resolve(false);
 }
 
 async function hydrateStateFromSharedApi(){
@@ -4310,6 +4337,7 @@ function renderAll(){
 
 function renderProjects(){
   const wrap = document.getElementById('projectDirectory');
+  if (!wrap) return;
   wrap.innerHTML = state.projects.map(p=>`
     <div class="project-item">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
@@ -4327,13 +4355,16 @@ function renderProjects(){
 }
 
 function renderStats(){
+  const wrap = document.getElementById('stats');
+  if (!wrap) return;
+
   const open = state.tasks.filter(t=>t.column!=='done').length;
   const blocked = state.tasks.filter(t=>t.column==='waiting_blocked').length;
   const approvals = state.tasks.filter(t=>t.blockerType==='approval' && t.column==='waiting_blocked').length;
   const doneWeek = state.tasks.filter(t=>t.column==='done' && daysAgo(t.updatedAt)<=7).length;
 
   const notesCount = state.notes.length;
-  document.getElementById('stats').innerHTML = [
+  wrap.innerHTML = [
     ['Open Tasks', open],
     ['Waiting/Blocked', blocked],
     ['Needs Approval', approvals],
@@ -5675,11 +5706,21 @@ window.__MISSION_CONTROL_QA__ = {
   undoDebug(){
     return { ...undoState, timer: !!undoState.timer };
   },
+  syncDebug(){
+    return {
+      sharedHydrationResolved,
+      sharedHydrationLastOutcome,
+      sharedHydrateInFlight: !!sharedHydrateInFlight,
+      sharedHydrateLastRunAt,
+      sharedPushPendingUntilHydration,
+    };
+  },
 };
 
 // Cross-browser sync bootstrap: pull shared disk-backed state if available.
 hydrateStateFromSharedApi().then((hydrated) => {
   sharedHydrationResolved = true;
+  sharedHydrationLastOutcome = hydrated ? 'hydrated' : 'seeded_local';
 
   if (!hydrated) {
     // Seed the shared store from the first browser that opens the dashboard.
@@ -5690,4 +5731,8 @@ hydrateStateFromSharedApi().then((hydrated) => {
 
   renderAll();
   flushPendingSharedPush('startup_flush_pending_after_hydration');
+}).catch(() => {
+  sharedHydrationResolved = true;
+  sharedHydrationLastOutcome = 'hydrate_failed_local_only';
+  flushPendingSharedPush('startup_flush_pending_after_hydrate_error');
 });

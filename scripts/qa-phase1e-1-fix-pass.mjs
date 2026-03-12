@@ -60,9 +60,20 @@ async function main() {
   await p1.waitForSelector('#openSettingsBtn');
   await p2.waitForSelector('#openSettingsBtn');
 
+  const waitForSyncReady = async (page) => {
+    await page.waitForFunction(() => {
+      const qa = window.__MISSION_CONTROL_QA__;
+      if (!qa || typeof qa.syncDebug !== 'function') return false;
+      const sync = qa.syncDebug();
+      return !!sync?.sharedHydrationResolved;
+    }, null, { timeout: 30000 });
+  };
+
+  await Promise.all([waitForSyncReady(p1), waitForSyncReady(p2)]);
+
   // delete + undo cross-tab for note
   const noteInputSelector = '#notesBoardToday .note-card input[data-field="title"], #notesBoardBacklog .note-card input[data-field="title"]';
-  await p1.waitForFunction(() => [...document.querySelectorAll('#notesBoardToday .note-card input[data-field="title"], #notesBoardBacklog .note-card input[data-field="title"]')].some((x) => x.value === 'QA Note 1E.1'));
+  await p1.waitForFunction(() => [...document.querySelectorAll('#notesBoardToday .note-card input[data-field="title"], #notesBoardBacklog .note-card input[data-field="title"]')].some((x) => x.value === 'QA Note 1E.1'), null, { timeout: 30000 });
   await p1.locator('#notesBoardToday .note-card:has(input[value="QA Note 1E.1"]), #notesBoardBacklog .note-card:has(input[value="QA Note 1E.1"])').locator('[data-action="delete"]').first().click();
   await p2.waitForFunction(() => ![...document.querySelectorAll('#notesBoardToday .note-card input[data-field="title"], #notesBoardBacklog .note-card input[data-field="title"]')].some((x) => x.value === 'QA Note 1E.1'));
   await p1.$eval('#stateSafetyUndoBtn', (el) => el.click());
@@ -70,7 +81,7 @@ async function main() {
   ok('cross-tab delete+undo', 'note delete propagated and undo restored in tab2');
 
   // expiry determinism: task delete should stay deleted after 12s
-  await p1.locator('.task-edit-btn').first().click();
+  await p1.locator('.task', { hasText: 'QA Task 1E.1' }).locator('.task-edit-btn').first().click();
   await p1.click('#editTaskDeleteBtn');
   await p1.waitForSelector('#stateSafetyUndoBar:not([hidden])');
   await p1.waitForTimeout(12500);

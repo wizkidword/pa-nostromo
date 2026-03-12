@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-const baseUrl = process.env.MC_BASE_URL || 'http://localhost:4187';
+const baseUrl = process.env.BASE_URL || process.env.MC_BASE_URL || 'http://localhost:4191';
 const checks = [];
 
 async function run(name, fn){
@@ -18,6 +18,11 @@ await run('state endpoint reachable', async () => {
 
 await run('crypto proxy route reachable', async () => {
   const res = await fetch(`${baseUrl}/api/crypto/coins/list?include_platform=false`);
+  if (res.status === 404) throw new Error('HTTP 404');
+
+  // Upstream rate-limits are acceptable for this smoke check; route only needs to be wired.
+  if (res.status === 429) return;
+
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   if (!Array.isArray(data)) throw new Error('Expected array from proxy coins/list');
