@@ -234,7 +234,8 @@ Live Streams V1 is a provider-preset stream launcher designed for transparent em
 - **Load / Start** resolves the selected preset into either iframe embed mode or direct `<video>` mode (for media-like URLs).
 - **Stop** clears active playback and returns to idle state.
 - **Status line** always reports loading/success/error/fallback guidance (no silent failures).
-- **Open in new tab** is available as a first-class fallback when provider framing policy blocks iframe playback.
+- **Pop-out Player** opens the resolved external stream URL in a controlled popup window (`noopener,noreferrer`, fixed size, resizable).
+- **Open in new tab** remains available as fallback when provider framing policy blocks iframe playback.
 - Latest selected source type and per-source input values are persisted in shared state.
 - Optional lightweight saved presets are supported in-pod.
 
@@ -242,7 +243,8 @@ Live Streams V1 is a provider-preset stream launcher designed for transparent em
 
 - **YouTube Live:** uses YouTube embed endpoints; channel/live resolution works best with channel IDs or valid live/video URLs.
 - **Twitch:** embed requires `parent=<current-hostname>`; playback can fail if your host isn’t accepted by Twitch embed policy.
-- **Kick / Vaughn:** embed attempted via provider player endpoints; some channels may block framing.
+- **Kick:** embed attempted via provider player endpoints; some channels may block framing.
+- **Vaughn:** channel names and common Vaughn URLs (page/embed/popout forms) are normalized to explicit `https://vaughn.live/embed/<channel>` for iframe use; some channels may still block framing.
 - **Generic URL:** `rtmp://` is not browser-playable directly (status prompts fallback); HLS/MP4/WebM may work depending on browser codec/HLS support.
 - **Local URL:** intended for local-hosted stream pages/media (e.g., LAN service or localhost); browser mixed-content/CORS/autoplay rules still apply.
 
@@ -259,6 +261,7 @@ Early alpha. Built for real daily use and rapid iteration.
 
 ## Patch Notes
 
+- 2026-03-11: Live Streams Vaughn + fallback patch: Vaughn input normalization now accepts channel/page/embed/popout forms and resolves to explicit embed targets; added **Pop-out Player** fallback button (controlled popup with noopener/noreferrer) while keeping Open in new tab behavior.
 - 2026-03-11: Live Streams pod (V1): added provider presets (YouTube/Twitch/Kick/Vaughn/Generic/Local), source-specific input handling, load/stop controls, persisted latest source values, explicit iframe/media fallback status messaging, optional saved presets, and open-in-new-tab fallback.
 - 2026-03-11: RSS parser reliability patch: improved item title extraction for CDATA + HTML/XML entity encoded titles, added resilient fallback chain (title tag → summary excerpt → URL-derived title), and reduced avoidable `Untitled` entries without changing link/date/summary behavior.
 - 2026-03-11: Personalized RSS Feed pod (V1): added server-side RSS fetch/parse endpoint, Settings feed manager (add/remove + optional tag), manual refresh + configurable auto-refresh, mark-read behavior that removes items from active list immediately, and persisted read/show-read/source state.

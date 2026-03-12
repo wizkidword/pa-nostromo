@@ -2676,6 +2676,65 @@ function parseChannelLikeInput(raw, providers = []){
   return value.replace(/^@/, '').split(/[/?#]/)[0] || '';
 }
 
+function normalizeVaughnInput(raw){
+  const value = String(raw || '').trim();
+  if (!value) return null;
+
+  const sanitizeChannel = (candidate) => String(candidate || '')
+    .trim()
+    .replace(/^@/, '')
+    .split(/[/?#]/)[0]
+    .replace(/[^a-z0-9_-]/gi, '');
+
+  if (!/^https?:\/\//i.test(value)) {
+    const channel = sanitizeChannel(value);
+    if (!channel) return null;
+    return {
+      channel,
+      embedUrl: `https://vaughn.live/embed/${encodeURIComponent(channel)}`,
+      externalUrl: `https://vaughn.live/${encodeURIComponent(channel)}`,
+    };
+  }
+
+  try {
+    const u = new URL(value);
+    const host = u.hostname.toLowerCase();
+    if (!host.includes('vaughn.live')) return null;
+    const pathSeg = (u.pathname || '').split('/').filter(Boolean).map((s) => s.replace(/^@/, ''));
+    if (!pathSeg.length) return null;
+
+    let candidate = pathSeg[pathSeg.length - 1];
+    if (pathSeg[0] && ['embed', 'popout', 'chat'].includes(pathSeg[0].toLowerCase()) && pathSeg[1]) {
+      candidate = pathSeg[1];
+    }
+    const channel = sanitizeChannel(candidate);
+    if (!channel) return null;
+    return {
+      channel,
+      embedUrl: `https://vaughn.live/embed/${encodeURIComponent(channel)}`,
+      externalUrl: `https://vaughn.live/${encodeURIComponent(channel)}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function openLiveStreamsPopout(url){
+  if (!url) return false;
+  const popout = window.open(url, '_blank', [
+    'popup=yes',
+    'noopener',
+    'noreferrer',
+    'width=1280',
+    'height=720',
+    'resizable=yes',
+    'scrollbars=yes',
+  ].join(','));
+  if (!popout) return false;
+  try { popout.opener = null; } catch {}
+  return true;
+}
+
 function buildLiveStreamTarget(){
   const sourceType = state.liveStreams.sourceType;
   const inputValue = String(state.liveStreams.inputs[sourceType] || '').trim();
@@ -2738,13 +2797,13 @@ function buildLiveStreamTarget(){
   }
 
   if (sourceType === 'vaughn') {
-    const channel = parseChannelLikeInput(inputValue, ['vaughn.live']);
-    if (!channel) return { error: 'Invalid Vaughn Live channel input.' };
+    const normalized = normalizeVaughnInput(inputValue);
+    if (!normalized) return { error: 'Invalid Vaughn Live input. Use a channel name or vaughn.live URL.' };
     return {
-      embedUrl: `https://vaughn.live/embed/${encodeURIComponent(channel)}`,
-      externalUrl: /^https?:\/\//i.test(inputValue) ? inputValue : `https://vaughn.live/${encodeURIComponent(channel)}`,
+      embedUrl: normalized.embedUrl,
+      externalUrl: normalized.externalUrl,
       renderMode: 'iframe',
-      providerNote: 'Vaughn embed attempted; some channels may block framing.',
+      providerNote: 'Vaughn embed mode (normalized to explicit /embed/{channel}). Some channels may block framing.',
     };
   }
 
@@ -2786,6 +2845,7 @@ function getLiveStreamsEls(){
     input: root?.querySelector('[data-live-role="input"]') || null,
     startBtn: root?.querySelector('[data-live-role="start"]') || null,
     stopBtn: root?.querySelector('[data-live-role="stop"]') || null,
+    popoutBtn: root?.querySelector('[data-live-role="popout"]') || null,
     openBtn: root?.querySelector('[data-live-role="open"]') || null,
     frame: root?.querySelector('[data-live-role="frame"]') || null,
     video: root?.querySelector('[data-live-role="video"]') || null,
@@ -2825,7 +2885,7 @@ function startLiveStream(){
     state.liveStreams.active = false;
     save();
     renderLiveStreamsPod();
-    setLiveStreamsStatus(`${target.error}${state.liveStreams.externalUrl ? ' Use Open in new tab when applicable.' : ''}`);
+    setLiveStreamsStatus(`${target.error}${state.liveStreams.externalUrl ? ' Use Pop-out Player or Open in new tab when applicable.' : ''}`);
     return;
   }
 
@@ -2876,6 +2936,7 @@ function renderLiveStreamsPod(){
       <div class="row-wrap">
         <button data-live-role="start" class="btn">Load / Start</button>
         <button data-live-role="stop" class="btn ghost" ${state.liveStreams.active ? '' : 'disabled'}>Stop</button>
+        <button data-live-role="popout" class="btn ghost" ${state.liveStreams.externalUrl ? '' : 'disabled'}>Pop-out Player</button>
         <button data-live-role="open" class="btn ghost" ${state.liveStreams.externalUrl ? '' : 'disabled'}>Open in new tab</button>
       </div>
       <div class="row-wrap">
@@ -2888,7 +2949,7 @@ function renderLiveStreamsPod(){
         <iframe data-live-role="frame" title="Live stream" referrerpolicy="no-referrer" allow="autoplay; fullscreen" ${isFrame ? '' : 'style="display:none;"'}></iframe>
         <video data-live-role="video" controls autoplay playsinline ${isVideo ? '' : 'style="display:none;"'}></video>
       </div>
-      <div class="note-meta mt6">Some providers block iframe embeds with X-Frame-Options/CSP. If playback fails or stays blank, use <strong>Open in new tab</strong>.</div>
+      <div class="note-meta mt6">Some providers block iframe embeds with X-Frame-Options/CSP. If playback fails or stays blank, use <strong>Pop-out Player</strong> or <strong>Open in new tab</strong>.</div>
     </div>
   `;
 
@@ -2920,6 +2981,16 @@ function renderLiveStreamsPod(){
     event.preventDefault();
     event.stopPropagation();
     stopLiveStream();
+  });
+
+  els.popoutBtn?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!state.liveStreams.externalUrl) return;
+    const opened = openLiveStreamsPopout(state.liveStreams.externalUrl);
+    setLiveStreamsStatus(opened
+      ? `Opened ${liveSourceLabel(state.liveStreams.sourceType)} in Pop-out Player.`
+      : 'Pop-out blocked by browser. Allow pop-ups or use Open in new tab.');
   });
 
   els.openBtn?.addEventListener('click', (event) => {
@@ -2974,7 +3045,7 @@ function renderLiveStreamsPod(){
         state.liveStreams.status = 'error';
         state.liveStreams.lastError = 'Embed did not become ready (possibly blocked by provider framing policy).';
         save();
-        setLiveStreamsStatus(`${state.liveStreams.lastError} Use Open in new tab.`);
+        setLiveStreamsStatus(`${state.liveStreams.lastError} Use Pop-out Player or Open in new tab.`);
       }
     }, 7000);
     els.frame.addEventListener('load', () => {
@@ -2982,7 +3053,7 @@ function renderLiveStreamsPod(){
       state.liveStreams.status = 'live';
       state.liveStreams.lastError = '';
       save();
-      setLiveStreamsStatus(`Live stream loaded (${liveSourceLabel(state.liveStreams.sourceType)}). If playback is blocked, open in new tab.`);
+      setLiveStreamsStatus(`Live stream loaded (${liveSourceLabel(state.liveStreams.sourceType)}). If playback is blocked, use Pop-out Player or open in new tab.`);
     }, { once: true });
     els.frame.src = state.liveStreams.embedUrl;
   }
@@ -2998,7 +3069,7 @@ function renderLiveStreamsPod(){
       state.liveStreams.status = 'error';
       state.liveStreams.lastError = 'Browser could not play this media URL (codec/CORS/format issue).';
       save();
-      setLiveStreamsStatus(`${state.liveStreams.lastError} Try Open in new tab.`);
+      setLiveStreamsStatus(`${state.liveStreams.lastError} Try Pop-out Player or Open in new tab.`);
     };
     els.video.addEventListener('loadeddata', onLoaded, { once: true });
     els.video.addEventListener('error', onError, { once: true });
@@ -3006,7 +3077,7 @@ function renderLiveStreamsPod(){
   }
 
   if (state.liveStreams.status === 'error' && state.liveStreams.lastError) {
-    setLiveStreamsStatus(`${state.liveStreams.lastError}${state.liveStreams.externalUrl ? ' Use Open in new tab if needed.' : ''}`);
+    setLiveStreamsStatus(`${state.liveStreams.lastError}${state.liveStreams.externalUrl ? ' Use Pop-out Player or Open in new tab if needed.' : ''}`);
   } else if (state.liveStreams.status === 'loading') {
     setLiveStreamsStatus(`Loading ${liveSourceLabel(sourceType)}…`);
   } else if (!state.liveStreams.active) {
@@ -4744,6 +4815,11 @@ if (!state.changelog.some((c) => c.message === rssPodPatch)) {
 const liveStreamsPatch = 'Added Live Streams pod (V1): 6 source presets (YouTube/Twitch/Kick/Vaughn/Generic/Local), explicit embed-fallback status messaging, and persisted source inputs/presets.';
 if (!state.changelog.some((c) => c.message === liveStreamsPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: liveStreamsPatch });
+}
+
+const liveStreamsVaughnPopoutPatch = 'Patch: Live Streams Vaughn handling now normalizes channel/page/embed/popout inputs to explicit embed targets and adds a Pop-out Player fallback (controlled popup) alongside Open in new tab.';
+if (!state.changelog.some((c) => c.message === liveStreamsVaughnPopoutPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: liveStreamsVaughnPopoutPatch });
 }
 
 save('startup_patch_seed', { pushShared: false });
