@@ -392,8 +392,9 @@ function flushPendingSharedPush(reason = 'hydration_resolved'){
   pushStateToSharedApi(reason);
 }
 
-function save(reason = 'unspecified'){
+function save(reason = 'unspecified', { pushShared = true } = {}){
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (!pushShared) return;
   if (sharedSaveTimer) clearTimeout(sharedSaveTimer);
   sharedSaveTimer = setTimeout(() => {
     if (!sharedHydrationResolved) {
@@ -3934,7 +3935,7 @@ if (!state.changelog.some((c) => c.message === cameraLocalWebcamPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: cameraLocalWebcamPatch });
 }
 
-save('startup_patch_seed');
+save('startup_patch_seed', { pushShared: false });
 renderAll();
 renderWeather();
 renderNbaScores();
