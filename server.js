@@ -577,19 +577,61 @@ async function handleApiCameraSnapshot(req, res) {
 }
 
 function decodeXmlEntities(input) {
+  const named = {
+    amp: '&',
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: "'",
+    nbsp: ' ',
+  };
+  const toCodePoint = (value, fallback) => {
+    if (!Number.isInteger(value) || value < 0 || value > 0x10FFFF) return fallback;
+    try {
+      return String.fromCodePoint(value);
+    } catch {
+      return fallback;
+    }
+  };
+
   return String(input || '')
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#x27;/gi, "'")
-    .replace(/&#x2F;/gi, '/');
+    .replace(/&#(\d+);/g, (m, code) => toCodePoint(Number.parseInt(code, 10), m))
+    .replace(/&#x([\da-f]+);/gi, (m, code) => toCodePoint(Number.parseInt(code, 16), m))
+    .replace(/&([a-z]+);/gi, (m, name) => named[name.toLowerCase()] || m);
 }
 
 function stripTags(input) {
-  return decodeXmlEntities(String(input || '').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+  const decoded = decodeXmlEntities(String(input || ''));
+  return decoded.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function excerptSummary(summary, maxLen = 80) {
+  const clean = String(summary || '').trim();
+  if (!clean) return '';
+  if (clean.length <= maxLen) return clean;
+  return `${clean.slice(0, maxLen).trimEnd()}…`;
+}
+
+function deriveTitleFromUrlish(candidate, feedUrl) {
+  const urlCandidate = String(candidate || '').trim();
+  try {
+    const parsed = new URL(urlCandidate || feedUrl);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    const pathPart = parsed.pathname
+      .split('/')
+      .filter(Boolean)
+      .pop() || '';
+    const decodedPath = decodeURIComponent(pathPart)
+      .replace(/[-_]+/g, ' ')
+      .replace(/\.[a-z0-9]{1,6}$/i, '')
+      .trim();
+
+    if (decodedPath) return `${host} — ${decodedPath}`;
+    return host || 'Untitled';
+  } catch {
+    return 'Untitled';
+  }
 }
 
 function extractTagValue(block, tags) {
@@ -625,7 +667,6 @@ function parseFeedXml(xmlRaw, feedUrl) {
     : (xml.match(/<item[\s\S]*?<\/item>/gi) || []);
 
   return entryBlocks.slice(0, 40).map((block) => {
-    const title = stripTags(extractTagValue(block, 'title')) || 'Untitled';
     const link = isAtom
       ? (extractTagAttr(block, 'link', 'href') || stripTags(extractTagValue(block, 'link')))
       : stripTags(extractTagValue(block, 'link'));
@@ -634,6 +675,11 @@ function parseFeedXml(xmlRaw, feedUrl) {
     const publishedRaw = extractTagValue(block, isAtom ? ['updated', 'published'] : ['pubDate', 'dc:date']);
     const publishedAt = publishedRaw ? new Date(publishedRaw).toISOString() : '';
     const summary = stripTags(summaryRaw).slice(0, 220);
+
+    const titleFromTag = stripTags(extractTagValue(block, 'title'));
+    const titleFromSummary = excerptSummary(summary, 80);
+    const titleFallback = deriveTitleFromUrlish(link || guid, feedUrl);
+    const title = titleFromTag || titleFromSummary || titleFallback;
 
     const item = {
       id: '',

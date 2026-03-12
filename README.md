@@ -228,6 +228,7 @@ Early alpha. Built for real daily use and rapid iteration.
 
 ## Patch Notes
 
+- 2026-03-11: RSS parser reliability patch: improved item title extraction for CDATA + HTML/XML entity encoded titles, added resilient fallback chain (title tag → summary excerpt → URL-derived title), and reduced avoidable `Untitled` entries without changing link/date/summary behavior.
 - 2026-03-11: Personalized RSS Feed pod (V1): added server-side RSS fetch/parse endpoint, Settings feed manager (add/remove + optional tag), manual refresh + configurable auto-refresh, mark-read behavior that removes items from active list immediately, and persisted read/show-read/source state.
 - 2026-03-11: Sentinel stabilization pass: decoupled render pipeline from persistence via explicit `commitState(reason)`, added startup shared-sync hydration lock to prevent stale overwrite races, introduced guardrail static checks/CI, and documented smoke checks for startup sync race + stop-button isolation.
 - 2026-03-11: Camera Feed pod local-webcam patch: added **Local Webcam (Browser)** mode using `getUserMedia`, in-pod `<video>` live rendering, clean media-track start/stop lifecycle, status/error handling for permission/support/hardware issues, and optional persisted webcam device selection.
