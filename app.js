@@ -58,12 +58,13 @@ const seed = {
   },
   cameraFeed: {
     sourceUrl: '',
-    mode: 'stream', // stream | snapshot
+    mode: 'stream', // stream | snapshot | local
     refreshIntervalSec: 5,
     active: false,
     status: 'idle', // idle | loading | live | error
     lastError: '',
     useProxy: true,
+    deviceId: '',
   },
   changelog: [],
   shortcuts: [
@@ -114,6 +115,9 @@ let youtubePlayerReady = false;
 let pendingYoutubeAction = null;
 let cameraSnapshotTimer = null;
 let cameraSnapshotBust = 0;
+let cameraLocalStream = null;
+let cameraDeviceList = [];
+let cameraDeviceRefreshInFlight = false;
 let voiceNoteRecognizer = null;
 let voiceNoteListening = false;
 let voiceNoteSupported = false;
@@ -212,9 +216,10 @@ function load(){
     status: 'idle',
     lastError: '',
     useProxy: true,
+    deviceId: '',
     ...(state.cameraFeed || {}),
   };
-  state.cameraFeed.mode = state.cameraFeed.mode === 'snapshot' ? 'snapshot' : 'stream';
+  state.cameraFeed.mode = ['stream', 'snapshot', 'local'].includes(state.cameraFeed.mode) ? state.cameraFeed.mode : 'stream';
   state.cameraFeed.sourceUrl = String(state.cameraFeed.sourceUrl || '').trim();
   const refresh = Number(state.cameraFeed.refreshIntervalSec ?? 5);
   state.cameraFeed.refreshIntervalSec = Number.isFinite(refresh) ? Math.min(60, Math.max(1, Math.round(refresh))) : 5;
@@ -222,6 +227,7 @@ function load(){
   state.cameraFeed.active = !!state.cameraFeed.active;
   state.cameraFeed.lastError = String(state.cameraFeed.lastError || '').slice(0, 300);
   state.cameraFeed.useProxy = state.cameraFeed.useProxy !== false;
+  state.cameraFeed.deviceId = String(state.cameraFeed.deviceId || '');
 
   state.changelog = Array.isArray(state.changelog) ? state.changelog : [];
 
@@ -1787,6 +1793,8 @@ function getCameraFeedEls(){
     stopBtn: root?.querySelector('[data-camera-role="stop"]') || null,
     streamFrame: root?.querySelector('[data-camera-role="stream-frame"]') || null,
     snapshotImg: root?.querySelector('[data-camera-role="snapshot-img"]') || null,
+    localVideo: root?.querySelector('[data-camera-role="local-video"]') || null,
+    deviceSelect: root?.querySelector('[data-camera-role="device"]') || null,
   };
 }
 
@@ -1814,9 +1822,52 @@ function stopCameraSnapshotTimer(){
   }
 }
 
+function stopLocalCameraStream(){
+  if (cameraLocalStream) {
+    cameraLocalStream.getTracks().forEach((track) => {
+      try { track.stop(); } catch {}
+    });
+    cameraLocalStream = null;
+  }
+  const video = getCameraFeedEls().localVideo;
+  if (video) {
+    try { video.srcObject = null; } catch {}
+    video.style.display = 'none';
+  }
+}
+
+async function refreshLocalCameraDevices(){
+  const before = JSON.stringify(cameraDeviceList);
+  if (!navigator?.mediaDevices?.enumerateDevices) {
+    cameraDeviceList = [];
+    return before !== JSON.stringify(cameraDeviceList);
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    cameraDeviceList = devices
+      .filter((d) => d.kind === 'videoinput')
+      .map((d, idx) => ({
+        deviceId: String(d.deviceId || ''),
+        label: String(d.label || '').trim() || `Camera ${idx + 1}`,
+      }));
+  } catch {
+    cameraDeviceList = [];
+  }
+  return before !== JSON.stringify(cameraDeviceList);
+}
+
+function buildLocalVideoConstraints(){
+  const savedDeviceId = String(state.cameraFeed.deviceId || '');
+  if (savedDeviceId) {
+    return { video: { deviceId: { exact: savedDeviceId } }, audio: false };
+  }
+  return { video: true, audio: false };
+}
+
 function stopCameraFeed(options = {}){
   const { keepStatus = false } = options;
   stopCameraSnapshotTimer();
+  stopLocalCameraStream();
   const els = getCameraFeedEls();
   if (els.streamFrame) {
     els.streamFrame.src = 'about:blank';
@@ -1825,6 +1876,9 @@ function stopCameraFeed(options = {}){
   if (els.snapshotImg) {
     els.snapshotImg.removeAttribute('src');
     els.snapshotImg.style.display = 'none';
+  }
+  if (els.localVideo) {
+    els.localVideo.style.display = 'none';
   }
 
   state.cameraFeed.active = false;
@@ -1920,7 +1974,83 @@ function startStreamMode(){
   frame.src = sourceUrl;
 }
 
+async function startLocalMode(){
+  const els = getCameraFeedEls();
+  if (!navigator?.mediaDevices?.getUserMedia || !els.localVideo) {
+    state.cameraFeed.status = 'error';
+    state.cameraFeed.lastError = 'Local webcam is not supported in this browser/context (HTTPS required).';
+    setCameraFeedStatus(state.cameraFeed.lastError);
+    save();
+    renderCameraFeedPod();
+    return;
+  }
+
+  stopCameraSnapshotTimer();
+  stopLocalCameraStream();
+  state.cameraFeed.active = true;
+  state.cameraFeed.status = 'loading';
+  state.cameraFeed.lastError = '';
+  setCameraFeedStatus('Requesting camera permission…');
+  save();
+  renderCameraFeedPod();
+
+  try {
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(buildLocalVideoConstraints());
+    } catch (firstErr) {
+      const canFallbackToDefault = !!state.cameraFeed.deviceId && ['OverconstrainedError', 'ConstraintNotSatisfiedError', 'NotFoundError', 'DevicesNotFoundError'].includes(firstErr?.name);
+      if (!canFallbackToDefault) throw firstErr;
+      state.cameraFeed.deviceId = '';
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      setCameraFeedStatus('Selected camera unavailable. Fell back to default webcam.');
+    }
+
+    cameraLocalStream = stream;
+    const [videoTrack] = stream.getVideoTracks();
+    if (videoTrack?.getSettings) {
+      const trackDeviceId = String(videoTrack.getSettings().deviceId || '');
+      if (trackDeviceId) state.cameraFeed.deviceId = trackDeviceId;
+    }
+    await refreshLocalCameraDevices();
+
+    const video = getCameraFeedEls().localVideo;
+    if (video) {
+      video.srcObject = stream;
+      video.style.display = '';
+      try { await video.play(); } catch {}
+    }
+
+    state.cameraFeed.status = 'live';
+    state.cameraFeed.lastError = '';
+    setCameraFeedStatus('Local webcam live.');
+    save();
+    renderCameraFeedPod();
+  } catch (err) {
+    stopLocalCameraStream();
+    state.cameraFeed.active = false;
+    state.cameraFeed.status = 'error';
+    if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+      state.cameraFeed.lastError = 'Camera permission denied. Allow camera access in your browser and try again.';
+    } else if (err?.name === 'NotFoundError' || err?.name === 'DevicesNotFoundError') {
+      state.cameraFeed.lastError = 'No webcam device found.';
+    } else if (err?.name === 'NotReadableError' || err?.name === 'TrackStartError') {
+      state.cameraFeed.lastError = 'Webcam is busy or unavailable (possibly used by another app).';
+    } else {
+      state.cameraFeed.lastError = `Unable to start local webcam${err?.message ? `: ${err.message}` : '.'}`;
+    }
+    setCameraFeedStatus(state.cameraFeed.lastError);
+    save();
+    renderCameraFeedPod();
+  }
+}
+
 function startCameraFeed(){
+  if (state.cameraFeed.mode === 'local') {
+    startLocalMode();
+    return;
+  }
+
   const sourceUrl = String(state.cameraFeed.sourceUrl || '').trim();
   if (!sourceUrl) {
     state.cameraFeed.status = 'error';
@@ -1943,19 +2073,28 @@ function renderCameraFeedPod(){
   const el = document.getElementById('cameraFeedWidget');
   if (!el) return;
 
-  const mode = state.cameraFeed.mode === 'snapshot' ? 'snapshot' : 'stream';
+  const mode = ['stream', 'snapshot', 'local'].includes(state.cameraFeed.mode) ? state.cameraFeed.mode : 'stream';
   const interval = Number(state.cameraFeed.refreshIntervalSec || 5);
   const showSnapshot = state.cameraFeed.active && mode === 'snapshot';
   const showStream = state.cameraFeed.active && mode === 'stream';
+  const showLocal = state.cameraFeed.active && mode === 'local';
+  const urlDisabled = mode === 'local';
+  const hasMediaDevices = !!navigator?.mediaDevices?.getUserMedia;
+  const localSupportHint = hasMediaDevices ? '' : ' (unsupported in this browser/context)';
+  const localDeviceValue = String(state.cameraFeed.deviceId || '');
+  const localDeviceOptions = [`<option value="">Default camera</option>`, ...cameraDeviceList.map((d) => (
+    `<option value="${escapeHtml(d.deviceId)}" ${localDeviceValue === d.deviceId ? 'selected' : ''}>${escapeHtml(d.label)}</option>`
+  ))].join('');
 
   el.innerHTML = `
     <div class="camera-feed-shell" data-pod="camera-feed">
-      <input data-camera-role="url" placeholder="Camera URL (http/https)" value="${escapeHtml(state.cameraFeed.sourceUrl || '')}" />
+      <input data-camera-role="url" placeholder="Camera URL (http/https)" value="${escapeHtml(state.cameraFeed.sourceUrl || '')}" ${urlDisabled ? 'disabled' : ''} />
       <div class="row-wrap">
         <label class="camera-feed-inline-label">Mode
           <select data-camera-role="mode" class="w-auto">
             <option value="stream" ${mode === 'stream' ? 'selected' : ''}>Embed Stream</option>
             <option value="snapshot" ${mode === 'snapshot' ? 'selected' : ''}>Snapshot Refresh</option>
+            <option value="local" ${mode === 'local' ? 'selected' : ''}>Local Webcam (Browser)</option>
           </select>
         </label>
         <label class="camera-feed-inline-label">Refresh (sec)
@@ -1967,18 +2106,37 @@ function renderCameraFeedPod(){
         </label>
       </div>
       <div class="row-wrap">
+        <label class="camera-feed-inline-label ${mode === 'local' ? '' : 'is-disabled'}">Webcam Device
+          <select data-camera-role="device" class="w-auto" ${mode === 'local' ? '' : 'disabled'}>
+            ${localDeviceOptions}
+          </select>
+        </label>
+      </div>
+      <div class="row-wrap">
         <button data-camera-role="start" class="btn">Load / Start</button>
         <button data-camera-role="stop" class="btn ghost" ${state.cameraFeed.active ? '' : 'disabled'}>Stop</button>
       </div>
       <div class="camera-feed-frame-wrap mt6">
         <iframe data-camera-role="stream-frame" title="Camera feed stream" ${showStream ? '' : 'style="display:none;"'} referrerpolicy="no-referrer"></iframe>
         <img data-camera-role="snapshot-img" alt="Camera snapshot" ${showSnapshot ? '' : 'style="display:none;"'} />
+        <video data-camera-role="local-video" autoplay playsinline muted ${showLocal ? '' : 'style="display:none;"'}></video>
       </div>
-      <div class="note-meta mt6">V1 supports one active feed at a time. If embed fails, use Snapshot mode.</div>
+      <div class="note-meta mt6">V1 supports one active feed at a time. If embed fails, use Snapshot mode. Local Webcam uses browser permission${localSupportHint}.</div>
     </div>
   `;
 
   const els = getCameraFeedEls();
+
+  if (mode === 'local' && !cameraDeviceRefreshInFlight && navigator?.mediaDevices?.enumerateDevices) {
+    cameraDeviceRefreshInFlight = true;
+    refreshLocalCameraDevices().then((changed) => {
+      if (changed && document.contains(el) && state.cameraFeed.mode === 'local') {
+        renderCameraFeedPod();
+      }
+    }).finally(() => {
+      cameraDeviceRefreshInFlight = false;
+    });
+  }
 
   els.urlInput?.addEventListener('change', () => {
     state.cameraFeed.sourceUrl = String(els.urlInput.value || '').trim();
@@ -1986,12 +2144,15 @@ function renderCameraFeedPod(){
   });
 
   els.modeSelect?.addEventListener('change', () => {
-    state.cameraFeed.mode = els.modeSelect.value === 'snapshot' ? 'snapshot' : 'stream';
+    const nextMode = ['stream', 'snapshot', 'local'].includes(els.modeSelect.value) ? els.modeSelect.value : 'stream';
+    state.cameraFeed.mode = nextMode;
     save();
     stopCameraFeed({ keepStatus: true });
     setCameraFeedStatus(state.cameraFeed.mode === 'snapshot'
       ? 'Snapshot mode selected. Configure refresh + start feed.'
-      : 'Embed stream mode selected. Click Load / Start.');
+      : state.cameraFeed.mode === 'local'
+        ? 'Local webcam mode selected. Click Load / Start and allow camera permission.'
+        : 'Embed stream mode selected. Click Load / Start.');
     state.cameraFeed.status = 'idle';
     state.cameraFeed.lastError = '';
     save();
@@ -2006,6 +2167,11 @@ function renderCameraFeedPod(){
 
   els.proxyToggle?.addEventListener('change', () => {
     state.cameraFeed.useProxy = !!els.proxyToggle.checked;
+    save();
+  });
+
+  els.deviceSelect?.addEventListener('change', () => {
+    state.cameraFeed.deviceId = String(els.deviceSelect.value || '');
     save();
   });
 
@@ -2031,6 +2197,13 @@ function renderCameraFeedPod(){
     els.snapshotImg.src = cameraSnapshotUrl(state.cameraFeed.sourceUrl);
   }
 
+  if (showLocal && els.localVideo) {
+    try {
+      els.localVideo.srcObject = cameraLocalStream;
+      els.localVideo.style.display = '';
+    } catch {}
+  }
+
   if (state.cameraFeed.status === 'error' && state.cameraFeed.lastError) {
     setCameraFeedStatus(state.cameraFeed.lastError);
   } else if (state.cameraFeed.status === 'loading') {
@@ -2038,9 +2211,13 @@ function renderCameraFeedPod(){
   } else if (state.cameraFeed.status === 'live') {
     setCameraFeedStatus(mode === 'snapshot'
       ? `Live (snapshot refresh every ${state.cameraFeed.refreshIntervalSec}s${state.cameraFeed.useProxy ? ' via local proxy' : ''}).`
-      : 'Live embed active.');
+      : mode === 'local'
+        ? 'Local webcam live.'
+        : 'Live embed active.');
   } else if (!state.cameraFeed.active) {
-    setCameraFeedStatus('Ready. Paste a camera URL and click Load / Start.');
+    setCameraFeedStatus(mode === 'local'
+      ? 'Ready. Click Load / Start to request webcam access.'
+      : 'Ready. Paste a camera URL and click Load / Start.');
   }
 }
 
@@ -3719,6 +3896,11 @@ if (!state.changelog.some((c) => c.message === stopControlIsolationPatch)) {
 const cameraFeedPatch = 'Added Camera Feed pod (V1): single active feed with Embed Stream mode plus Snapshot Refresh fallback (configurable interval + optional local proxy relay).';
 if (!state.changelog.some((c) => c.message === cameraFeedPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: cameraFeedPatch });
+}
+
+const cameraLocalWebcamPatch = 'Patch: Camera Feed now includes Local Webcam (Browser) mode with getUserMedia start/stop controls, status/error states, and optional camera device selection.';
+if (!state.changelog.some((c) => c.message === cameraLocalWebcamPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: cameraLocalWebcamPatch });
 }
 
 renderAll();
