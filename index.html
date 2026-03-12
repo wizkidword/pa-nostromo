@@ -87,8 +87,14 @@
       <div class="row-wrap">
         <button id="exportStateBtn" class="btn">Export State JSON</button>
         <button id="importStateBtn" class="btn ghost">Import State JSON</button>
+        <button id="refreshBackupsBtn" class="btn ghost">Refresh Backups</button>
         <input id="importStateFileInput" type="file" accept="application/json,.json" hidden />
       </div>
+      <div id="stateSafetyUndoBar" class="state-safety-undo" hidden>
+        <span id="stateSafetyUndoText" class="note-meta"></span>
+        <button id="stateSafetyUndoBtn" class="btn ghost" type="button">Undo</button>
+      </div>
+      <div id="stateSafetyBackupsList" class="change-log-list"></div>
 
       <hr class="settings-divider" />
       <h3 class="m0">Shortcuts</h3>
@@ -342,6 +348,7 @@
       </label>
       <label>Due Date <input name="dueDate" type="date" /></label>
       <menu>
+        <button type="button" id="editTaskDeleteBtn" class="btn note-delete">Delete Task</button>
         <button type="button" id="editTaskCancelBtn" class="btn ghost">Cancel</button>
         <button value="default" class="btn primary">Save</button>
       </menu>

@@ -10,6 +10,8 @@ const CRYPTO_FAILURE_BACKOFF_BASE_MS = 20 * 1000;
 const CRYPTO_FAILURE_BACKOFF_MAX_MS = 3 * 60 * 1000;
 const SHARED_STATE_API = '/api/state';
 const SHARED_STATE_BACKUPS_API = '/api/state/backups';
+const SHARED_STATE_RESTORE_API = '/api/state/restore';
+const UNDO_WINDOW_MS = 12000;
 const SHORTCUT_GLOBAL_PROJECT_ID = '__global__';
 const CRYPTO_PROXY_API = '/api/crypto';
 const debugCounters = window.MissionControlModules?.debug || null;
@@ -216,6 +218,10 @@ let voiceToRowanLastError = '';
 let sharedSaveTimer = null;
 let sharedHydrationResolved = false;
 let sharedPushPendingUntilHydration = false;
+let undoToken = 0;
+let undoTimer = null;
+let safetyBackupsCache = [];
+let lastSafetyBackupsRefreshAt = 0;
 
 function id(){ return Math.random().toString(36).slice(2,10); }
 function now(){ return new Date().toISOString(); }
@@ -608,10 +614,141 @@ function exportStateSnapshot(){
   downloadJsonFile(`pa-nostromo-state-${stamp}.json`, state);
 }
 
+function clearUndoPrompt(){
+  undoToken += 1;
+  if (undoTimer) clearTimeout(undoTimer);
+  undoTimer = null;
+  const bar = document.getElementById('stateSafetyUndoBar');
+  if (bar) bar.hidden = true;
+}
+
+function offerUndoAction({ label, undoFn }){
+  const bar = document.getElementById('stateSafetyUndoBar');
+  const text = document.getElementById('stateSafetyUndoText');
+  const btn = document.getElementById('stateSafetyUndoBtn');
+  if (!bar || !text || !btn || typeof undoFn !== 'function') return;
+
+  const token = ++undoToken;
+  if (undoTimer) clearTimeout(undoTimer);
+
+  text.textContent = label;
+  bar.hidden = false;
+
+  btn.onclick = () => {
+    if (token !== undoToken) return;
+    clearUndoPrompt();
+    undoFn();
+    commitState('destructive_action_undo_restored');
+  };
+
+  undoTimer = setTimeout(() => {
+    if (token !== undoToken) return;
+    clearUndoPrompt();
+  }, UNDO_WINDOW_MS);
+}
+
+function deleteWithUndo({ collection, itemId, reason, buildUndoLabel }){
+  const list = collection();
+  if (!Array.isArray(list)) return false;
+  const idx = list.findIndex((x) => x?.id === itemId);
+  if (idx < 0) return false;
+
+  const [removed] = list.splice(idx, 1);
+  commitState(reason);
+
+  offerUndoAction({
+    label: typeof buildUndoLabel === 'function' ? buildUndoLabel(removed) : 'Item deleted. Undo?',
+    undoFn: () => {
+      const next = collection();
+      if (!Array.isArray(next)) return;
+      const exists = next.some((x) => x?.id === removed.id);
+      if (!exists) next.splice(Math.min(idx, next.length), 0, removed);
+    },
+  });
+
+  return true;
+}
+
+function summarizeBackupMeta(backup){
+  const meta = backup?.snapshotMeta || {};
+  const counts = meta?.criticalCounts || {};
+  const pieces = [];
+  if (Number.isFinite(counts.tasks)) pieces.push(`tasks ${counts.tasks}`);
+  if (Number.isFinite(counts.notes)) pieces.push(`notes ${counts.notes}`);
+  if (Number.isFinite(counts.reminders)) pieces.push(`reminders ${counts.reminders}`);
+  return pieces.slice(0, 3).join(' · ');
+}
+
+async function refreshStateSafetyBackups(force = false){
+  const list = document.getElementById('stateSafetyBackupsList');
+  if (!list) return;
+  const nowMs = Date.now();
+  if (!force && nowMs - lastSafetyBackupsRefreshAt < 30000) return;
+  lastSafetyBackupsRefreshAt = nowMs;
+  list.innerHTML = '<div class="note-meta">Loading recent backups…</div>';
+  try {
+    const res = await fetch(SHARED_STATE_BACKUPS_API, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    safetyBackupsCache = Array.isArray(data?.backups) ? data.backups : [];
+
+    if (!safetyBackupsCache.length) {
+      list.innerHTML = '<div class="note-meta">No backups found yet.</div>';
+      return;
+    }
+
+    list.innerHTML = safetyBackupsCache.slice(0, 12).map((b) => {
+      const stamp = new Date(b.createdAt || Date.now()).toLocaleString();
+      const meta = b.snapshotMeta || {};
+      const label = summarizeBackupMeta(b);
+      const checksumShort = meta.checksum ? String(meta.checksum).slice(0, 10) : 'n/a';
+      return `<div class="change-log-item">
+        <strong>${escapeHtml(stamp)}</strong>
+        <div class="note-meta">${escapeHtml(meta.reason || 'backup')} · rev ${escapeHtml(String(meta.revision || 0))} · checksum ${escapeHtml(checksumShort)}…</div>
+        ${label ? `<div class="note-meta">${escapeHtml(label)}</div>` : ''}
+        <button class="btn ghost" data-state-restore="${escapeHtml(b.backupFile)}" type="button">Restore</button>
+      </div>`;
+    }).join('');
+
+    list.querySelectorAll('[data-state-restore]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const backupFile = String(btn.getAttribute('data-state-restore') || '').trim();
+        if (!backupFile) return;
+        const backup = safetyBackupsCache.find((x) => x.backupFile === backupFile);
+        const stamp = new Date(backup?.createdAt || Date.now()).toLocaleString();
+        const confirmText = `Restore shared state from backup ${stamp}?\n\nThis creates an automatic pre-restore snapshot and then replaces current shared state for all browsers.`;
+        if (!window.confirm(confirmText)) return;
+        btn.disabled = true;
+        try {
+          const resp = await fetch(SHARED_STATE_RESTORE_API, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ backupFile }),
+          });
+          const payload = await resp.json();
+          if (!resp.ok || !payload?.ok) throw new Error(payload?.message || payload?.error || `HTTP ${resp.status}`);
+          await hydrateStateFromSharedApi();
+          logChange(`Restored state from backup ${backupFile}`);
+          await refreshStateSafetyBackups(true);
+          alert(`State restored. Pre-restore snapshot: ${payload.preRestoreSnapshot || 'created'}`);
+        } catch (err) {
+          alert(`Restore failed: ${String(err?.message || err)}`);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+  } catch (err) {
+    list.innerHTML = `<div class="note-meta">Failed to load backups: ${escapeHtml(String(err?.message || err))}</div>`;
+  }
+}
+
 async function importStateSnapshotFromFile(file){
   if (!file) return;
   const warning = 'Importing state will overwrite the current shared dashboard state for all browsers. Continue?';
   if (!window.confirm(warning)) return;
+  const secondConfirm = window.prompt('Type IMPORT to confirm shared overwrite.');
+  if (String(secondConfirm || '').trim().toUpperCase() !== 'IMPORT') return;
 
   const text = await file.text();
   const incoming = JSON.parse(text);
@@ -624,6 +761,7 @@ async function importStateSnapshotFromFile(file){
     __writeControl: {
       overrideDowngrade: true,
       source: 'manual_import',
+      explicitLiveOverride: true,
     },
   });
 
@@ -896,8 +1034,12 @@ function renderCalendarRemindersPanel(){
   list.innerHTML = items.map((r)=>`<div class="change-log-item"><strong>${r.time || 'Anytime'}</strong> — ${escapeHtml(r.text)} <button class="btn note-delete" data-rem-del="${r.id}" style="padding:4px 8px;margin-left:8px">Delete</button></div>`).join('');
   list.querySelectorAll('[data-rem-del]').forEach((b)=>{
     b.addEventListener('click', ()=>{
-      state.reminders = state.reminders.filter((x)=>x.id!==b.dataset.remDel);
-      commitState('calendar_reminder_deleted');
+      deleteWithUndo({
+        collection: () => state.reminders,
+        itemId: b.dataset.remDel,
+        reason: 'calendar_reminder_deleted',
+        buildUndoLabel: (r) => `Reminder deleted (${r?.time || 'Anytime'}). Undo?`,
+      });
     });
   });
 }
@@ -934,6 +1076,7 @@ function renderSettings(){
 
   renderPodVisibilitySettings();
   mountRssSettingsFeeds();
+  if (settingsPanel?.classList.contains('open')) refreshStateSafetyBackups();
 }
 
 async function renderWeather(){
@@ -1681,11 +1824,29 @@ function mountRssSettingsFeeds(){
     btn.addEventListener('click', () => {
       const feedId = String(btn.getAttribute('data-rss-feed-remove') || '');
       if (!feedId) return;
-      state.rss.feeds = state.rss.feeds.filter((f) => f.id !== feedId);
-      const feedIds = new Set(state.rss.feeds.map((f) => f.id));
-      state.rss.items = state.rss.items.filter((item) => !item.feedId || feedIds.has(item.feedId));
-      state.rss.readItemIds = state.rss.readItemIds.filter((itemId) => state.rss.items.some((item) => item.id === itemId));
-      save('rss_feed_removed');
+      const feedIndex = state.rss.feeds.findIndex((f) => f.id === feedId);
+      if (feedIndex < 0) return;
+      const [removedFeed] = state.rss.feeds.splice(feedIndex, 1);
+      const removedItems = state.rss.items.filter((item) => item.feedId === feedId);
+      const removedItemIds = new Set(removedItems.map((item) => item.id));
+      const removedReadIds = state.rss.readItemIds.filter((itemId) => removedItemIds.has(itemId));
+      state.rss.items = state.rss.items.filter((item) => item.feedId !== feedId);
+      state.rss.readItemIds = state.rss.readItemIds.filter((itemId) => !removedItemIds.has(itemId));
+      commitState('rss_feed_removed');
+      offerUndoAction({
+        label: `RSS feed removed (${removedFeed?.tag || 'General'}). Undo?`,
+        undoFn: () => {
+          const exists = state.rss.feeds.some((f) => f.id === removedFeed.id);
+          if (!exists) state.rss.feeds.splice(Math.min(feedIndex, state.rss.feeds.length), 0, removedFeed);
+          const itemIds = new Set(state.rss.items.map((item) => item.id));
+          removedItems.forEach((item) => {
+            if (!itemIds.has(item.id)) state.rss.items.push(item);
+          });
+          const readSet = new Set(state.rss.readItemIds);
+          removedReadIds.forEach((idVal) => readSet.add(idVal));
+          state.rss.readItemIds = [...readSet];
+        },
+      });
       mountRssSettingsFeeds();
       renderRssPod({ skipFetch: true });
     });
@@ -4199,8 +4360,12 @@ function renderNotes(){
   document.querySelectorAll('#notesBoardToday [data-action="delete"], #notesBoardBacklog [data-action="delete"]').forEach((btn)=>{
     btn.addEventListener('click', (e)=>{
       const card = e.target.closest('.note-card');
-      state.notes = state.notes.filter(n=>n.id!==card.dataset.noteId);
-      commitState('note_deleted');
+      deleteWithUndo({
+        collection: () => state.notes,
+        itemId: card?.dataset?.noteId,
+        reason: 'note_deleted',
+        buildUndoLabel: (n) => `Note deleted (${(n?.title || 'Quick Note').slice(0, 30)}). Undo?`,
+      });
     });
   });
 
@@ -4446,9 +4611,13 @@ function renderShortcutsSettings(){
       const sc = state.shortcuts.find((x) => x.id === btn.dataset.shortcutDelete);
       if (!sc) return;
       if (!confirm(`Delete shortcut "${sc.title}"?`)) return;
-      state.shortcuts = state.shortcuts.filter((x) => x.id !== sc.id);
+      deleteWithUndo({
+        collection: () => state.shortcuts,
+        itemId: sc.id,
+        reason: 'shortcut_deleted',
+        buildUndoLabel: () => `Shortcut deleted (${sc.title}). Undo?`,
+      });
       logChange(`Deleted shortcut: ${sc.title}`);
-      commitState('shortcut_deleted');
     });
   });
 }
@@ -4765,6 +4934,20 @@ document.getElementById('addProjectBtn').onclick = ()=> projectDialog.showModal(
 document.getElementById('addTaskBtn').onclick = ()=> taskDialog.showModal();
 document.getElementById('projectCancelBtn')?.addEventListener('click', ()=> projectDialog.close());
 document.getElementById('editTaskCancelBtn')?.addEventListener('click', ()=> editTaskDialog?.close());
+document.getElementById('editTaskDeleteBtn')?.addEventListener('click', () => {
+  const taskId = String(editTaskForm?.elements?.id?.value || '').trim();
+  if (!taskId) return;
+  const task = state.tasks.find((t) => t.id === taskId);
+  if (!task) return;
+  if (!window.confirm(`Delete task "${task.title}"?`)) return;
+  const deleted = deleteWithUndo({
+    collection: () => state.tasks,
+    itemId: taskId,
+    reason: 'task_deleted',
+    buildUndoLabel: () => `Task deleted (${task.title.slice(0, 30)}). Undo?`,
+  });
+  if (deleted) editTaskDialog?.close();
+});
 document.getElementById('addShortcutBtn')?.addEventListener('click', ()=> openShortcutDialog());
 
 const editTaskNextActionInput = document.getElementById('editTaskNextAction');
@@ -4783,6 +4966,7 @@ const settingsPanel = document.getElementById('settingsPanel');
 document.getElementById('openSettingsBtn')?.addEventListener('click', ()=> {
   settingsPanel?.classList.add('open');
   settingsPanel?.setAttribute('aria-hidden','false');
+  refreshStateSafetyBackups(true);
 });
 document.getElementById('closeSettingsBtn')?.addEventListener('click', ()=> {
   settingsPanel?.classList.remove('open');
@@ -4889,6 +5073,10 @@ document.getElementById('exportStateBtn')?.addEventListener('click', () => {
 const importStateFileInput = document.getElementById('importStateFileInput');
 document.getElementById('importStateBtn')?.addEventListener('click', () => {
   importStateFileInput?.click();
+});
+
+document.getElementById('refreshBackupsBtn')?.addEventListener('click', () => {
+  refreshStateSafetyBackups(true);
 });
 
 importStateFileInput?.addEventListener('change', async (e) => {

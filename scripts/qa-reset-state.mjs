@@ -12,13 +12,15 @@ const cwd = process.cwd();
 const fixturePath = path.join(cwd, 'data', 'qa-reset-state.json');
 const payload = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
 
+const allowLive = args.has('--allow-live');
+
 payload.__writeControl = {
   overrideDowngrade: true,
-  source: 'manual_import',
+  source: 'qa_script',
+  explicitLiveOverride: allowLive,
 };
 
 const baseUrl = process.env.MC_BASE_URL || 'http://localhost:4187';
-const allowLive = args.has('--allow-live');
 if (/localhost:4187$/.test(baseUrl) && !allowLive) {
   console.error('Refusing to target live default state endpoint (localhost:4187) without --allow-live.');
   console.error('Use MC_BASE_URL for isolated QA server, or pass --allow-live if you intentionally want live overwrite.');

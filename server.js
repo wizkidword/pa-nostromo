@@ -9,6 +9,8 @@ const DATA_DIR = path.join(ROOT, 'data');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
 const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 const BACKUP_RETENTION = 200;
+const STATE_SCHEMA_VERSION = 2;
+const SNAPSHOT_SCHEMA_VERSION = 1;
 
 function loadEnvFile(filePath, shellEnvKeys = new Set()) {
   if (!fs.existsSync(filePath)) return;
@@ -161,11 +163,38 @@ async function listBackupFiles() {
     const abs = path.join(BACKUPS_DIR, ent.name);
     try {
       const st = await fsp.stat(abs);
+      let snapshotMeta = null;
+      try {
+        const raw = await fsp.readFile(abs, 'utf8');
+        const parsed = JSON.parse(raw);
+        const checksum = String(parsed?.__integrity?.checksum || '').trim() || null;
+        snapshotMeta = {
+          snapshotSchemaVersion: Number(parsed?.__snapshotMeta?.snapshotSchemaVersion || SNAPSHOT_SCHEMA_VERSION),
+          stateSchemaVersion: Number(parsed?.__integrity?.stateSchemaVersion || STATE_SCHEMA_VERSION),
+          revision: Number(parsed?.__integrity?.revision || 0),
+          reason: String(parsed?.__backupMeta?.reason || '').trim() || 'unspecified',
+          checksum,
+          hasChecksum: !!checksum,
+          criticalCounts: parsed?.__snapshotMeta?.criticalCounts || null,
+        };
+      } catch {
+        snapshotMeta = {
+          snapshotSchemaVersion: SNAPSHOT_SCHEMA_VERSION,
+          stateSchemaVersion: STATE_SCHEMA_VERSION,
+          revision: 0,
+          reason: 'unknown',
+          checksum: null,
+          hasChecksum: false,
+          criticalCounts: null,
+        };
+      }
+
       files.push({
         backupFile: ent.name,
         size: st.size,
         createdAt: st.birthtime?.toISOString?.() || st.mtime.toISOString(),
         mtimeMs: st.mtimeMs,
+        snapshotMeta,
       });
     } catch {
       // ignore race/deleted file
@@ -203,11 +232,22 @@ async function writeBackupSnapshot(stateObj, reason = 'write') {
   await ensureDataDir();
   const backupFile = buildBackupFileName();
   const backupPath = path.join(BACKUPS_DIR, backupFile);
+  const clone = deepClone(stateObj);
   const payload = {
-    ...deepClone(stateObj),
+    ...clone,
     __backupMeta: {
       reason,
       createdAt: new Date().toISOString(),
+    },
+    __snapshotMeta: {
+      snapshotSchemaVersion: SNAPSHOT_SCHEMA_VERSION,
+      criticalCounts: {
+        tasks: Array.isArray(clone.tasks) ? clone.tasks.length : 0,
+        notes: Array.isArray(clone.notes) ? clone.notes.length : 0,
+        projects: Array.isArray(clone.projects) ? clone.projects.length : 0,
+        reminders: Array.isArray(clone.reminders) ? clone.reminders.length : 0,
+        layoutRows: Array.isArray(clone?.layout?.utilityRows) ? clone.layout.utilityRows.length : 0,
+      },
     },
   };
   await fsp.writeFile(backupPath, JSON.stringify(payload, null, 2), 'utf8');
@@ -215,11 +255,17 @@ async function writeBackupSnapshot(stateObj, reason = 'write') {
   return backupFile;
 }
 
-async function writeStateWithIntegrity(incomingState) {
+async function writeStateWithIntegrity(incomingState, opts = {}) {
   const savedAt = new Date().toISOString();
   const next = deepClone(incomingState || {});
+  const previousRevision = Number(opts?.previousRevision || 0);
+  const revision = previousRevision + 1;
   next.__integrity = {
     savedAt,
+    revision,
+    stateSchemaVersion: STATE_SCHEMA_VERSION,
+    source: String(opts?.source || 'unknown'),
+    reason: String(opts?.reason || 'state_write'),
     checksum: computeChecksum(next),
   };
 
@@ -362,7 +408,12 @@ async function handleApiState(req, res) {
         preRestoreSnapshot = await writeBackupSnapshot(currentState, 'pre_restore');
       }
 
-      const integrity = await writeStateWithIntegrity(backupState);
+      const previousRevision = Number(currentState?.__integrity?.revision || 0);
+      const integrity = await writeStateWithIntegrity(backupState, {
+        source: 'manual_restore',
+        reason: 'manual_restore_from_backup',
+        previousRevision,
+      });
       return sendJson(res, 200, {
         ok: true,
         restoredFrom: backupFile,
@@ -399,13 +450,25 @@ async function handleApiState(req, res) {
 
       const overrideDowngrade = parsed?.__writeControl?.overrideDowngrade === true;
       const source = String(parsed?.__writeControl?.source || '').trim();
-      const overrideAllowedSources = new Set(['manual_restore', 'manual_import']);
-      const allowOverride = overrideDowngrade && overrideAllowedSources.has(source);
+      const explicitLiveOverride = parsed?.__writeControl?.explicitLiveOverride === true;
+      const allowOverride = overrideDowngrade && (
+        source === 'manual_restore'
+        || source === 'manual_import'
+        || (source === 'qa_script' && explicitLiveOverride)
+      );
 
       const cleanIncoming = deepClone(parsed);
       delete cleanIncoming.__writeControl;
 
       const { state: current, integrity } = await readStateFileSafe();
+      if (source === 'qa_script' && !explicitLiveOverride) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: 'qa_override_requires_explicit_opt_in',
+          message: 'QA/script overwrite is blocked unless __writeControl.explicitLiveOverride=true.',
+        });
+      }
+
       if (current) {
         const incomingScore = stateRichnessScore(cleanIncoming);
         const currentScore = stateRichnessScore(current);
@@ -424,7 +487,12 @@ async function handleApiState(req, res) {
         await writeBackupSnapshot(current, 'pre_write');
       }
 
-      const writeIntegrity = await writeStateWithIntegrity(cleanIncoming);
+      const previousRevision = Number(current?.__integrity?.revision || 0);
+      const writeIntegrity = await writeStateWithIntegrity(cleanIncoming, {
+        source: source || 'api_state_post',
+        reason: 'api_state_post',
+        previousRevision,
+      });
       return sendJson(res, 200, {
         ok: true,
         savedAt: writeIntegrity.savedAt,
