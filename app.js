@@ -70,12 +70,15 @@ const seed = {
     viewportHeight: 360,
   },
   liveStreams: {
-    sourceType: 'youtube', // youtube | twitch | kick | vaughn | generic | local
+    sourceType: 'youtube', // youtube | twitch | kick | vaughn | rumble | xlive | facebook | generic | local
     inputs: {
       youtube: '',
       twitch: '',
       kick: '',
       vaughn: '',
+      rumble: '',
+      xlive: '',
+      facebook: '',
       generic: '',
       local: '',
     },
@@ -280,6 +283,9 @@ function load(){
       twitch: '',
       kick: '',
       vaughn: '',
+      rumble: '',
+      xlive: '',
+      facebook: '',
       generic: '',
       local: '',
     },
@@ -292,7 +298,7 @@ function load(){
     presets: [],
     ...(state.liveStreams || {}),
   };
-  state.liveStreams.sourceType = ['youtube', 'twitch', 'kick', 'vaughn', 'generic', 'local'].includes(state.liveStreams.sourceType)
+  state.liveStreams.sourceType = ['youtube', 'twitch', 'kick', 'vaughn', 'rumble', 'xlive', 'facebook', 'generic', 'local'].includes(state.liveStreams.sourceType)
     ? state.liveStreams.sourceType
     : 'youtube';
   const liveInputs = (state.liveStreams.inputs && typeof state.liveStreams.inputs === 'object') ? state.liveStreams.inputs : {};
@@ -301,6 +307,9 @@ function load(){
     twitch: String(liveInputs.twitch || '').trim(),
     kick: String(liveInputs.kick || '').trim(),
     vaughn: String(liveInputs.vaughn || '').trim(),
+    rumble: String(liveInputs.rumble || '').trim(),
+    xlive: String(liveInputs.xlive || '').trim(),
+    facebook: String(liveInputs.facebook || '').trim(),
     generic: String(liveInputs.generic || '').trim(),
     local: String(liveInputs.local || '').trim(),
   };
@@ -314,7 +323,7 @@ function load(){
     ? state.liveStreams.presets.slice(0, 20).map((p) => ({
       id: String(p?.id || id()),
       name: String(p?.name || '').trim().slice(0, 40),
-      sourceType: ['youtube', 'twitch', 'kick', 'vaughn', 'generic', 'local'].includes(p?.sourceType) ? p.sourceType : 'youtube',
+      sourceType: ['youtube', 'twitch', 'kick', 'vaughn', 'rumble', 'xlive', 'facebook', 'generic', 'local'].includes(p?.sourceType) ? p.sourceType : 'youtube',
       value: String(p?.value || '').trim().slice(0, 500),
       createdAt: String(p?.createdAt || now()),
     })).filter((p) => p.name && p.value)
@@ -2655,6 +2664,9 @@ function liveSourceLabel(type){
     twitch: 'Twitch',
     kick: 'Kick',
     vaughn: 'Vaughn Live',
+    rumble: 'Rumble',
+    xlive: 'X Live / Spaces',
+    facebook: 'Facebook Live',
     generic: 'Generic RTMP/HLS/M3U8 URL',
     local: 'Local source URL',
   };
@@ -2718,6 +2730,153 @@ function normalizeVaughnInput(raw){
       channel,
       embedUrl: `https://vaughn.live/embed/${encodeURIComponent(channel)}`,
       externalUrl: `https://vaughn.live/${encodeURIComponent(channel)}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRumbleInput(raw){
+  const value = String(raw || '').trim();
+  if (!value) return null;
+
+  const sanitizeSlug = (candidate) => String(candidate || '')
+    .trim()
+    .replace(/^@/, '')
+    .split(/[/?#]/)[0]
+    .replace(/[^a-z0-9_-]/gi, '');
+
+  if (!/^https?:\/\//i.test(value)) {
+    const channel = sanitizeSlug(value);
+    if (!channel) return null;
+    return {
+      channel,
+      embedUrl: `https://rumble.com/embed/v${encodeURIComponent(channel)}`,
+      externalUrl: `https://rumble.com/c/${encodeURIComponent(channel)}`,
+      fallbackOnly: true,
+      providerNote: 'Rumble embed IDs are not derivable from channel names alone; opening channel page fallback.',
+    };
+  }
+
+  try {
+    const u = new URL(value);
+    const host = u.hostname.toLowerCase();
+    if (!(host === 'rumble.com' || host.endsWith('.rumble.com'))) return null;
+    const seg = (u.pathname || '').split('/').filter(Boolean);
+    if (!seg.length) return null;
+
+    const first = seg[0].toLowerCase();
+    if (first === 'embed' && seg[1]) {
+      return {
+        embedUrl: `https://rumble.com/embed/${encodeURIComponent(seg[1])}`,
+        externalUrl: value,
+        fallbackOnly: false,
+      };
+    }
+
+    if (first === 'v' && seg[1]) {
+      const slug = sanitizeSlug(seg[1]);
+      if (!slug) return null;
+      return {
+        embedUrl: `https://rumble.com/embed/v${encodeURIComponent(slug)}`,
+        externalUrl: value,
+        fallbackOnly: false,
+      };
+    }
+
+    if ((first === 'c' || first === 'user') && seg[1]) {
+      const channel = sanitizeSlug(seg[1]);
+      if (!channel) return null;
+      return {
+        channel,
+        embedUrl: `https://rumble.com/embed/v${encodeURIComponent(channel)}`,
+        externalUrl: `https://rumble.com/${first}/${encodeURIComponent(channel)}`,
+        fallbackOnly: true,
+        providerNote: 'Channel URL detected. Rumble typically requires a specific video embed ID; using open-tab fallback.',
+      };
+    }
+
+    return {
+      embedUrl: value,
+      externalUrl: value,
+      fallbackOnly: true,
+      providerNote: 'Rumble URL detected but no stable embed ID parsed; using open-tab fallback.',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeXLiveInput(raw){
+  const value = String(raw || '').trim();
+  if (!value) return null;
+
+  const asUrl = /^https?:\/\//i.test(value)
+    ? value
+    : (/^(?:x\.com|twitter\.com)\//i.test(value) ? `https://${value}` : '');
+  if (!asUrl) return null;
+
+  try {
+    const u = new URL(asUrl);
+    const host = u.hostname.toLowerCase();
+    if (!(host === 'x.com' || host.endsWith('.x.com') || host === 'twitter.com' || host.endsWith('.twitter.com'))) return null;
+    const seg = (u.pathname || '').split('/').filter(Boolean);
+    const spacesIdx = seg.findIndex((s) => s.toLowerCase() === 'spaces');
+    if (spacesIdx >= 0 && seg[spacesIdx + 1]) {
+      const spaceId = String(seg[spacesIdx + 1]).replace(/[^a-z0-9]/gi, '');
+      if (!spaceId) return null;
+      const canonical = `https://x.com/i/spaces/${encodeURIComponent(spaceId)}`;
+      return {
+        embedUrl: canonical,
+        externalUrl: canonical,
+        renderMode: 'iframe',
+        fallbackOnly: true,
+        providerNote: 'X Spaces pages usually block third-party framing; use Pop-out/Open in new tab if embed is blank.',
+      };
+    }
+    return {
+      embedUrl: asUrl,
+      externalUrl: asUrl,
+      renderMode: 'iframe',
+      fallbackOnly: true,
+      providerNote: 'X Live URL detected. X generally blocks iframe playback outside x.com; fallback buttons are primary path.',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeFacebookLiveInput(raw){
+  const value = String(raw || '').trim();
+  if (!value) return null;
+
+  const asUrl = /^https?:\/\//i.test(value)
+    ? value
+    : (/^(?:www\.)?(?:facebook\.com|fb\.watch)\//i.test(value) ? `https://${value}` : '');
+  if (!asUrl) return null;
+
+  try {
+    const u = new URL(asUrl);
+    const host = u.hostname.toLowerCase();
+    if (!(host === 'facebook.com' || host.endsWith('.facebook.com') || host === 'fb.watch' || host.endsWith('.fb.watch'))) return null;
+
+    const normalizedExternal = host.includes('fb.watch')
+      ? asUrl
+      : `${u.origin}${u.pathname}${u.search || ''}`;
+
+    const fbEmbedBase = 'https://www.facebook.com/plugins/video.php';
+    const embedParams = new URLSearchParams({
+      href: normalizedExternal,
+      show_text: 'false',
+      autoplay: 'true',
+    });
+
+    return {
+      embedUrl: `${fbEmbedBase}?${embedParams.toString()}`,
+      externalUrl: normalizedExternal,
+      renderMode: 'iframe',
+      fallbackOnly: false,
+      providerNote: 'Facebook plugin embed mode (availability depends on post privacy and Facebook embed policy).',
     };
   } catch {
     return null;
@@ -2809,6 +2968,51 @@ function buildLiveStreamTarget(){
       externalUrl: normalized.externalUrl,
       renderMode: 'iframe',
       providerNote: 'Vaughn embed mode (normalized to explicit /embed/{channel}). Some channels may block framing.',
+    };
+  }
+
+  if (sourceType === 'rumble') {
+    const normalized = normalizeRumbleInput(inputValue);
+    if (!normalized) return { error: 'Invalid Rumble input. Use a rumble.com URL (preferred) or channel slug.' };
+    if (normalized.fallbackOnly) {
+      return {
+        error: 'Rumble stream is best opened in Pop-out Player/Open in new tab for reliability.',
+        externalUrl: normalized.externalUrl,
+      };
+    }
+    return {
+      embedUrl: normalized.embedUrl,
+      externalUrl: normalized.externalUrl,
+      renderMode: 'iframe',
+      providerNote: normalized.providerNote || 'Rumble embed mode. If blocked/blank, use Pop-out Player or Open in new tab.',
+    };
+  }
+
+  if (sourceType === 'xlive') {
+    const normalized = normalizeXLiveInput(inputValue);
+    if (!normalized) return { error: 'Invalid X Live/Spaces input. Use an x.com/twitter.com spaces URL.' };
+    if (normalized.fallbackOnly) {
+      return {
+        error: 'X Spaces usually blocks in-app embeds. Use Pop-out Player or Open in new tab.',
+        externalUrl: normalized.externalUrl,
+      };
+    }
+    return {
+      embedUrl: normalized.embedUrl,
+      externalUrl: normalized.externalUrl,
+      renderMode: normalized.renderMode || 'iframe',
+      providerNote: normalized.providerNote,
+    };
+  }
+
+  if (sourceType === 'facebook') {
+    const normalized = normalizeFacebookLiveInput(inputValue);
+    if (!normalized) return { error: 'Invalid Facebook Live input. Use a facebook.com/.../videos/... or fb.watch URL.' };
+    return {
+      embedUrl: normalized.embedUrl,
+      externalUrl: normalized.externalUrl,
+      renderMode: normalized.renderMode || 'iframe',
+      providerNote: normalized.providerNote || 'Facebook Live plugin embed mode. If blocked, use Pop-out/Open in new tab.',
     };
   }
 
@@ -2916,6 +3120,9 @@ function renderLiveStreamsPod(){
     twitch: 'Channel name or twitch.tv/channel URL',
     kick: 'Channel name or kick.com/channel URL',
     vaughn: 'Channel name or vaughn.live/channel URL',
+    rumble: 'Channel name, slug, or rumble.com URL',
+    xlive: 'x.com/i/spaces/... or twitter.com/i/spaces/...',
+    facebook: 'facebook.com/.../videos/... or fb.watch/... URL',
     generic: 'https://... (HLS/M3U8/MP4 or embeddable page)',
     local: 'http://127.0.0.1:... or /local/path',
   };
@@ -2933,6 +3140,9 @@ function renderLiveStreamsPod(){
           <option value="twitch" ${sourceType === 'twitch' ? 'selected' : ''}>Twitch</option>
           <option value="kick" ${sourceType === 'kick' ? 'selected' : ''}>Kick</option>
           <option value="vaughn" ${sourceType === 'vaughn' ? 'selected' : ''}>Vaughn Live</option>
+          <option value="rumble" ${sourceType === 'rumble' ? 'selected' : ''}>Rumble</option>
+          <option value="xlive" ${sourceType === 'xlive' ? 'selected' : ''}>X Live / Spaces</option>
+          <option value="facebook" ${sourceType === 'facebook' ? 'selected' : ''}>Facebook Live</option>
           <option value="generic" ${sourceType === 'generic' ? 'selected' : ''}>Generic RTMP/HLS/M3U8 URL</option>
           <option value="local" ${sourceType === 'local' ? 'selected' : ''}>Local source URL</option>
         </select>
@@ -4825,6 +5035,11 @@ if (!state.changelog.some((c) => c.message === liveStreamsPatch)) {
 const liveStreamsVaughnPopoutPatch = 'Patch: Live Streams Vaughn handling now normalizes channel/page/embed/popout inputs to explicit embed targets and adds a Pop-out Player fallback (controlled popup) alongside Open in new tab.';
 if (!state.changelog.some((c) => c.message === liveStreamsVaughnPopoutPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: liveStreamsVaughnPopoutPatch });
+}
+
+const liveStreamsPhase2APatch = 'Patch: Live Streams Phase 2A adds Rumble, X Live/Spaces, and Facebook Live presets with provider-specific normalization and explicit non-silent fallback messaging when embeds are blocked.';
+if (!state.changelog.some((c) => c.message === liveStreamsPhase2APatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: liveStreamsPhase2APatch });
 }
 
 save('startup_patch_seed', { pushShared: false });

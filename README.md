@@ -12,7 +12,7 @@ It combines project tracking + utility pods in one lightweight web app:
 - Weather + NBA scores + Crypto watchlist + personalized RSS feed
 - Music player (stream/YouTube/local file)
 - Camera Feed pod (embed stream + snapshot refresh + local browser webcam mode)
-- Live Streams pod (YouTube/Twitch/Kick/Vaughn/Generic URL/Local URL presets)
+- Live Streams pod (YouTube/Twitch/Kick/Vaughn/Rumble/X Live-Spaces/Facebook Live/Generic URL/Local URL presets)
 - Voice notes (Chrome SpeechRecognition)
 - Cross-browser shared state (Brave + Chrome) via local disk-backed API
 
@@ -220,14 +220,17 @@ Camera Feed is a single-feed utility pod for network camera URLs and browser-loc
 
 Live Streams V1 is a provider-preset stream launcher designed for transparent embed behavior and clear fallbacks.
 
-### Source presets (Phase 1)
+### Source presets (Phase 2A)
 
 1. **YouTube Live** (channel/@handle or URL)
 2. **Twitch** (channel or URL)
 3. **Kick** (channel or URL)
 4. **Vaughn Live** (channel or URL)
-5. **Generic RTMP/HLS/M3U8 URL**
-6. **Local source URL**
+5. **Rumble** (rumble URL preferred; channel slug accepted)
+6. **X Live / Spaces** (`x.com` / `twitter.com` spaces links)
+7. **Facebook Live** (`facebook.com/.../videos/...` or `fb.watch/...`)
+8. **Generic RTMP/HLS/M3U8 URL**
+9. **Local source URL**
 
 ### Behavior model
 
@@ -245,6 +248,9 @@ Live Streams V1 is a provider-preset stream launcher designed for transparent em
 - **Twitch:** embed requires `parent=<current-hostname>`; playback can fail if your host isn’t accepted by Twitch embed policy.
 - **Kick:** embed attempted via provider player endpoints; some channels may block framing.
 - **Vaughn:** channel names and common Vaughn URLs (page/embed/popout forms, with or without protocol) are normalized to explicit `https://vaughn.live/embed/<channel>` for iframe use; some channels may still block framing.
+- **Rumble:** direct video/embed URLs can be embedded when resolvable; channel-level inputs cannot reliably infer a live embed ID, so the pod surfaces a non-silent fallback to **Pop-out/Open in new tab**.
+- **X Live / Spaces:** links are normalized to canonical Spaces URLs; X generally blocks third-party iframe playback, so **Pop-out/Open in new tab** is the expected path.
+- **Facebook Live:** uses Facebook plugin embed endpoint (`plugins/video.php?href=...`); playback depends on post privacy and Facebook embed policy. Fallback buttons remain available.
 - **Generic URL:** `rtmp://` is not browser-playable directly (status prompts fallback); HLS/MP4/WebM may work depending on browser codec/HLS support.
 - **Local URL:** intended for local-hosted stream pages/media (e.g., LAN service or localhost); browser mixed-content/CORS/autoplay rules still apply.
 
@@ -261,6 +267,7 @@ Early alpha. Built for real daily use and rapid iteration.
 
 ## Patch Notes
 
+- 2026-03-11: Live Streams Phase 2A provider expansion: added **Rumble**, **X Live / Spaces**, and **Facebook Live** source presets; introduced provider-specific normalization/resolution paths; preserved persisted source inputs/selection and preset compatibility; and added explicit non-silent fallback messaging when provider embed policies block in-app playback.
 - 2026-03-11: Live Streams Vaughn + fallback patch: Vaughn input normalization now accepts channel/page/embed/popout forms and resolves to explicit embed targets; added **Pop-out Player** fallback button (controlled popup with noopener/noreferrer) while keeping Open in new tab behavior.
 - 2026-03-11: Live Streams pod (V1): added provider presets (YouTube/Twitch/Kick/Vaughn/Generic/Local), source-specific input handling, load/stop controls, persisted latest source values, explicit iframe/media fallback status messaging, optional saved presets, and open-in-new-tab fallback.
 - 2026-03-11: RSS parser reliability patch: improved item title extraction for CDATA + HTML/XML entity encoded titles, added resilient fallback chain (title tag → summary excerpt → URL-derived title), and reduced avoidable `Untitled` entries without changing link/date/summary behavior.
