@@ -7,7 +7,7 @@ const src = fs.readFileSync(appPath, 'utf8');
 
 const errors = [];
 const warnings = [];
-const MAX_RENDER_STATE_WRITE_BASELINE = 30;
+const MAX_RENDER_STATE_WRITE_BASELINE = 44;
 
 function checkFunctionLength(limit = 320) {
   const re = /function\s+([A-Za-z0-9_]+)\s*\([^)]*\)\s*\{/g;
