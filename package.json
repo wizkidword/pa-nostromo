@@ -11,6 +11,7 @@
     "qa:reset-state": "node scripts/qa-reset-state.mjs --yes",
     "qa:smoke:1d1": "node scripts/qa-smoke-phase-1d-1.mjs",
     "qa:smoke:1e1": "node scripts/qa-phase1e-1-fix-pass.mjs",
+    "qa:smoke:1e1:repeat": "node scripts/qa-repeat-1e1.mjs",
     "qa:smoke:1f": "node scripts/qa-smoke-phase-1f-release.mjs"
   },
   "license": "MIT"
