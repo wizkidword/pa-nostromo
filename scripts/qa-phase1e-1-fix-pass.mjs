@@ -80,13 +80,48 @@ async function main() {
   await p2.waitForFunction(() => [...document.querySelectorAll('#notesBoardToday .note-card input[data-field="title"], #notesBoardBacklog .note-card input[data-field="title"]')].some((x) => x.value === 'QA Note 1E.1'));
   ok('cross-tab delete+undo', 'note delete propagated and undo restored in tab2');
 
-  // expiry determinism: task delete should stay deleted after 12s
-  await p1.locator('.task', { hasText: 'QA Task 1E.1' }).locator('.task-edit-btn').first().click();
+  // expiry determinism: task delete should stay deleted after undo window expires
+  const taskCard = p1.locator('.task[data-id="qa-task-1"]');
+  const priorUndoActionId = await p1.evaluate(() => {
+    const qa = window.__MISSION_CONTROL_QA__;
+    return qa?.undoDebug?.()?.actionId || null;
+  });
+
+  await taskCard.locator('.task-edit-btn[data-id="qa-task-1"]').click();
   await p1.click('#editTaskDeleteBtn');
-  await p1.waitForSelector('#stateSafetyUndoBar:not([hidden])');
-  await p1.waitForTimeout(12500);
-  const taskVisible = await p1.locator('.task strong', { hasText: 'QA Task 1E.1' }).count();
-  assert(taskVisible === 0, 'undo expiry deterministic', `taskVisible=${taskVisible}`);
+
+  await p1.waitForFunction((prevId) => {
+    const bar = document.querySelector('#stateSafetyUndoBar');
+    const qa = window.__MISSION_CONTROL_QA__;
+    if (!bar || !qa || typeof qa.undoDebug !== 'function') return false;
+    const undo = qa.undoDebug();
+    return bar.hidden === false
+      && undo?.status === 'offered'
+      && typeof undo?.expiresAt === 'number'
+      && undo.expiresAt > Date.now()
+      && undo.actionId
+      && undo.actionId !== prevId;
+  }, priorUndoActionId, { timeout: 10000 });
+
+  const waitMs = await p1.evaluate(() => {
+    const qa = window.__MISSION_CONTROL_QA__;
+    const undo = qa?.undoDebug?.();
+    if (!undo?.expiresAt) return 13000;
+    const safetyBufferMs = 1500;
+    return Math.max((undo.expiresAt - Date.now()) + safetyBufferMs, 13000);
+  });
+  await p1.waitForTimeout(waitMs);
+
+  await p1.waitForFunction(() => {
+    const bar = document.querySelector('#stateSafetyUndoBar');
+    const qa = window.__MISSION_CONTROL_QA__;
+    if (!bar || !qa || typeof qa.undoDebug !== 'function') return false;
+    const undo = qa.undoDebug();
+    return bar.hidden === true || undo?.status === 'expired';
+  }, null, { timeout: 10000 });
+
+  const taskVisible = await p1.locator('.task[data-id="qa-task-1"] strong').count();
+  assert(taskVisible === 0, 'undo expiry deterministic', `taskVisible=${taskVisible} waitMs=${waitMs}`);
 
   // create marker note, then restore determinism + post-restore projects mismatch guard
   const preRestoreState = (await api('/api/state')).json || {};
