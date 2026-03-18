@@ -129,6 +129,10 @@ body.theme-light .social-icon-link img {
   background: var(--surface-soft);
 }
 
+#settingsPodVisibilityList {
+  max-height: 520px;
+}
+
 .change-log-item {
   font-size: 12px;
   color: var(--text);
