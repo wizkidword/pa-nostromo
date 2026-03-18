@@ -274,6 +274,36 @@ body.theme-light .social-icon-link img {
   height: 100%;
 }
 
+.utility-card .pod-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+}
+
+.utility-card .pod-header h2 {
+  margin: 0;
+  min-width: 0;
+  flex: 1 1 220px;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.utility-card .pod-header > .btn,
+.utility-card .pod-header > button,
+.utility-card .pod-header > .row-wrap {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .utility-card.is-hidden {
   display: none;
 }
@@ -536,14 +566,6 @@ form { display: grid; gap: 8px; }
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.row-between-wrap > h2 {
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
 }
 
 .gap10 { gap: 10px; }
@@ -1006,8 +1028,20 @@ menu {
     grid-column: auto;
   }
 
-  .row-between-wrap > h2 {
+  .utility-card .pod-header {
+    align-items: flex-start;
+  }
+
+  .utility-card .pod-header h2 {
     width: 100%;
+    flex-basis: 100%;
+    font-size: 15px;
+  }
+
+  .utility-card .pod-header > .btn,
+  .utility-card .pod-header > button,
+  .utility-card .pod-header > .row-wrap {
+    margin-left: 0;
   }
 
   .pod-signal {
