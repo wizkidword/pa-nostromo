@@ -216,7 +216,7 @@ body.theme-light .social-icon-link img {
 .pod-signal {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   vertical-align: middle;
   margin-left: 6px;
   padding: 3px 9px;
@@ -229,14 +229,17 @@ body.theme-light .social-icon-link img {
   white-space: nowrap;
 }
 
-.pod-signal::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
-  opacity: 0.95;
+.pod-signal-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+.pod-signal-label {
+  display: inline-block;
 }
 
 .pod-signal-neutral {
@@ -1059,8 +1062,14 @@ menu {
     margin-left: 0;
     padding: 2px 8px;
     font-size: 10px;
+    gap: 4px;
+  }
+
+  .pod-signal-icon {
+    font-size: 9px;
   }
 }
+
 
 .state-safety-undo {
   margin-top: 10px;

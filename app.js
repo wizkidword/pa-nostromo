@@ -1568,8 +1568,33 @@ function setPodStatusSignal(podId, status = 'neutral', detail = ''){
     degraded: 'Degraded',
     error: 'Error',
   };
+  const iconMap = {
+    fresh: '✓',
+    stale: '◔',
+    degraded: '⚠',
+    error: '⨯',
+  };
+
+  const message = detail ? `${labelMap[mode]} · ${detail}` : labelMap[mode];
   el.className = `badge pod-signal pod-signal-${mode}`;
-  el.textContent = detail ? `${labelMap[mode]} · ${detail}` : labelMap[mode];
+  el.setAttribute('aria-label', message);
+
+  const nodes = [];
+  const icon = iconMap[mode];
+  if (icon) {
+    const iconEl = document.createElement('span');
+    iconEl.className = 'pod-signal-icon';
+    iconEl.setAttribute('aria-hidden', 'true');
+    iconEl.textContent = icon;
+    nodes.push(iconEl);
+  }
+
+  const labelEl = document.createElement('span');
+  labelEl.className = 'pod-signal-label';
+  labelEl.textContent = message;
+  nodes.push(labelEl);
+
+  el.replaceChildren(...nodes);
 }
 
 function formatLastSuccessMeta(lastSuccessAt, provider){
