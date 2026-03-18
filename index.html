@@ -124,7 +124,7 @@
     <div class="utils-row" data-layout-row="utility-row-1">
       <div class="card utility-card utility-card-full utility-card-shortcuts" data-pod-id="shortcuts">
         <div class="pod-header">
-          <h2>🔗 Shortcuts</h2>
+          <h2>🔗 Shortcuts <span id="shortcutsStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
         </div>
         <div id="shortcutsWidget" class="widget-block">Loading shortcuts...</div>
       </div>
@@ -133,7 +133,7 @@
     <div class="utils-row" data-layout-row="utility-row-2">
       <div class="card utility-card" data-pod-id="date-time">
         <div class="pod-header">
-          <h2>📅 Date & Time</h2>
+          <h2>📅 Date & Time <span id="date-timeStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
         </div>
         <div id="dateTimeWidget" class="widget-block"></div>
         <div class="row-wrap mt10">
@@ -145,7 +145,7 @@
       </div>
       <div class="card utility-card" data-pod-id="calendar">
         <div class="pod-header">
-          <h2>🗓️ Calendar</h2>
+          <h2>🗓️ Calendar <span id="calendarStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
         </div>
         <div id="calendarWidget" class="widget-block"></div>
         <div id="calendarSelectedDate" class="note-meta mt8"></div>
@@ -158,7 +158,7 @@
       </div>
       <div class="card utility-card" data-pod-id="weather">
         <div class="pod-header">
-          <h2>🌤️ Local Weather (44224)</h2>
+          <h2>🌤️ Local Weather (44224) <span id="weatherStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
           <button id="weatherRefreshBtn" class="btn ghost">Refresh</button>
         </div>
         <div id="weatherWidget" class="widget-block">Loading weather...</div>
@@ -169,7 +169,7 @@
     <div class="utils-row" data-layout-row="utility-row-3">
       <div class="card utility-card" data-pod-id="nba-scores">
         <div class="pod-header">
-          <h2>🏀 NBA Scores (Today · EST)</h2>
+          <h2>🏀 NBA Scores (Today · EST) <span id="nba-scoresStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
           <button id="nbaRefreshBtn" class="btn ghost">Refresh</button>
         </div>
         <div id="nbaScoresWidget" class="widget-block">Loading NBA scores...</div>
@@ -199,14 +199,14 @@
     <div class="utils-row" data-layout-row="utility-row-4">
       <div class="card utility-card utility-card-camera-feed" data-pod-id="camera-feed">
         <div class="pod-header">
-          <h2>📷 Camera Feed</h2>
+          <h2>📷 Camera Feed <span id="camera-feedStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
         </div>
         <div id="cameraFeedWidget" class="widget-block"></div>
         <div id="cameraFeedStatus" class="note-meta mt6">Ready. Paste a camera URL and click Load / Start.</div>
       </div>
       <div class="card utility-card utility-card-live-streams" data-pod-id="live-streams">
         <div class="pod-header">
-          <h2>📺 Live Streams</h2>
+          <h2>📺 Live Streams <span id="live-streamsStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
         </div>
         <div id="liveStreamsWidget" class="widget-block"></div>
         <div id="liveStreamsStatus" class="note-meta mt6">Ready. Select source preset + channel/URL, then click Load / Start.</div>
@@ -216,21 +216,21 @@
     <div class="utils-row" data-layout-row="utility-row-5">
       <div class="card utility-card" data-pod-id="voice-note">
         <div class="pod-header">
-          <h2>🎙️ Voice Note</h2>
+          <h2>🎙️ Voice Note <span id="voice-noteStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
         </div>
         <div id="voiceNoteWidget" class="widget-block"></div>
         <div id="voiceNoteStatus" class="note-meta mt6">Ready to record.</div>
       </div>
       <div class="card utility-card" data-pod-id="voice-to-rowan">
         <div class="pod-header">
-          <h2>🗣️ Voice to Rowan</h2>
+          <h2>🗣️ Voice to Rowan <span id="voice-to-rowanStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
         </div>
         <div id="voiceToRowanWidget" class="widget-block"></div>
         <div id="voiceToRowanStatus" class="note-meta mt6">Ready. Start listening, then send manually.</div>
       </div>
       <div class="card utility-card" data-pod-id="music-player">
         <div class="pod-header">
-          <h2>🎵 Music Player</h2>
+          <h2>🎵 Music Player <span id="music-playerStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
         </div>
         <div id="musicPlayerWidget" class="widget-block">Loading music player...</div>
         <div id="musicPlayerStatus" class="note-meta mt6"></div>

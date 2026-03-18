@@ -1555,19 +1555,21 @@ function getCryptoProviderChain(){
   return normalizeCryptoProviderChain(CRYPTO_PROVIDER_CHAIN);
 }
 
-function setPodStatusSignal(podId, status = 'fresh', detail = ''){
+function setPodStatusSignal(podId, status = 'neutral', detail = ''){
   const el = document.getElementById(`${podId}StatusSignal`);
   if (!el) return;
-  const normalized = ['fresh', 'stale', 'error'].includes(String(status).toLowerCase())
-    ? String(status).toLowerCase()
-    : 'fresh';
+  const normalized = String(status || 'neutral').toLowerCase();
+  const allowed = new Set(['neutral', 'fresh', 'stale', 'degraded', 'error']);
+  const mode = allowed.has(normalized) ? normalized : 'neutral';
   const labelMap = {
+    neutral: 'Ready',
     fresh: 'Fresh',
     stale: 'Stale',
+    degraded: 'Degraded',
     error: 'Error',
   };
-  el.className = `badge pod-signal pod-signal-${normalized}`;
-  el.textContent = detail ? `${labelMap[normalized]} · ${detail}` : labelMap[normalized];
+  el.className = `badge pod-signal pod-signal-${mode}`;
+  el.textContent = detail ? `${labelMap[mode]} · ${detail}` : labelMap[mode];
 }
 
 function formatLastSuccessMeta(lastSuccessAt, provider){
