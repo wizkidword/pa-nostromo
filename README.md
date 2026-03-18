@@ -1,48 +1,51 @@
-# PA Nostromo (Local Swiss-Army Dashboard)
+# 🚀 PA Nostromo
 
-PA Nostromo is a local-first productivity dashboard you run on your own machine.
+<p align="center">
+  <b>Local-first mission control for your day-to-day work.</b><br/>
+  One lightweight dashboard for projects, notes, streams, reminders, voice capture, and personal utilities.
+</p>
 
-It combines project tracking + utility pods in one lightweight web app:
+<p align="center">
+  <img alt="Node 18+" src="https://img.shields.io/badge/Node-18%2B-339933?logo=node.js&logoColor=white">
+  <img alt="Local-first" src="https://img.shields.io/badge/Architecture-Local--First-4F46E5">
+  <img alt="License MIT" src="https://img.shields.io/badge/License-MIT-111827">
+</p>
 
 ![PA Nostromo dashboard preview](docs/screenshots/dashboard-preview.svg)
 
-- Project directory + kanban board
-- Notes and ideas capture
-- Reminders + timer/alarm
-- Weather + NBA scores + Crypto watchlist + personalized RSS feed
-- Music player (stream/YouTube/local file)
-- Camera Feed pod (embed stream + snapshot refresh + local browser webcam mode)
-- Live Streams pod (YouTube/Twitch/Kick/Vaughn/Rumble/X Live-Spaces/Facebook Live/Generic URL/Local URL presets)
-- Voice notes (Chrome SpeechRecognition)
-- Cross-browser shared state (Brave + Chrome) via local disk-backed API
+---
 
-## Why local-first?
+## Key Features
 
-- Your data stays on your machine
-- Fast startup, no cloud dependency required
-- Easy to tweak and extend
+- **Project hub**: directory + kanban board + notes/ideas in one place
+- **Personal utility pods**: reminders, timer/alarm, weather, NBA scores, crypto watchlist, RSS feed
+- **Media + live inputs**: music player, camera feed pod, live stream launcher
+- **Voice-to-relay workflow**: send dictated text through a local backend relay endpoint
+- **Cross-browser local state sharing**: Brave/Chrome can sync through disk-backed API storage
+- **State safety guardrails**: automatic backups, restore endpoints, and downgrade-protection on risky writes
 
-## Quick Start (Local Turnkey)
+## Quick Start
 
 ### Requirements
-- Node.js 18+
 
-### 1) Install deps
+- Node.js **18+**
+
+### 1) Install
 
 ```bash
 cd project-mission-control-lite
 npm install
 ```
 
-### 2) Create local config once
+### 2) Configure local env
 
 ```bash
 cp .env.example .env
 ```
 
-Update `.env` with your relay endpoint (and token only if your relay requires auth).
+Edit `.env` with any values you need (especially relay settings if using voice relay).
 
-### 3) Start
+### 3) Run
 
 ```bash
 npm start
@@ -50,248 +53,105 @@ npm start
 
 Open: `http://localhost:4187`
 
-## Data Persistence
+## Configuration (Public-Safe)
 
-- Browser cache fallback: `localStorage`
-- Shared local state: `data/state.json`
-- API endpoint: `GET/POST /api/state`
+`server.js` loads config in this order:
 
-This allows state sharing across browsers on the same machine.
-
-## Sentinel Stabilization Pass (2026-03-11)
-
-This pass focused on low-risk reliability hardening without changing user-facing workflows:
-
-- `renderAll()` is now UI-only (no hidden persistence side effect).
-- New explicit `commitState(reason)` helper handles write-path persistence.
-- Shared-state push now has a startup hydration lock to avoid stale local overwrite races.
-- Added static guardrails: `npm run lint` (`scripts/guardrails-check.js`) + CI workflow.
-- Added reproducible smoke-check checklist under `docs/qa/smoke-stabilization-2026-03.md`.
-
-## State Safety & Recovery
-
-Mission Control now includes a built-in state safety pack to prevent accidental overwrite/data-loss events.
-
-- **Automatic snapshots on every accepted write**: before `/api/state` stores a new state, the previous state is saved to `data/backups/state-<ISO>-<nonce>.json`.
-- **Retention policy**: keeps the most recent 200 snapshots and prunes older files automatically.
-- **Integrity metadata**: every saved state includes `__integrity.savedAt` + `__integrity.checksum` (SHA-256 of state payload) for corruption/malformed write detection.
-- **Downgrade protection**: high-risk "state got much smaller" writes are blocked by default (`409 state_downgrade_blocked`).
-- **Explicit override only for manual recovery/import**: override is honored only when `__writeControl.overrideDowngrade=true` with `source` set to `manual_restore` or `manual_import`.
-
-### Recovery endpoints
-
-- `GET /api/state/backups` → lists snapshots (newest first)
-- `POST /api/state/restore` with `{ "backupFile": "state-...json" }` → restores a snapshot
-  - Restore also creates a **pre-restore snapshot** of current state first.
-
-### UI safety actions (Settings)
-
-- **Export State JSON**: downloads current in-memory state with timestamped filename.
-- **Import State JSON**: prompts for confirmation + warning, then performs guarded import.
-
-### Best practices
-
-1. Use Settings → **Export State JSON** before major manual edits.
-2. If state looks wrong, list backups and restore the most recent known-good snapshot.
-3. Keep writes local/trusted; do not expose this service publicly without auth/network controls.
-
-## Project Structure
-
-- `index.html` - UI shell
-- `styles.css` - styles
-- `app.js` - app logic
-- `server.js` - local static server + `/api/state` + `/api/rowan-send` + `/api/camera-snapshot` + `/api/rss/fetch`
-- `data/state.json` - shared persisted state
-- `assets/social/*` - local social media logo SVGs
-
-## Voice-to-Rowan relay setup
-
-Voice-to-Rowan **Send** uses server endpoint `POST /api/rowan-send` (body: `{ "text": "..." }`).
-
-`server.js` now loads local config files automatically in this order:
 1. shell environment variables
 2. `.env.local`
 3. `.env`
 
-That means one-time local setup is enough; no repeated inline env exports are needed.
+### Core relay settings
 
-### Config keys
+- `ROWAN_RELAY_URL` — required for `POST /api/rowan-send`
+- `ROWAN_RELAY_AUTH_BEARER` — optional bearer token for upstream relay
+- `ROWAN_RELAY_AUTH_HEADER` — auth header name (default `Authorization`)
+- `ROWAN_RELAY_TIMEOUT_MS` — relay timeout (default `8000`)
+- `ROWAN_SEND_MAX_TEXT_LENGTH` — max accepted message length (default `2000`)
+- `ROWAN_ALLOW_REMOTE` — keep `0` for local-only deployments
 
-- `ROWAN_RELAY_URL` (**required**) — relay endpoint that receives relayed JSON payloads
-- `ROWAN_SEND_MAX_TEXT_LENGTH` (default: `2000`) — max accepted message size
-- `ROWAN_RELAY_TIMEOUT_MS` (default: `8000`) — relay request timeout
-- `ROWAN_RELAY_AUTH_BEARER` — bearer token value for upstream relay auth
-- `ROWAN_RELAY_AUTH_HEADER` (default: `Authorization`) — header name used for relay auth
-- `ROWAN_RELAY_OPENCLAW_CHANNEL` (default local: `webchat`) — forwarded OpenClaw channel hint
-- `ROWAN_RELAY_OPENCLAW_TARGET` (default local: `agent:main:main`) — forwarded OpenClaw target hint
-- `ROWAN_ALLOW_REMOTE` (default: `0`) — keep `0` for local-only access; set `1` only on intentionally exposed trusted deployments
+### Camera snapshot proxy safety
 
-### Behavior when relay is not configured
-
-If `ROWAN_RELAY_URL` is missing, `/api/rowan-send` returns a clear error (`relay_not_configured`).
-In the UI, the draft is preserved and the user gets fallback actions (copy draft / open chat), so no speech text is lost.
-
-## RSS Feed pod (V1)
-
-Personalized RSS Feed adds a headline-first reading queue with read-state controls and server-side feed fetching to avoid browser CORS issues.
-
-### Setup
-
-1. Open **Settings → RSS Feeds**.
-2. Add one or more feed URLs (`http`/`https`).
-3. Optionally add a tag/category per feed.
-4. Choose RSS auto-refresh interval (default: every 30 minutes).
-
-### Usage
-
-- Use **Refresh** in the RSS pod for manual fetch.
-- Click **Mark read** on an item to remove it from the active list immediately.
-- Toggle **Show read** to reveal/hide previously read items.
-- Headlines open source links in a new tab (`target="_blank"`).
-
-### Persistence
-
-RSS V1 persists in shared dashboard state:
-- configured feed sources (`rss.feeds`)
-- fetched items (`rss.items`)
-- read state (`rss.readItemIds`)
-- show-read preference + refresh interval
-
-### Server endpoint
-
-- `POST /api/rss/fetch` with `{ "feeds": ["https://..."] }`
-- local-only by default (`RSS_FETCH_ALLOW_REMOTE=0`)
-- guarded by timeout and max payload size limits (`RSS_FETCH_TIMEOUT_MS`, `RSS_FETCH_MAX_BYTES`, `RSS_FETCH_MAX_FEEDS`)
-- per-feed errors are returned without failing the whole batch
-
-## Camera Feed pod (V1)
-
-Camera Feed is a single-feed utility pod for network camera URLs and browser-local webcams.
-
-### Supported modes
-
-1. **Embed Stream mode** (default)
-   - Loads URL directly into an iframe.
-   - Works for embeddable web streams/pages (including some MJPEG/HLS players).
-   - If source blocks iframe embedding (`X-Frame-Options`/CSP/auth), status will fail and you should use Snapshot mode.
-
-2. **Snapshot Refresh mode**
-   - Fetches image snapshots repeatedly at a configurable interval (1-60 seconds).
-   - Useful for cameras exposing a still-image endpoint or when direct embedding is blocked.
-   - Optional **Use local proxy** routes snapshots via `/api/camera-snapshot` for CORS/network compatibility.
-
-3. **Local Webcam (Browser) mode**
-   - Uses `navigator.mediaDevices.getUserMedia({ video: true, audio: false })` in-browser.
-   - Renders a live `<video>` feed directly inside the pod.
-   - Start/Stop cleanly opens/closes media tracks.
-   - Optional webcam device picker (when supported) lets you select a camera and persists selection.
-
-### Local webcam permissions / support notes
-
-- Browser must support `mediaDevices.getUserMedia` (modern Chrome/Brave/Edge/Firefox).
-- Camera access usually requires secure context (`https://`) or localhost.
-- If permission is denied, pod status reports the denial and no stream is started.
-- If camera hardware is missing/busy, status reports a clear error.
-
-### Proxy safety model (`/api/camera-snapshot`)
-
-- Local-only by default (`CAMERA_PROXY_ALLOW_REMOTE=0`)
-- Not an open proxy:
-  - only `http/https`
-  - allows private/local hosts by default (e.g. `192.168.x.x`, `10.x.x.x`, `localhost`, `*.local`)
-  - public hosts require explicit allowlist entries (`CAMERA_PROXY_ALLOWLIST`)
-- Request timeout + max payload size limits are enforced (`CAMERA_PROXY_TIMEOUT_MS`, `CAMERA_PROXY_MAX_BYTES`)
-- Upstream redirects are blocked to prevent allowlist bypass/open-proxy chaining
-
-### Camera config env keys
-
+- `CAMERA_PROXY_ALLOW_REMOTE` (default `0`)
 - `CAMERA_PROXY_ALLOWLIST` (comma-separated public hosts)
-- `CAMERA_PROXY_ALLOW_REMOTE` (`0` default)
-- `CAMERA_PROXY_TIMEOUT_MS` (default `7000`)
-- `CAMERA_PROXY_MAX_BYTES` (default `5242880`)
+- `CAMERA_PROXY_TIMEOUT_MS`
+- `CAMERA_PROXY_MAX_BYTES`
 
-### Limitations (V1)
+### RSS fetch safety
 
-- One active camera feed at a time.
-- No built-in authentication manager for camera credentials.
-- Browser autoplay/embed restrictions still apply to some camera vendors.
+- `RSS_FETCH_ALLOW_REMOTE` (default `0`)
+- `RSS_FETCH_TIMEOUT_MS`
+- `RSS_FETCH_MAX_BYTES`
+- `RSS_FETCH_MAX_FEEDS`
 
-## Live Streams pod (V1)
+> Keep this app local unless you intentionally add network controls and authentication.
 
-Live Streams V1 is a provider-preset stream launcher designed for transparent embed behavior and clear fallbacks.
+## Core Workflows
 
-### Source presets (Phase 2A)
+### 1) Dashboard state sync
 
-1. **YouTube Live** (channel/@handle or URL)
-2. **Twitch** (channel or URL)
-3. **Kick** (channel or URL)
-4. **Vaughn Live** (channel or URL)
-5. **Rumble** (rumble URL preferred; channel slug accepted)
-6. **X Live / Spaces** (`x.com` / `twitter.com` spaces links)
-7. **Facebook Live** (`facebook.com/.../videos/...` or `fb.watch/...`)
-8. **Generic RTMP/HLS/M3U8 URL**
-9. **Local source URL**
+- UI stores state in-memory + local fallback
+- Shared persistence is exposed through:
+  - `GET /api/state`
+  - `POST /api/state`
+- Disk-backed state lives at `data/state.json`
 
-### Behavior model
+### 2) Backup + recovery flow
 
-- **Load / Start** resolves the selected preset into either iframe embed mode or direct `<video>` mode (for media-like URLs).
-- **Stop** clears active playback and returns to idle state.
-- **Status line** always reports loading/success/error/fallback guidance (no silent failures).
-- **Pop-out Player** opens the resolved external stream URL in a controlled popup window (`noopener,noreferrer`, fixed size, resizable).
-- **Open in new tab** remains available as fallback when provider framing policy blocks iframe playback.
-- Latest selected source type and per-source input values are persisted in shared state.
-- Optional lightweight saved presets are supported in-pod.
+- Every accepted state write snapshots the previous state into `data/backups/`
+- List backups: `GET /api/state/backups`
+- Restore backup: `POST /api/state/restore`
 
-### Provider notes / limitations
+### 3) RSS feed workflow
 
-- **YouTube Live:** uses YouTube embed endpoints; channel/live resolution works best with channel IDs or valid live/video URLs.
-- **Twitch:** embed requires `parent=<current-hostname>`; playback can fail if your host isn’t accepted by Twitch embed policy.
-- **Kick:** embed attempted via provider player endpoints; some channels may block framing.
-- **Vaughn:** channel names and common Vaughn URLs (page/embed/popout forms, with or without protocol) are normalized to explicit `https://vaughn.live/embed/<channel>` for iframe use; some channels may still block framing.
-- **Rumble:** direct video/embed URLs can be embedded when resolvable; channel-level inputs cannot reliably infer a live embed ID, so the pod surfaces a non-silent fallback to **Pop-out/Open in new tab**.
-- **X Live / Spaces:** links are normalized to canonical Spaces URLs; X generally blocks third-party iframe playback, so **Pop-out/Open in new tab** is the expected path.
-- **Facebook Live:** uses Facebook plugin embed endpoint (`plugins/video.php?href=...`); playback depends on post privacy and Facebook embed policy. Fallback buttons remain available.
-- **Generic URL:** `rtmp://` is not browser-playable directly (status prompts fallback); HLS/MP4/WebM may work depending on browser codec/HLS support.
-- **Local URL:** intended for local-hosted stream pages/media (e.g., LAN service or localhost); browser mixed-content/CORS/autoplay rules still apply.
+- Configure feeds in **Settings → RSS Feeds**
+- Fetch pipeline via `POST /api/rss/fetch`
+- Read-state and sources are persisted in shared dashboard state
 
-## Production deployment notes
+### 4) Camera + stream workflows
 
-- Do **not** commit `.env` / `.env.local` (already gitignored).
-- Provide relay settings through your process manager / host secret store.
-- Keep `ROWAN_ALLOW_REMOTE=0` unless you have explicit network controls and an authenticated relay path.
-- Use a real auth token (`ROWAN_RELAY_AUTH_BEARER`) whenever the relay endpoint is reachable beyond localhost.
+- **Camera Feed pod** supports embed, snapshot refresh, and local webcam mode
+- **Live Streams pod** supports provider presets (YouTube, Twitch, Kick, Vaughn, Rumble, X, Facebook, generic/local URL)
 
-## Current Status
+## Data & Storage Notes
 
-Early alpha. Built for real daily use and rapid iteration.
+- Main shared state file: `data/state.json`
+- Automatic state backups: `data/backups/`
+- Browser fallback cache: `localStorage`
+- This repository is designed for **local-first usage** and personal trusted environments
 
-## Patch Notes
+## Development Scripts
 
-- 2026-03-11: Live Streams Phase 2A provider expansion: added **Rumble**, **X Live / Spaces**, and **Facebook Live** source presets; introduced provider-specific normalization/resolution paths; preserved persisted source inputs/selection and preset compatibility; and added explicit non-silent fallback messaging when provider embed policies block in-app playback.
-- 2026-03-11: Live Streams Vaughn + fallback patch: Vaughn input normalization now accepts channel/page/embed/popout forms and resolves to explicit embed targets; added **Pop-out Player** fallback button (controlled popup with noopener/noreferrer) while keeping Open in new tab behavior.
-- 2026-03-11: Live Streams pod (V1): added provider presets (YouTube/Twitch/Kick/Vaughn/Generic/Local), source-specific input handling, load/stop controls, persisted latest source values, explicit iframe/media fallback status messaging, optional saved presets, and open-in-new-tab fallback.
-- 2026-03-11: RSS parser reliability patch: improved item title extraction for CDATA + HTML/XML entity encoded titles, added resilient fallback chain (title tag → summary excerpt → URL-derived title), and reduced avoidable `Untitled` entries without changing link/date/summary behavior.
-- 2026-03-11: Personalized RSS Feed pod (V1): added server-side RSS fetch/parse endpoint, Settings feed manager (add/remove + optional tag), manual refresh + configurable auto-refresh, mark-read behavior that removes items from active list immediately, and persisted read/show-read/source state.
-- 2026-03-11: Sentinel stabilization pass: decoupled render pipeline from persistence via explicit `commitState(reason)`, added startup shared-sync hydration lock to prevent stale overwrite races, introduced guardrail static checks/CI, and documented smoke checks for startup sync race + stop-button isolation.
-- 2026-03-11: Camera Feed pod local-webcam patch: added **Local Webcam (Browser)** mode using `getUserMedia`, in-pod `<video>` live rendering, clean media-track start/stop lifecycle, status/error handling for permission/support/hardware issues, and optional persisted webcam device selection.
-- 2026-03-11: Camera Feed pod (V1): added single-feed camera utility with Embed Stream mode + Snapshot Refresh fallback (configurable interval), persisted camera settings/state, and optional local-only `/api/camera-snapshot` relay with host allowlist + payload/timeout guardrails.
-- 2026-03-11: State Safety Pack hardening: automatic versioned pre-write backups (`data/backups` with retention prune), integrity metadata (`savedAt` + checksum), guarded overwrite override paths for manual import/restore, new backup list + restore APIs, and Settings UI export/import controls with confirmation.
-- 2026-03-11: Turnkey local relay config update: `server.js` now auto-loads `.env` / `.env.local` (without overriding shell env), added `.env.example`, documented one-command startup via `npm start`, and kept `/api/rowan-send` local-only hardening defaults intact.
-- 2026-03-11: Voice-to-Rowan relay bridge upgrade: added `POST /api/rowan-send` with validated input, explicit relay env config, local-only default hardening, and UI primary transport shift to server relay with preserved-draft fallback path.
-- 2026-03-10: Crypto Tracker portfolio mode (manual holdings per watched coin: quantity + average buy) with per-coin position/cost/P&L and a compact total portfolio summary.
+Verified from `package.json`:
 
-## Roadmap (short)
+- `npm start` — run local server
+- `npm run lint` — guardrails/static checks (`scripts/guardrails-check.js`)
+- `npm run check` — syntax checks + lint
+- `npm run qa:reset-state` — reset local state for QA flow
+- `npm run qa:smoke:1d1`
+- `npm run qa:smoke:1e1`
+- `npm run qa:smoke:1e1:repeat`
+- `npm run qa:smoke:1f`
+- `npm run test:crypto`
+- `npm run test:crypto-proxy`
 
-- Smart merge/version conflict handling for multi-tab saves
-- Import/export backup controls
-- Pod/plugin architecture docs
-- Better onboarding + default templates
+## Roadmap / Status
 
-## License
+**Status:** early alpha, actively iterated.
 
-MIT
+Near-term focus:
+
+- Better onboarding/default templates
+- Stronger multi-tab state conflict handling
+- Continued pod reliability and quality-of-life improvements
+
+Patch details are tracked in `docs/patch-notes/`.
 
 ## Contributors
 
 - Jacob Rockwell
 - Rowan
+
+## License
+
+MIT
