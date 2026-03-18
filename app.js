@@ -2022,8 +2022,7 @@ async function renderCrypto(options = {}){
     if (cached?.watch?.length) {
       renderCryptoWidget(el, cached.watch);
       const providerLabel = CRYPTO_PROVIDER_LABELS[cached.provider] || CRYPTO_PROVIDER_LABELS[activeCryptoProvider];
-      const cacheIsStale = isCacheStale(cached.updatedAt);
-      setPodStatusSignal('crypto', cacheIsStale ? 'stale' : 'fresh', `retry ${Math.ceil(backoffLeftMs / 1000)}s`);
+      setPodStatusSignal('crypto', 'stale', `retry ${Math.ceil(backoffLeftMs / 1000)}s`);
       if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${Math.ceil(backoffLeftMs / 1000)}s backoff) · Data: ${providerLabel} · ${formatLastSuccessMeta(cryptoLastSuccessAt, cryptoLastSuccessProvider)}`;
       return;
     }
