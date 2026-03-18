@@ -280,7 +280,11 @@ body.theme-light .social-icon-link img {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  margin: 0 0 10px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--panel) 78%, #4cc9f0 22%);
 }
 
 .utility-card .pod-header h2 {
