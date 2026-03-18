@@ -216,25 +216,45 @@ body.theme-light .social-icon-link img {
 .pod-signal {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   vertical-align: middle;
   margin-left: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid transparent;
   font-size: 11px;
+  font-weight: 600;
   line-height: 1.2;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.pod-signal::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
+  opacity: 0.95;
 }
 
 .pod-signal-fresh {
-  background: rgba(34, 197, 94, 0.16);
-  color: #86efac;
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(74, 222, 128, 0.35);
+  color: #bbf7d0;
 }
 
 .pod-signal-stale {
-  background: rgba(234, 179, 8, 0.16);
+  background: rgba(234, 179, 8, 0.17);
+  border-color: rgba(250, 204, 21, 0.42);
   color: #fde68a;
 }
 
 .pod-signal-error {
-  background: rgba(239, 68, 68, 0.16);
-  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fecaca;
 }
 
 .utils-layout {
@@ -516,6 +536,14 @@ form { display: grid; gap: 8px; }
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.row-between-wrap > h2 {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
 }
 
 .gap10 { gap: 10px; }
@@ -976,6 +1004,16 @@ menu {
 
   .utility-card-camera-feed {
     grid-column: auto;
+  }
+
+  .row-between-wrap > h2 {
+    width: 100%;
+  }
+
+  .pod-signal {
+    margin-left: 0;
+    padding: 2px 8px;
+    font-size: 10px;
   }
 }
 
