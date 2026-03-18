@@ -210,6 +210,7 @@ let streamIframePlayer = null;
 let youtubeApiLoading = false;
 let youtubePlayerReady = false;
 let pendingYoutubeAction = null;
+let ambientYoutubeFallbackTimer = null;
 let musicSleepTimer = null;
 let musicSleepEndsAt = 0;
 const AMBIENT_PRESETS = [
@@ -218,7 +219,7 @@ const AMBIENT_PRESETS = [
     label: 'Rain',
     sources: [
       'https://www.youtube.com/watch?v=mPZkdNFkNps',
-      'https://www.youtube.com/watch?v=q76bMs-NwRk',
+      'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
     ],
   },
   {
@@ -226,7 +227,7 @@ const AMBIENT_PRESETS = [
     label: 'Thunder',
     sources: [
       'https://www.youtube.com/watch?v=yMRoNNKWuqQ',
-      'https://www.youtube.com/watch?v=ylj6v17x1xM',
+      'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
     ],
   },
   {
@@ -234,7 +235,7 @@ const AMBIENT_PRESETS = [
     label: 'Forest',
     sources: [
       'https://www.youtube.com/watch?v=OdIJ2x3nxzQ',
-      'https://www.youtube.com/watch?v=3tn_2Tqf7n8',
+      'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
     ],
   },
   {
@@ -556,6 +557,12 @@ function load(){
   const ambientModePatchNote = 'Patch: Music Player now includes compact Ambient mode with one-click nature presets, sleep timer, and quick fallback switching.';
   if (!state.changelog.some((entry) => entry?.message === ambientModePatchNote)) {
     state.changelog.unshift({ id: id(), ts: now(), message: ambientModePatchNote });
+    state.changelog = state.changelog.slice(0, 200);
+  }
+
+  const ambientReliabilityPatchNote = 'Patch: Ambient playback now auto-recovers from failed sources and includes direct-audio fallbacks with clearer error status.';
+  if (!state.changelog.some((entry) => entry?.message === ambientReliabilityPatchNote)) {
+    state.changelog.unshift({ id: id(), ts: now(), message: ambientReliabilityPatchNote });
     state.changelog = state.changelog.slice(0, 200);
   }
 
@@ -2506,6 +2513,7 @@ function runPendingYoutubeAction(){
 
   if (pendingYoutubeAction === 'play' && streamIframePlayer.playVideo) {
     streamIframePlayer.playVideo();
+    clearAmbientYoutubeFallbackTimer();
     pendingYoutubeAction = null;
     state.musicPlayer.isPlaying = true;
     save();
@@ -2517,8 +2525,51 @@ function runPendingYoutubeAction(){
   return false;
 }
 
+function ensureMusicIframe(){
+  let iframe = document.getElementById('musicStreamIframe');
+  if (iframe) return iframe;
+  const pod = document.getElementById('musicPlayerWidget')?.querySelector('[data-pod="music-player"]');
+  if (!pod) return null;
+  const audioEl = pod.querySelector('[data-music-role="audio"]');
+  iframe = document.createElement('iframe');
+  iframe.id = 'musicStreamIframe';
+  iframe.className = 'music-player-hidden';
+  iframe.setAttribute('data-music-role', 'iframe');
+  iframe.setAttribute('allow', 'autoplay; encrypted-media');
+  iframe.setAttribute('title', 'Music stream player');
+  if (audioEl?.parentElement === pod) {
+    pod.insertBefore(iframe, audioEl);
+  } else {
+    pod.appendChild(iframe);
+  }
+  return iframe;
+}
+
+function clearAmbientYoutubeFallbackTimer(){
+  if (ambientYoutubeFallbackTimer) {
+    clearTimeout(ambientYoutubeFallbackTimer);
+    ambientYoutubeFallbackTimer = null;
+  }
+}
+
+function handleAmbientSourceFailure(reason = 'Ambient source failed.'){
+  clearAmbientYoutubeFallbackTimer();
+  if (state.musicPlayer.mode !== 'ambient') {
+    setMusicStatus(reason);
+    return;
+  }
+  const current = getAmbientSourceForPreset();
+  if (!current.hasFallback) {
+    setMusicStatus(`${reason} No alternate source available for ${current.preset.label}.`);
+    return;
+  }
+  const nextIndex = (current.sourceIndex + 1) % current.preset.sources.length;
+  setMusicStatus(`${reason} Trying backup source ${nextIndex + 1}/${current.preset.sources.length}...`);
+  playAmbientPreset(current.preset.id, nextIndex);
+}
+
 function initYouTubePlayerIfReady(){
-  const iframe = document.getElementById('musicStreamIframe');
+  const iframe = ensureMusicIframe();
   if (!iframe || !window.YT?.Player) return false;
 
   youtubePlayerReady = false;
@@ -2526,12 +2577,19 @@ function initYouTubePlayerIfReady(){
     if (streamIframePlayer?.destroy) streamIframePlayer.destroy();
   } catch {}
 
+  const freshIframe = ensureMusicIframe();
+  if (!freshIframe) return false;
+
   streamIframePlayer = new window.YT.Player('musicStreamIframe', {
     events: {
       onReady: () => {
         youtubePlayerReady = true;
         syncMusicVolume(state.musicPlayer.volume);
         runPendingYoutubeAction();
+      },
+      onError: (event) => {
+        const code = Number(event?.data || 0);
+        handleAmbientSourceFailure(`YouTube source error (${code || 'unknown'}).`);
       },
     },
   });
@@ -2693,7 +2751,8 @@ function syncMusicVolume(value){
 }
 
 function loadStreamIntoPlayer(url){
-  const { iframe, audio } = getMusicEls();
+  const { audio } = getMusicEls();
+  const iframe = ensureMusicIframe();
   if (!iframe || !audio) return;
 
   const rawUrl = String(url || '').trim();
@@ -2701,6 +2760,7 @@ function loadStreamIntoPlayer(url){
   if (ytId) {
     state.musicPlayer.streamMode = 'youtube';
     youtubePlayerReady = false;
+    clearAmbientYoutubeFallbackTimer();
     audio.pause();
     audio.removeAttribute('src');
     iframe.src = `https://www.youtube.com/embed/${encodeURIComponent(ytId)}?enablejsapi=1&autoplay=0&playsinline=1`;
@@ -2712,6 +2772,7 @@ function loadStreamIntoPlayer(url){
 
   state.musicPlayer.streamMode = 'direct';
   pendingYoutubeAction = null;
+  clearAmbientYoutubeFallbackTimer();
   iframe.src = '';
   audio.src = rawUrl;
   audio.volume = state.musicPlayer.volume;
@@ -2752,6 +2813,14 @@ function playMusic(){
 
     if (!runPendingYoutubeAction()) {
       setMusicStatus('YouTube player is loading — play will start automatically when ready.');
+      clearAmbientYoutubeFallbackTimer();
+      if (state.musicPlayer.mode === 'ambient') {
+        ambientYoutubeFallbackTimer = setTimeout(() => {
+          if (state.musicPlayer.mode === 'ambient' && state.musicPlayer.streamMode === 'youtube' && pendingYoutubeAction === 'play') {
+            handleAmbientSourceFailure('YouTube source did not start in time.');
+          }
+        }, 5000);
+      }
     }
     return;
   }
@@ -2788,6 +2857,7 @@ function playMusic(){
 function pauseMusic(){
   const { audio } = getMusicEls();
   pendingYoutubeAction = null;
+  clearAmbientYoutubeFallbackTimer();
   if (state.musicPlayer.sourceType === 'local' || state.musicPlayer.streamMode === 'direct') {
     audio?.pause();
   } else if (state.musicPlayer.streamMode === 'youtube' && streamIframePlayer?.pauseVideo) {
@@ -2801,6 +2871,7 @@ function pauseMusic(){
 function stopMusic(){
   const { audio, iframe } = getMusicEls();
   pendingYoutubeAction = null;
+  clearAmbientYoutubeFallbackTimer();
   if (state.musicPlayer.sourceType === 'local' || state.musicPlayer.streamMode === 'direct') {
     if (audio) {
       audio.pause();
@@ -2889,8 +2960,7 @@ function renderMusicPlayer(){
     els.audio.volume = state.musicPlayer.volume;
     els.audio.addEventListener('error', () => {
       if (state.musicPlayer.mode === 'ambient') {
-        const current = getAmbientSourceForPreset();
-        setMusicStatus(`Ambient stream failed for ${current.preset.label}. Use Try Next Source.`);
+        handleAmbientSourceFailure('Ambient source failed to load/play.');
       } else {
         setMusicStatus('Stream failed to load/play. Try another URL.');
       }
