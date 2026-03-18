@@ -20,12 +20,12 @@ const debugCounters = window.MissionControlModules?.debug || null;
 
 const COLUMNS = [
   ['inbox', 'Inbox'],
-  ['ideas', 'Ideas'],
   ['in_progress', 'In Progress'],
   ['waiting_blocked', 'Waiting / Blocked'],
   ['ready_to_publish', 'Ready to Publish'],
   ['done', 'Done'],
 ];
+const KANBAN_COLUMN_KEYS = new Set(COLUMNS.map(([key]) => key));
 
 const DEFAULT_SETTINGS = {
   theme: 'dark', // dark | light | system
@@ -352,6 +352,41 @@ function ensureChangelogPatch(stateObj, message){
   stateObj.changelog.unshift({ id: id(), ts: now(), message });
   stateObj.changelog = stateObj.changelog.slice(0, 200);
 }
+function normalizeTaskColumn(column){
+  const key = String(column || '').trim();
+  return KANBAN_COLUMN_KEYS.has(key) ? key : 'inbox';
+}
+function migrateIdeasTasksToNotes(stateObj){
+  if (!Array.isArray(stateObj?.tasks) || !Array.isArray(stateObj?.notes)) return 0;
+  const ideasTasks = stateObj.tasks.filter((task) => task?.column === 'ideas');
+  if (!ideasTasks.length) return 0;
+
+  const migratedAt = now();
+  ideasTasks.forEach((task) => {
+    const nextAction = String(task.nextAction || '').trim();
+    const owner = String(task.owner || 'Rowan').trim();
+    const lines = [
+      `Migrated from Kanban ideas column (${migratedAt}).`,
+      `Original task id: ${task.id || 'unknown'}`,
+    ];
+    if (nextAction) lines.push(`Next action: ${nextAction}`);
+    if (owner) lines.push(`Owner: ${owner}`);
+
+    stateObj.notes.unshift({
+      id: id(),
+      title: String(task.title || 'Idea from task').trim() || 'Idea from task',
+      body: lines.join('\n'),
+      projectId: task.projectId || stateObj.projects?.[0]?.id || '',
+      pinned: false,
+      createdAt: migratedAt,
+      updatedAt: migratedAt,
+    });
+  });
+
+  stateObj.tasks = stateObj.tasks.filter((task) => task?.column !== 'ideas');
+  stateObj.notes = stateObj.notes.slice(0, 500);
+  return ideasTasks.length;
+}
 function load(){
   const raw = localStorage.getItem(STORAGE_KEY);
   let state;
@@ -378,9 +413,18 @@ function load(){
   state.ideas = Array.isArray(state.ideas) ? state.ideas : [];
   state.reminders = Array.isArray(state.reminders) ? state.reminders : [];
   state.settings = { ...DEFAULT_SETTINGS, ...(state.settings || {}) };
+  state.settings.defaultTaskColumn = normalizeTaskColumn(state.settings.defaultTaskColumn);
   state.settings.shortcutsFilterProjectIds = Array.isArray(state.settings.shortcutsFilterProjectIds)
     ? state.settings.shortcutsFilterProjectIds
     : [];
+  const migratedIdeasTaskCount = migrateIdeasTasksToNotes(state);
+  if (migratedIdeasTaskCount > 0) {
+    ensureChangelogPatch(state, `Cleanup: migrated ${migratedIdeasTaskCount} idea task${migratedIdeasTaskCount === 1 ? '' : 's'} into Ideas notes and removed Kanban ideas column usage.`);
+  }
+  state.tasks = state.tasks.map((task) => ({
+    ...task,
+    column: normalizeTaskColumn(task?.column),
+  }));
   state.layout = normalizeUtilityLayoutState(state.layout);
   state.cryptoWatchlist = Array.isArray(state.cryptoWatchlist) ? state.cryptoWatchlist : ['bitcoin', 'ethereum'];
 
@@ -566,6 +610,7 @@ function load(){
   ensureChangelogPatch(state, 'Patch: Ambient presets now use category-matched source sets with built-in non-YouTube fallbacks for Rain/Thunder/Forest/Fireplace/Ocean/Cafe/Wind/Night Crickets/Pink Noise.');
   ensureChangelogPatch(state, 'Patch: Music hotfix restored reliable Stream favorite/manual playback, isolated ambient fallback handling, and refreshed Thunder/Forest/Fireplace fallback audio assets.');
   ensureChangelogPatch(state, 'Patch: Ambient source tuning corrected Cafe/Wind/Night Crickets/Pink Noise links and realigned fallback audio tone for category accuracy.');
+  ensureChangelogPatch(state, 'Patch: Renamed Mini Notes Board to Ideas and retired the Kanban Ideas column (legacy idea tasks are migrated into Ideas notes).');
 
   // Ensure reminder task exists for pod drag/drop idea.
   const mission = (state.projects || []).find((p) => p.name === 'Mission Control Dashboard');
@@ -576,7 +621,7 @@ function load(){
       id: id(),
       title: taskTitle,
       projectId: mission.id,
-      column: 'ideas',
+      column: 'inbox',
       blockerType: null,
       owner: 'Rowan',
       nextAction: 'Design Phase 2 approach for draggable pod reordering with local persistence.',
@@ -585,7 +630,7 @@ function load(){
       updatedAt: now(),
     });
   } else if (existingPodTask) {
-    existingPodTask.column = 'ideas';
+    existingPodTask.column = normalizeTaskColumn(existingPodTask.column);
     existingPodTask.updatedAt = now();
   }
 
@@ -5764,7 +5809,7 @@ function openEditTaskDialog(taskId){
   editTaskForm.elements.id.value = task.id;
   editTaskForm.elements.title.value = task.title || '';
   editTaskForm.elements.projectId.value = task.projectId || state.projects[0]?.id || '';
-  editTaskForm.elements.column.value = task.column || 'inbox';
+  editTaskForm.elements.column.value = normalizeTaskColumn(task.column);
   editTaskForm.elements.blockerType.value = task.blockerType || '';
   editTaskForm.elements.owner.value = task.owner || 'Rowan';
   editTaskForm.elements.nextAction.value = task.nextAction || '';
@@ -5859,8 +5904,8 @@ document.getElementById('settingWeatherInterval')?.addEventListener('change', (e
 });
 
 document.getElementById('settingDefaultTaskColumn')?.addEventListener('change', (e)=> {
-  state.settings.defaultTaskColumn = e.target.value;
-  logChange(`Default new task column set to ${e.target.value}`);
+  state.settings.defaultTaskColumn = normalizeTaskColumn(e.target.value);
+  logChange(`Default new task column set to ${state.settings.defaultTaskColumn}`);
   save();
 });
 
@@ -6140,7 +6185,7 @@ document.getElementById('taskForm').addEventListener('submit', e=>{
     id: id(),
     title: f.get('title'),
     projectId: f.get('projectId'),
-    column: f.get('column'),
+    column: normalizeTaskColumn(f.get('column')),
     blockerType: f.get('blockerType') || null,
     owner: f.get('owner') || 'Rowan',
     nextAction: f.get('nextAction'),
@@ -6166,7 +6211,7 @@ editTaskForm?.addEventListener('submit', (e) => {
 
   task.title = f.get('title');
   task.projectId = f.get('projectId');
-  task.column = f.get('column');
+  task.column = normalizeTaskColumn(f.get('column'));
   task.blockerType = f.get('blockerType') || null;
   task.owner = f.get('owner') || 'Rowan';
   task.nextAction = f.get('nextAction');
