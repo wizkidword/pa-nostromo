@@ -1631,9 +1631,16 @@ async function fetchGasPricesAuto(locationInput = ''){
 
   try {
     const res = await fetch(`/api/gas-prices?location=${encodeURIComponent(location)}`);
-    const data = await res.json();
+    const raw = await res.text();
+    let data = null;
+    try {
+      data = raw ? JSON.parse(raw) : null;
+    } catch {
+      data = null;
+    }
     if (!res.ok || !data?.ok || !data?.prices) {
-      const err = new Error(data?.message || `Gas upstream failed (${res.status})`);
+      const fallbackMsg = raw && !data ? raw.slice(0, 140) : '';
+      const err = new Error(data?.message || fallbackMsg || `Gas upstream failed (${res.status})`);
       err.status = res.status;
       throw err;
     }
