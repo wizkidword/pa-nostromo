@@ -196,6 +196,7 @@ const pollingFailureState = {
 let changeLogVisible = false;
 let changeLogLimit = 10;
 let pendingChanges = [];
+let settingsPodDragState = null;
 let alarmTimer = null;
 let alarmEndTs = null;
 let alarmAudioCtx = null;
@@ -448,6 +449,12 @@ function load(){
   const portfolioPatchNote = 'Patch: Crypto Tracker now supports portfolio holdings (qty + avg buy) with unrealized P/L summary.';
   if (!state.changelog.some((entry) => entry?.message === portfolioPatchNote)) {
     state.changelog.unshift({ id: id(), ts: now(), message: portfolioPatchNote });
+    state.changelog = state.changelog.slice(0, 200);
+  }
+
+  const utilityPodDndPatchNote = 'Patch: Utility Pod order now supports drag-and-drop across rows in Settings (arrow buttons still reorder within each row).';
+  if (!state.changelog.some((entry) => entry?.message === utilityPodDndPatchNote)) {
+    state.changelog.unshift({ id: id(), ts: now(), message: utilityPodDndPatchNote });
     state.changelog = state.changelog.slice(0, 200);
   }
 
@@ -4510,24 +4517,33 @@ function renderPodVisibilitySettings(){
 
   ensureLayoutIncludesKnownPods();
   const rows = state.layout.utilityRows;
-  wrap.innerHTML = rows.map((row, rowIndex) => row.map((podId, podIndex) => {
-    const checked = state.layout.visibility?.[podId] !== false ? 'checked' : '';
-    const upDisabled = podIndex === 0 ? 'disabled' : '';
-    const downDisabled = podIndex === row.length - 1 ? 'disabled' : '';
-    return `
-      <div class="pod-toggle-row">
-        <label>
-          <input type="checkbox" data-pod-visibility="${escapeHtml(podId)}" ${checked} />
-          ${escapeHtml(getUtilityPodTitle(podId))}
-          <div class="pod-toggle-meta">${escapeHtml(podId)} · Row ${rowIndex + 1}</div>
-        </label>
-        <div class="pod-toggle-actions">
-          <button type="button" class="btn ghost" data-pod-move="up" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" ${upDisabled}>↑</button>
-          <button type="button" class="btn ghost" data-pod-move="down" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" ${downDisabled}>↓</button>
+  wrap.innerHTML = rows.map((row, rowIndex) => {
+    const items = row.map((podId, podIndex) => {
+      const checked = state.layout.visibility?.[podId] !== false ? 'checked' : '';
+      const upDisabled = podIndex === 0 ? 'disabled' : '';
+      const downDisabled = podIndex === row.length - 1 ? 'disabled' : '';
+      return `
+        <div class="pod-toggle-row" draggable="true" data-dnd-pod-row="${rowIndex}" data-dnd-pod-index="${podIndex}" data-dnd-pod-id="${escapeHtml(podId)}">
+          <label>
+            <input type="checkbox" data-pod-visibility="${escapeHtml(podId)}" ${checked} />
+            ${escapeHtml(getUtilityPodTitle(podId))}
+            <div class="pod-toggle-meta">${escapeHtml(podId)} · Row ${rowIndex + 1}</div>
+          </label>
+          <div class="pod-toggle-actions">
+            <button type="button" class="btn ghost" data-pod-move="up" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" ${upDisabled}>↑</button>
+            <button type="button" class="btn ghost" data-pod-move="down" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" ${downDisabled}>↓</button>
+          </div>
         </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="pod-toggle-row-group" data-pod-drop-row="${rowIndex}">
+        <div class="pod-toggle-row-group-title">Utility Row ${rowIndex + 1}</div>
+        ${items || '<div class="note-meta">No pods in this row.</div>'}
       </div>
     `;
-  }).join('')).join('');
+  }).join('');
 }
 
 function getEventClosestTarget(event, selector){
@@ -4557,6 +4573,53 @@ function movePodWithinRow(rowIndex, podIndex, direction){
   copy.splice(targetIndex, 0, item);
   state.layout.utilityRows[rowIndex] = copy;
   return true;
+}
+
+function movePodAcrossRows(fromRowIndex, fromPodIndex, toRowIndex, toPodIndex){
+  const rows = state.layout.utilityRows;
+  if (!Array.isArray(rows)) return false;
+  const sourceRow = rows?.[fromRowIndex];
+  const targetRow = rows?.[toRowIndex];
+  if (!Array.isArray(sourceRow) || !Array.isArray(targetRow)) return false;
+  if (!Number.isInteger(fromPodIndex) || fromPodIndex < 0 || fromPodIndex >= sourceRow.length) return false;
+
+  const sourceCopy = [...sourceRow];
+  const [podId] = sourceCopy.splice(fromPodIndex, 1);
+  if (!podId) return false;
+
+  const sameRow = fromRowIndex === toRowIndex;
+  let insertIndex = Number.isInteger(toPodIndex) ? toPodIndex : targetRow.length;
+  if (sameRow && insertIndex > fromPodIndex) insertIndex -= 1;
+
+  const targetBase = sameRow ? sourceCopy : [...targetRow];
+  insertIndex = Math.max(0, Math.min(insertIndex, targetBase.length));
+  targetBase.splice(insertIndex, 0, podId);
+
+  rows[fromRowIndex] = sameRow ? targetBase : sourceCopy;
+  if (!sameRow) rows[toRowIndex] = targetBase;
+  return true;
+}
+
+function calculateDropIndexFromPointer(dropRowEl, pointerClientY){
+  if (!dropRowEl) return 0;
+  const rowIndex = Number(dropRowEl.dataset.podDropRow);
+  const rowItems = [...dropRowEl.querySelectorAll('.pod-toggle-row[data-dnd-pod-index]')];
+  if (!rowItems.length) return 0;
+
+  for (let i = 0; i < rowItems.length; i += 1) {
+    const rect = rowItems[i].getBoundingClientRect();
+    if (pointerClientY < rect.top + (rect.height / 2)) return i;
+  }
+
+  const row = state.layout.utilityRows?.[rowIndex];
+  return Array.isArray(row) ? row.length : rowItems.length;
+}
+
+function clearPodDragUi(){
+  const wrap = document.getElementById('settingsPodVisibilityList');
+  if (!wrap) return;
+  wrap.querySelectorAll('.pod-toggle-row.is-dragging').forEach((el) => el.classList.remove('is-dragging'));
+  wrap.querySelectorAll('.pod-toggle-row-group.is-drop-target').forEach((el) => el.classList.remove('is-drop-target'));
 }
 
 function renderAll(){
@@ -5389,6 +5452,63 @@ document.getElementById('settingsPodVisibilityList')?.addEventListener('click', 
   save('pod_layout_reordered');
   applyUtilityLayoutToDom();
   renderPodVisibilitySettings();
+});
+
+document.getElementById('settingsPodVisibilityList')?.addEventListener('dragstart', (e) => {
+  const rowEl = getEventClosestTarget(e, '.pod-toggle-row[data-dnd-pod-row][data-dnd-pod-index][data-dnd-pod-id]');
+  if (!rowEl) return;
+  const fromRow = Number(rowEl.dataset.dndPodRow);
+  const fromIndex = Number(rowEl.dataset.dndPodIndex);
+  const podId = String(rowEl.dataset.dndPodId || '').trim();
+  if (!Number.isInteger(fromRow) || !Number.isInteger(fromIndex) || !podId) return;
+
+  settingsPodDragState = { fromRow, fromIndex, podId };
+  rowEl.classList.add('is-dragging');
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', podId); } catch {}
+  }
+});
+
+document.getElementById('settingsPodVisibilityList')?.addEventListener('dragover', (e) => {
+  if (!settingsPodDragState) return;
+  const dropRow = getEventClosestTarget(e, '.pod-toggle-row-group[data-pod-drop-row]');
+  if (!dropRow) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+
+  document.querySelectorAll('#settingsPodVisibilityList .pod-toggle-row-group.is-drop-target').forEach((el) => {
+    if (el !== dropRow) el.classList.remove('is-drop-target');
+  });
+  dropRow.classList.add('is-drop-target');
+});
+
+document.getElementById('settingsPodVisibilityList')?.addEventListener('drop', (e) => {
+  const dropRow = getEventClosestTarget(e, '.pod-toggle-row-group[data-pod-drop-row]');
+  if (!settingsPodDragState || !dropRow) return;
+  e.preventDefault();
+
+  const toRow = Number(dropRow.dataset.podDropRow);
+  if (!Number.isInteger(toRow)) {
+    settingsPodDragState = null;
+    clearPodDragUi();
+    return;
+  }
+
+  const toIndex = calculateDropIndexFromPointer(dropRow, e.clientY);
+  const moved = movePodAcrossRows(settingsPodDragState.fromRow, settingsPodDragState.fromIndex, toRow, toIndex);
+  settingsPodDragState = null;
+  clearPodDragUi();
+  if (!moved) return;
+
+  save('pod_layout_reordered');
+  applyUtilityLayoutToDom();
+  renderPodVisibilitySettings();
+});
+
+document.getElementById('settingsPodVisibilityList')?.addEventListener('dragend', () => {
+  settingsPodDragState = null;
+  clearPodDragUi();
 });
 
 document.getElementById('addRssFeedBtn')?.addEventListener('click', async () => {
