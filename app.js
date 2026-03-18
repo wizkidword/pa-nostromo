@@ -207,10 +207,12 @@ let alarmAudioCtx = null;
 let alarmRepeatTimer = null;
 let selectedCalendarDate = null;
 let streamIframePlayer = null;
+let streamIframeEl = null;
 let youtubeApiLoading = false;
 let youtubePlayerReady = false;
 let pendingYoutubeAction = null;
 let ambientYoutubeFallbackTimer = null;
+let youtubePlayGuardTimer = null;
 let musicSleepTimer = null;
 let musicSleepEndsAt = 0;
 const AMBIENT_PRESETS = [
@@ -562,6 +564,7 @@ function load(){
   ensureChangelogPatch(state, 'Patch: Music Player now includes compact Ambient mode with one-click nature presets, sleep timer, and quick fallback switching.');
   ensureChangelogPatch(state, 'Patch: Ambient playback now auto-recovers from failed sources and includes direct-audio fallbacks with clearer error status.');
   ensureChangelogPatch(state, 'Patch: Ambient presets now use category-matched source sets with built-in non-YouTube fallbacks for Rain/Thunder/Forest/Fireplace/Ocean/Cafe/Wind/Night Crickets/Pink Noise.');
+  ensureChangelogPatch(state, 'Patch: Music hotfix restored reliable Stream favorite/manual playback, isolated ambient fallback handling, and refreshed Thunder/Forest/Fireplace fallback audio assets.');
 
   // Ensure reminder task exists for pod drag/drop idea.
   const mission = (state.projects || []).find((p) => p.name === 'Mission Control Dashboard');
@@ -2511,6 +2514,7 @@ function runPendingYoutubeAction(){
   if (pendingYoutubeAction === 'play' && streamIframePlayer.playVideo) {
     streamIframePlayer.playVideo();
     clearAmbientYoutubeFallbackTimer();
+    clearYoutubePlayGuardTimer();
     pendingYoutubeAction = null;
     state.musicPlayer.isPlaying = true;
     save();
@@ -2549,6 +2553,13 @@ function clearAmbientYoutubeFallbackTimer(){
   }
 }
 
+function clearYoutubePlayGuardTimer(){
+  if (youtubePlayGuardTimer) {
+    clearTimeout(youtubePlayGuardTimer);
+    youtubePlayGuardTimer = null;
+  }
+}
+
 function handleAmbientSourceFailure(reason = 'Ambient source failed.'){
   clearAmbientYoutubeFallbackTimer();
   if (state.musicPlayer.mode !== 'ambient') {
@@ -2571,13 +2582,17 @@ function initYouTubePlayerIfReady(){
   const iframe = ensureMusicIframe();
   if (!iframe || !window.YT?.Player) return false;
 
+  if (streamIframePlayer && streamIframeEl === iframe) {
+    return true;
+  }
+
   youtubePlayerReady = false;
   try {
     if (streamIframePlayer?.destroy) streamIframePlayer.destroy();
   } catch {}
 
-  const freshIframe = ensureMusicIframe();
-  if (!freshIframe) return false;
+  streamIframePlayer = null;
+  streamIframeEl = iframe;
 
   streamIframePlayer = new window.YT.Player('musicStreamIframe', {
     events: {
@@ -2588,7 +2603,13 @@ function initYouTubePlayerIfReady(){
       },
       onError: (event) => {
         const code = Number(event?.data || 0);
-        handleAmbientSourceFailure(`YouTube source error (${code || 'unknown'}).`);
+        if (state.musicPlayer.mode === 'ambient') {
+          handleAmbientSourceFailure(`YouTube source error (${code || 'unknown'}).`);
+          return;
+        }
+        state.musicPlayer.isPlaying = false;
+        save();
+        setMusicStatus(`YouTube stream error (${code || 'unknown'}). Try another URL or retry.`);
       },
     },
   });
@@ -2703,6 +2724,9 @@ function tryNextAmbientSource(){
 
 function setMusicMode(mode){
   state.musicPlayer.mode = mode === 'ambient' ? 'ambient' : 'stream';
+  if (state.musicPlayer.mode !== 'ambient') {
+    clearAmbientYoutubeFallbackTimer();
+  }
   save();
 }
 
@@ -2751,6 +2775,7 @@ function loadLocalMusicFile(file, audioEl){
   state.musicPlayer.sourceType = 'local';
   state.musicPlayer.streamMode = 'unknown';
   pendingYoutubeAction = null;
+  clearYoutubePlayGuardTimer();
   state.musicPlayer.currentTrackName = file.name;
   audioEl.src = URL.createObjectURL(file);
   audioEl.volume = state.musicPlayer.volume;
@@ -2779,6 +2804,7 @@ function loadStreamIntoPlayer(url){
     state.musicPlayer.streamMode = 'youtube';
     youtubePlayerReady = false;
     clearAmbientYoutubeFallbackTimer();
+    clearYoutubePlayGuardTimer();
     audio.pause();
     audio.loop = false;
     audio.removeAttribute('src');
@@ -2794,6 +2820,7 @@ function loadStreamIntoPlayer(url){
   state.musicPlayer.streamMode = 'direct';
   pendingYoutubeAction = null;
   clearAmbientYoutubeFallbackTimer();
+  clearYoutubePlayGuardTimer();
   iframe.src = '';
   audio.src = rawUrl;
   audio.loop = state.musicPlayer.mode === 'ambient';
@@ -2843,12 +2870,19 @@ function playMusic(){
         setMusicStatus('YouTube player is loading — play will start automatically when ready.');
       }
       clearAmbientYoutubeFallbackTimer();
+      clearYoutubePlayGuardTimer();
       if (state.musicPlayer.mode === 'ambient') {
         ambientYoutubeFallbackTimer = setTimeout(() => {
           if (state.musicPlayer.mode === 'ambient' && state.musicPlayer.streamMode === 'youtube' && pendingYoutubeAction === 'play') {
             handleAmbientSourceFailure('YouTube source did not start in time.');
           }
         }, 5000);
+      } else {
+        youtubePlayGuardTimer = setTimeout(() => {
+          if (state.musicPlayer.mode === 'stream' && state.musicPlayer.streamMode === 'youtube' && pendingYoutubeAction === 'play') {
+            setMusicStatus('YouTube playback is taking too long to start. Press Play again or load another URL.');
+          }
+        }, 6000);
       }
     }
     return;
@@ -2887,6 +2921,7 @@ function pauseMusic(){
   const { audio } = getMusicEls();
   pendingYoutubeAction = null;
   clearAmbientYoutubeFallbackTimer();
+  clearYoutubePlayGuardTimer();
   if (state.musicPlayer.sourceType === 'local' || state.musicPlayer.streamMode === 'direct') {
     audio?.pause();
   } else if (state.musicPlayer.streamMode === 'youtube' && streamIframePlayer?.pauseVideo) {
@@ -2901,6 +2936,7 @@ function stopMusic(){
   const { audio, iframe } = getMusicEls();
   pendingYoutubeAction = null;
   clearAmbientYoutubeFallbackTimer();
+  clearYoutubePlayGuardTimer();
   if (state.musicPlayer.sourceType === 'local' || state.musicPlayer.streamMode === 'direct') {
     if (audio) {
       audio.pause();
