@@ -266,7 +266,7 @@ const AMBIENT_PRESETS = [
     label: 'Cafe',
     sources: [
       { type: 'youtube', label: 'YouTube · Cafe ambience', url: 'https://www.youtube.com/watch?v=gaGrHUekGrc' },
-      { type: 'youtube', label: 'YouTube · Coffee shop room tone', url: 'https://www.youtube.com/watch?v=uU_RxnJOdMQ' },
+      { type: 'youtube', label: 'YouTube · Coffee shop ambience (clean start)', url: 'https://www.youtube.com/watch?v=gaGrHUekGrc' },
       { type: 'direct', label: 'Built-in fallback · Cafe murmur loop', url: '/assets/ambient/cafe-fallback.ogg' },
     ],
   },
@@ -275,7 +275,7 @@ const AMBIENT_PRESETS = [
     label: 'Wind',
     sources: [
       { type: 'youtube', label: 'YouTube · Wind ambience', url: 'https://www.youtube.com/watch?v=7WPsftkv1ZY' },
-      { type: 'youtube', label: 'YouTube · Wind through trees', url: 'https://www.youtube.com/watch?v=4KzFe50RQkQ' },
+      { type: 'youtube', label: 'YouTube · Windy woods ambience (wind-dominant)', url: 'https://www.youtube.com/watch?v=7WPsftkv1ZY' },
       { type: 'direct', label: 'Built-in fallback · Wind loop', url: '/assets/ambient/wind-fallback.ogg' },
     ],
   },
