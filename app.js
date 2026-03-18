@@ -68,7 +68,21 @@ function normalizeUtilityLayoutState(layoutInput, knownPodIds = []){
 
   const missing = allKnown.filter((podId) => !seen.has(podId));
   if (!rows.length) rows.push([...fallbackRows[0]]);
-  if (missing.length) rows.push(missing);
+  if (missing.length) {
+    const pending = new Set(missing);
+    for (const baseRow of fallbackRows) {
+      const targets = baseRow.filter((podId) => pending.has(podId));
+      if (!targets.length) continue;
+      const rowIndex = rows.findIndex((row) => row.some((id) => baseRow.includes(id)));
+      if (rowIndex >= 0) {
+        rows[rowIndex].push(...targets);
+      } else {
+        rows.push([...targets]);
+      }
+      for (const podId of targets) pending.delete(podId);
+    }
+    if (pending.size) rows.push([...pending]);
+  }
 
   const visibilityInput = (layoutInput && typeof layoutInput.visibility === 'object' && layoutInput.visibility)
     ? layoutInput.visibility
