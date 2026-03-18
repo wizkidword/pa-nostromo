@@ -1418,12 +1418,15 @@ async function getCoinDirectory(force = false){
   return coinDirectory;
 }
 
-const CRYPTO_PROVIDER_CHAIN = ['coingecko', 'coincap', 'cryptocompare'];
+const CRYPTO_PROVIDER_CHAIN = ['coincap', 'coingecko', 'cryptocompare'];
 const CRYPTO_PROVIDER_LABELS = {
   coingecko: 'CoinGecko',
   coincap: 'CoinCap',
   cryptocompare: 'CryptoCompare',
 };
+const CRYPTO_PROVIDER_RETRY_COUNT = 1;
+const CRYPTO_PROVIDER_RETRY_BASE_MS = 500;
+const CRYPTO_PROVIDER_RETRY_MAX_MS = 2200;
 
 const CRYPTO_SYMBOL_ALIASES = {
   btc: 'bitcoin',
@@ -1444,7 +1447,7 @@ const CRYPTO_SYMBOL_ALIASES = {
   etc: 'ethereum-classic',
 };
 
-let activeCryptoProvider = 'coingecko';
+let activeCryptoProvider = 'coincap';
 
 function mapCoinIdToSymbolMap(){
   const m = new Map();
@@ -1513,7 +1516,7 @@ function getCryptoWatchCache(){
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed?.updatedAt || !Array.isArray(parsed?.watch)) return null;
-    if (!parsed.provider) parsed.provider = 'coingecko';
+    if (!parsed.provider) parsed.provider = 'coincap';
     return parsed;
   } catch {
     return null;
@@ -1723,24 +1726,44 @@ async function fetchWatchFromCryptoCompare(watchIds){
 }
 
 async function fetchCryptoWatchWithFailover(watchIds){
-  let lastErr = null;
-  for (const provider of CRYPTO_PROVIDER_CHAIN) {
-    try {
-      let watch = [];
-      if (provider === 'coingecko') watch = await fetchWatchFromCoinGecko(watchIds);
-      else if (provider === 'coincap') watch = await fetchWatchFromCoinCap(watchIds);
-      else if (provider === 'cryptocompare') watch = await fetchWatchFromCryptoCompare(watchIds);
-
-      if (watchIds.length && !watch.length) {
-        throw cryptoProviderError(provider, new Error('Empty watchlist response'));
+  const failoverApi = window?.MissionControlModules?.cryptoFailover;
+  if (!failoverApi?.fetchWithFailover) {
+    let lastErr = null;
+    for (const provider of CRYPTO_PROVIDER_CHAIN) {
+      try {
+        let watch = [];
+        if (provider === 'coingecko') watch = await fetchWatchFromCoinGecko(watchIds);
+        else if (provider === 'coincap') watch = await fetchWatchFromCoinCap(watchIds);
+        else if (provider === 'cryptocompare') watch = await fetchWatchFromCryptoCompare(watchIds);
+        if (watchIds.length && !watch.length) throw cryptoProviderError(provider, new Error('Empty watchlist response'));
+        return { provider, watch, attempts: 1, errors: [] };
+      } catch (error) {
+        lastErr = cryptoProviderError(provider, error);
       }
-
-      return { provider, watch };
-    } catch (error) {
-      lastErr = cryptoProviderError(provider, error);
     }
+    throw lastErr || new Error('All crypto providers failed');
   }
-  throw lastErr || new Error('All crypto providers failed');
+
+  const result = await failoverApi.fetchWithFailover({
+    providers: CRYPTO_PROVIDER_CHAIN,
+    retries: CRYPTO_PROVIDER_RETRY_COUNT,
+    backoffBaseMs: CRYPTO_PROVIDER_RETRY_BASE_MS,
+    backoffMaxMs: CRYPTO_PROVIDER_RETRY_MAX_MS,
+    isRetryableError(error){
+      return failoverApi.defaultIsRetryableError(error);
+    },
+    async tryProvider(provider){
+      if (provider === 'coingecko') return fetchWatchFromCoinGecko(watchIds);
+      if (provider === 'coincap') return fetchWatchFromCoinCap(watchIds);
+      if (provider === 'cryptocompare') return fetchWatchFromCryptoCompare(watchIds);
+      throw new Error(`Unknown provider: ${provider}`);
+    },
+    shouldAcceptResult(watch){
+      return !watchIds.length || (Array.isArray(watch) && watch.length > 0);
+    },
+  });
+
+  return { provider: result.provider, watch: result.result, attempts: result.attempts, errors: result.errors };
 }
 
 function updateCryptoRefreshButton(){
@@ -1950,7 +1973,7 @@ async function renderCrypto(options = {}){
     await fetchTopSymbolMapWithFailover();
 
     const watchIds = (state.cryptoWatchlist || []).filter(Boolean).slice(0, 40);
-    const { provider, watch } = await fetchCryptoWatchWithFailover(watchIds);
+    const { provider, watch, attempts, errors } = await fetchCryptoWatchWithFailover(watchIds);
     activeCryptoProvider = provider;
 
     renderCryptoWidget(el, watch);
@@ -1961,24 +1984,40 @@ async function renderCrypto(options = {}){
     clearPollingBackoff('crypto-tracker');
 
     const providerLabel = CRYPTO_PROVIDER_LABELS[provider] || provider;
-    if (ts) ts.textContent = `Updated: ${new Date(updatedAt).toLocaleTimeString()} (watchlist + portfolio · auto: every 15 min) · Data: ${providerLabel}`;
+    const fallbackNote = provider !== CRYPTO_PROVIDER_CHAIN[0]
+      ? ` · fallback active (${providerLabel})`
+      : '';
+    const retryNote = Number(attempts || 1) > 1
+      ? ` · retried ${Number(attempts || 1) - 1}x`
+      : '';
+    const previousFailures = Array.isArray(errors) ? errors.length : 0;
+    const failureNote = previousFailures > 0 ? ` · recovered after ${previousFailures} provider error${previousFailures > 1 ? 's' : ''}` : '';
+    if (ts) ts.textContent = `Updated: ${new Date(updatedAt).toLocaleTimeString()} (watchlist + portfolio · auto: every 15 min) · Data: ${providerLabel}${fallbackNote}${retryNote}${failureNote}`;
   } catch (error) {
     cryptoFailureCount += 1;
     const backoffMs = Math.min(CRYPTO_FAILURE_BACKOFF_BASE_MS * (2 ** (cryptoFailureCount - 1)), CRYPTO_FAILURE_BACKOFF_MAX_MS);
     cryptoBackoffUntil = Date.now() + backoffMs;
     const reason = formatCryptoError(error);
-    registerPollingFailure('crypto-tracker', error, reason);
+    const providerFailures = Array.isArray(error?.errors)
+      ? error.errors.slice(-3).map((e) => {
+        const label = CRYPTO_PROVIDER_LABELS[String(e?.provider || '').toLowerCase()] || String(e?.provider || 'provider');
+        const code = Number(e?.status || 0);
+        return code ? `${label} ${code}` : `${label}`;
+      }).filter(Boolean)
+      : [];
+    const reasonDetail = providerFailures.length ? `${reason} (${providerFailures.join(' → ')})` : reason;
+    registerPollingFailure('crypto-tracker', error, reasonDetail);
 
     const cached = getCryptoWatchCache();
     if (cached?.watch?.length) {
       renderCryptoWidget(el, cached.watch);
       const providerLabel = CRYPTO_PROVIDER_LABELS[cached.provider] || CRYPTO_PROVIDER_LABELS[activeCryptoProvider];
-      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${reason}; retry in ${Math.ceil(backoffMs / 1000)}s) · Data: ${providerLabel}`;
+      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${reasonDetail}; retry in ${Math.ceil(backoffMs / 1000)}s) · Data: ${providerLabel}`;
       return;
     }
 
     el.textContent = 'Crypto data unavailable right now.';
-    if (ts) ts.textContent = `Update failed: ${reason} (retry in ${Math.ceil(backoffMs / 1000)}s)`;
+    if (ts) ts.textContent = `Update failed: ${reasonDetail} (retry in ${Math.ceil(backoffMs / 1000)}s)`;
   }
 }
 
