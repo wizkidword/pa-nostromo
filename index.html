@@ -133,6 +133,7 @@
       <div class="card utility-card" data-pod-id="date-time">
         <div class="pod-header">
           <h2>📅 Date & Time <span id="date-timeStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
+          <button id="weatherRefreshBtn" class="btn ghost">Refresh</button>
         </div>
         <div id="dateTimeWidget" class="widget-block"></div>
         <div class="row-wrap mt10">
@@ -141,6 +142,9 @@
           <button id="cancelAlarmBtn" class="btn ghost">Cancel</button>
         </div>
         <div id="alarmStatus" class="note-meta mt6">No active timer</div>
+        <div style="margin-top:12px"><strong>Local Weather (44224)</strong></div>
+        <div id="weatherWidget" class="widget-block mt6">Loading weather...</div>
+        <div id="weatherUpdatedAt" class="note-meta mt6"></div>
       </div>
       <div class="card utility-card" data-pod-id="calendar">
         <div class="pod-header">
@@ -154,14 +158,6 @@
           <button id="addCalendarReminderBtn" class="btn">+ Add</button>
         </div>
         <div id="calendarDayReminders" class="change-log-list mt8"></div>
-      </div>
-      <div class="card utility-card" data-pod-id="weather">
-        <div class="pod-header">
-          <h2>🌤️ Local Weather (44224) <span id="weatherStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
-          <button id="weatherRefreshBtn" class="btn ghost">Refresh</button>
-        </div>
-        <div id="weatherWidget" class="widget-block">Loading weather...</div>
-        <div id="weatherUpdatedAt" class="note-meta mt6"></div>
       </div>
     </div>
 

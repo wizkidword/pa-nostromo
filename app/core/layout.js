@@ -3,7 +3,7 @@
 
   const DEFAULT_UTILITY_ROWS = [
     ['shortcuts'],
-    ['date-time', 'calendar', 'weather'],
+    ['date-time', 'calendar'],
     ['nba-scores', 'crypto-tracker', 'rss-feed'],
     ['camera-feed', 'live-streams'],
     ['voice-note', 'voice-to-rowan', 'music-player'],

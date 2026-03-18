@@ -35,7 +35,7 @@ const DEFAULT_SETTINGS = {
 
 const DEFAULT_UTILITY_LAYOUT_ROWS = [
   ['shortcuts'],
-  ['date-time', 'calendar', 'weather'],
+  ['date-time', 'calendar'],
   ['nba-scores', 'crypto-tracker', 'rss-feed'],
   ['camera-feed', 'live-streams'],
   ['voice-note', 'voice-to-rowan', 'music-player'],
@@ -52,18 +52,20 @@ function normalizeUtilityLayoutState(layoutInput, knownPodIds = []){
   const defaults = createDefaultUtilityLayoutState();
   const fallbackRows = defaults.utilityRows;
   const fallbackIds = fallbackRows.flat();
+  const allKnown = [...new Set([...fallbackIds, ...knownPodIds.map((v) => String(v || '').trim()).filter(Boolean)])];
+  const allowed = new Set(allKnown);
   const incomingRows = Array.isArray(layoutInput?.utilityRows) ? layoutInput.utilityRows : fallbackRows;
   const seen = new Set();
   const rows = incomingRows
     .map((row) => Array.isArray(row) ? row.map((v) => String(v || '').trim()).filter(Boolean) : [])
     .map((row) => row.filter((podId) => {
+      if (!allowed.has(podId)) return false;
       if (seen.has(podId)) return false;
       seen.add(podId);
       return true;
     }))
     .filter((row) => row.length > 0);
 
-  const allKnown = [...new Set([...fallbackIds, ...knownPodIds.map((v) => String(v || '').trim()).filter(Boolean)])];
   const missing = allKnown.filter((podId) => !seen.has(podId));
   if (!rows.length) rows.push([...fallbackRows[0]]);
   if (missing.length) rows.push(missing);
@@ -6480,6 +6482,11 @@ if (!state.changelog.some((c) => c.message === liveStreamsVaughnPopoutPatch)) {
 const liveStreamsPhase2APatch = 'Patch: Live Streams Phase 2A adds Rumble, X Live/Spaces, and Facebook Live presets with provider-specific normalization and explicit non-silent fallback messaging when embeds are blocked.';
 if (!state.changelog.some((c) => c.message === liveStreamsPhase2APatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: liveStreamsPhase2APatch });
+}
+
+const dateWeatherMergePatch = 'Utility pod merge: Local Weather is now integrated into Date & Time (same slot) with forecast details and in-pod manual refresh; standalone Weather pod removed from layout controls.';
+if (!state.changelog.some((c) => c.message === dateWeatherMergePatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: dateWeatherMergePatch });
 }
 
 save('startup_patch_seed', { pushShared: false });
