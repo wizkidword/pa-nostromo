@@ -213,6 +213,30 @@ body.theme-light .social-icon-link img {
   background: var(--border-strong);
 }
 
+.pod-signal {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin-left: 6px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.pod-signal-fresh {
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
+}
+
+.pod-signal-stale {
+  background: rgba(234, 179, 8, 0.16);
+  color: #fde68a;
+}
+
+.pod-signal-error {
+  background: rgba(239, 68, 68, 0.16);
+  color: #fca5a5;
+}
+
 .utils-layout {
   display: grid;
   gap: 10px;

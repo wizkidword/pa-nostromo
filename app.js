@@ -1424,6 +1424,8 @@ const CRYPTO_PROVIDER_LABELS = {
   coincap: 'CoinCap',
   cryptocompare: 'CryptoCompare',
 };
+const CRYPTO_PROVIDER_DEFAULT = 'coincap';
+const CRYPTO_PROVIDER_PREFERRED_FALLBACK = 'coingecko';
 const CRYPTO_PROVIDER_RETRY_COUNT = 1;
 const CRYPTO_PROVIDER_RETRY_BASE_MS = 500;
 const CRYPTO_PROVIDER_RETRY_MAX_MS = 2200;
@@ -1447,7 +1449,9 @@ const CRYPTO_SYMBOL_ALIASES = {
   etc: 'ethereum-classic',
 };
 
-let activeCryptoProvider = 'coincap';
+let activeCryptoProvider = CRYPTO_PROVIDER_DEFAULT;
+let cryptoLastSuccessAt = '';
+let cryptoLastSuccessProvider = CRYPTO_PROVIDER_DEFAULT;
 
 function mapCoinIdToSymbolMap(){
   const m = new Map();
@@ -1527,6 +1531,55 @@ function setCryptoWatchCache(payload){
   try {
     localStorage.setItem(CRYPTO_WATCH_CACHE_KEY, JSON.stringify(payload));
   } catch {}
+}
+
+function normalizeCryptoProviderChain(chain){
+  const allowed = new Set(Object.keys(CRYPTO_PROVIDER_LABELS));
+  const ordered = [];
+
+  const add = (provider) => {
+    const key = String(provider || '').toLowerCase();
+    if (!allowed.has(key) || ordered.includes(key)) return;
+    ordered.push(key);
+  };
+
+  add(CRYPTO_PROVIDER_DEFAULT);
+  add(CRYPTO_PROVIDER_PREFERRED_FALLBACK);
+  for (const provider of Array.isArray(chain) ? chain : []) add(provider);
+  for (const provider of CRYPTO_PROVIDER_CHAIN) add(provider);
+
+  return ordered;
+}
+
+function getCryptoProviderChain(){
+  return normalizeCryptoProviderChain(CRYPTO_PROVIDER_CHAIN);
+}
+
+function setPodStatusSignal(podId, status = 'fresh', detail = ''){
+  const el = document.getElementById(`${podId}StatusSignal`);
+  if (!el) return;
+  const normalized = ['fresh', 'stale', 'error'].includes(String(status).toLowerCase())
+    ? String(status).toLowerCase()
+    : 'fresh';
+  const labelMap = {
+    fresh: 'Fresh',
+    stale: 'Stale',
+    error: 'Error',
+  };
+  el.className = `badge pod-signal pod-signal-${normalized}`;
+  el.textContent = detail ? `${labelMap[normalized]} · ${detail}` : labelMap[normalized];
+}
+
+function formatLastSuccessMeta(lastSuccessAt, provider){
+  if (!lastSuccessAt) return 'Last success: none yet';
+  const providerLabel = CRYPTO_PROVIDER_LABELS[String(provider || '').toLowerCase()] || provider || 'Unknown';
+  return `Last success: ${new Date(lastSuccessAt).toLocaleTimeString()} · Source: ${providerLabel}`;
+}
+
+function isCacheStale(updatedAt, maxAgeMs = CRYPTO_WATCH_CACHE_MAX_AGE_MS){
+  const ts = Number(updatedAt || 0);
+  if (!Number.isFinite(ts) || ts <= 0) return true;
+  return Date.now() - ts > maxAgeMs;
 }
 
 function isTransientPollingFailure(error){
@@ -1726,10 +1779,11 @@ async function fetchWatchFromCryptoCompare(watchIds){
 }
 
 async function fetchCryptoWatchWithFailover(watchIds){
+  const providerChain = getCryptoProviderChain();
   const failoverApi = window?.MissionControlModules?.cryptoFailover;
   if (!failoverApi?.fetchWithFailover) {
     let lastErr = null;
-    for (const provider of CRYPTO_PROVIDER_CHAIN) {
+    for (const provider of providerChain) {
       try {
         let watch = [];
         if (provider === 'coingecko') watch = await fetchWatchFromCoinGecko(watchIds);
@@ -1745,7 +1799,7 @@ async function fetchCryptoWatchWithFailover(watchIds){
   }
 
   const result = await failoverApi.fetchWithFailover({
-    providers: CRYPTO_PROVIDER_CHAIN,
+    providers: providerChain,
     retries: CRYPTO_PROVIDER_RETRY_COUNT,
     backoffBaseMs: CRYPTO_PROVIDER_RETRY_BASE_MS,
     backoffMaxMs: CRYPTO_PROVIDER_RETRY_MAX_MS,
@@ -1957,12 +2011,20 @@ async function renderCrypto(options = {}){
 
   updateCryptoRefreshButton();
 
+  const cachedWarm = getCryptoWatchCache();
+  if (!cryptoLastSuccessAt && cachedWarm?.updatedAt) {
+    cryptoLastSuccessAt = cachedWarm.updatedAt;
+    cryptoLastSuccessProvider = cachedWarm.provider || cryptoLastSuccessProvider;
+  }
+
   if (!manual && backoffLeftMs > 0) {
     const cached = getCryptoWatchCache();
     if (cached?.watch?.length) {
       renderCryptoWidget(el, cached.watch);
       const providerLabel = CRYPTO_PROVIDER_LABELS[cached.provider] || CRYPTO_PROVIDER_LABELS[activeCryptoProvider];
-      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${Math.ceil(backoffLeftMs / 1000)}s backoff) · Data: ${providerLabel}`;
+      const cacheIsStale = isCacheStale(cached.updatedAt);
+      setPodStatusSignal('crypto', cacheIsStale ? 'stale' : 'fresh', `retry ${Math.ceil(backoffLeftMs / 1000)}s`);
+      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${Math.ceil(backoffLeftMs / 1000)}s backoff) · Data: ${providerLabel} · ${formatLastSuccessMeta(cryptoLastSuccessAt, cryptoLastSuccessProvider)}`;
       return;
     }
   }
@@ -1979,12 +2041,14 @@ async function renderCrypto(options = {}){
     renderCryptoWidget(el, watch);
     const updatedAt = Date.now();
     setCryptoWatchCache({ updatedAt, watch, provider });
+    cryptoLastSuccessAt = updatedAt;
+    cryptoLastSuccessProvider = provider;
     cryptoFailureCount = 0;
     cryptoBackoffUntil = 0;
     clearPollingBackoff('crypto-tracker');
 
     const providerLabel = CRYPTO_PROVIDER_LABELS[provider] || provider;
-    const fallbackNote = provider !== CRYPTO_PROVIDER_CHAIN[0]
+    const fallbackNote = provider !== getCryptoProviderChain()[0]
       ? ` · fallback active (${providerLabel})`
       : '';
     const retryNote = Number(attempts || 1) > 1
@@ -1992,7 +2056,8 @@ async function renderCrypto(options = {}){
       : '';
     const previousFailures = Array.isArray(errors) ? errors.length : 0;
     const failureNote = previousFailures > 0 ? ` · recovered after ${previousFailures} provider error${previousFailures > 1 ? 's' : ''}` : '';
-    if (ts) ts.textContent = `Updated: ${new Date(updatedAt).toLocaleTimeString()} (watchlist + portfolio · auto: every 15 min) · Data: ${providerLabel}${fallbackNote}${retryNote}${failureNote}`;
+    setPodStatusSignal('crypto', 'fresh');
+    if (ts) ts.textContent = `Updated: ${new Date(updatedAt).toLocaleTimeString()} (watchlist + portfolio · auto: every 15 min) · Data: ${providerLabel}${fallbackNote}${retryNote}${failureNote} · ${formatLastSuccessMeta(cryptoLastSuccessAt, cryptoLastSuccessProvider)}`;
   } catch (error) {
     cryptoFailureCount += 1;
     const backoffMs = Math.min(CRYPTO_FAILURE_BACKOFF_BASE_MS * (2 ** (cryptoFailureCount - 1)), CRYPTO_FAILURE_BACKOFF_MAX_MS);
@@ -2012,12 +2077,14 @@ async function renderCrypto(options = {}){
     if (cached?.watch?.length) {
       renderCryptoWidget(el, cached.watch);
       const providerLabel = CRYPTO_PROVIDER_LABELS[cached.provider] || CRYPTO_PROVIDER_LABELS[activeCryptoProvider];
-      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${reasonDetail}; retry in ${Math.ceil(backoffMs / 1000)}s) · Data: ${providerLabel}`;
+      setPodStatusSignal('crypto', 'stale', `retry ${Math.ceil(backoffMs / 1000)}s`);
+      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${reasonDetail}; retry in ${Math.ceil(backoffMs / 1000)}s) · Data: ${providerLabel} · ${formatLastSuccessMeta(cryptoLastSuccessAt || cached.updatedAt, cryptoLastSuccessProvider || cached.provider)}`;
       return;
     }
 
+    setPodStatusSignal('crypto', 'error', `retry ${Math.ceil(backoffMs / 1000)}s`);
     el.textContent = 'Crypto data unavailable right now.';
-    if (ts) ts.textContent = `Update failed: ${reasonDetail} (retry in ${Math.ceil(backoffMs / 1000)}s)`;
+    if (ts) ts.textContent = `Update failed: ${reasonDetail} (retry in ${Math.ceil(backoffMs / 1000)}s) · ${formatLastSuccessMeta(cryptoLastSuccessAt, cryptoLastSuccessProvider)}`;
   }
 }
 
@@ -2136,9 +2203,11 @@ function renderRssListFromState(){
 
   if (ts) {
     if (state.rss?.lastUpdatedAt) {
-      ts.textContent = `Updated: ${new Date(state.rss.lastUpdatedAt).toLocaleTimeString()}${state.rss.lastError ? ` · Last error: ${state.rss.lastError}` : ''}`;
+      ts.textContent = `Updated: ${new Date(state.rss.lastUpdatedAt).toLocaleTimeString()} · Last success: ${new Date(state.rss.lastUpdatedAt).toLocaleTimeString()}${state.rss.lastError ? ` · Last error: ${state.rss.lastError}` : ''}`;
     } else {
-      ts.textContent = state.rss?.lastError ? `Update failed: ${state.rss.lastError}` : 'Not refreshed yet.';
+      ts.textContent = state.rss?.lastError
+        ? `Update failed: ${state.rss.lastError} · Last success: none yet`
+        : 'Not refreshed yet. · Last success: none yet';
     }
   }
 }
@@ -2196,6 +2265,7 @@ async function renderRss(options = {}){
 
   if (!skipFetch && hasFeeds && !manual && rssBackoff > 0) {
     state.rss.lastError = `Update delayed: retry in ${Math.ceil(rssBackoff / 1000)}s`;
+    setPodStatusSignal('rss', 'stale', `retry ${Math.ceil(rssBackoff / 1000)}s`);
   } else if (!skipFetch && hasFeeds) {
     try {
       const payload = await fetchRssFeedBundle();
@@ -2223,13 +2293,19 @@ async function renderRss(options = {}){
         ? `${payload.errors.length} feed(s) failed`
         : '';
       clearPollingBackoff('rss-feed');
+      setPodStatusSignal('rss', state.rss.lastError ? 'stale' : 'fresh', state.rss.lastError ? 'partial failure' : '');
       save('rss_refresh_success');
     } catch (err) {
       const reason = String(err?.message || err || 'RSS refresh failed').slice(0, 200);
       const backoffMs = registerPollingFailure('rss-feed', err, reason);
       state.rss.lastError = `Update delayed: ${reason} (retry in ${Math.ceil(backoffMs / 1000)}s)`;
+      setPodStatusSignal('rss', state.rss.lastUpdatedAt ? 'stale' : 'error', `retry ${Math.ceil(backoffMs / 1000)}s`);
       save('rss_refresh_failed');
     }
+  }
+
+  if (!hasFeeds) {
+    setPodStatusSignal('rss', state.rss?.lastUpdatedAt ? 'stale' : 'fresh', state.rss?.lastUpdatedAt ? 'no feeds configured' : 'idle');
   }
 
   renderRssListFromState();

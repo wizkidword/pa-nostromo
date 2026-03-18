@@ -30,8 +30,56 @@ async function testFallbackAfterPrimaryFailure(){
   assert.equal(result.errors[0].provider, 'coincap');
 }
 
+async function testRetriesBeforeFallback(){
+  const calls = [];
+  const result = await fetchWithFailover({
+    providers: ['coincap', 'coingecko'],
+    retries: 1,
+    backoffBaseMs: 10,
+    backoffMaxMs: 10,
+    async tryProvider(provider, attempt){
+      calls.push(`${provider}:${attempt}`);
+      if (provider === 'coincap') {
+        const err = new Error('temporary upstream');
+        err.status = 502;
+        throw err;
+      }
+      return [{ id: 'ethereum' }];
+    },
+    shouldAcceptResult(value){
+      return Array.isArray(value) && value.length > 0;
+    },
+  });
+
+  assert.equal(result.provider, 'coingecko');
+  assert.equal(result.errors.length, 2);
+  assert.deepEqual(calls, ['coincap:1', 'coincap:2', 'coingecko:1']);
+}
+
+async function testFinalErrorIncludesProviderTrail(){
+  await assert.rejects(async () => {
+    await fetchWithFailover({
+      providers: ['coincap', 'coingecko'],
+      retries: 0,
+      async tryProvider(provider){
+        const err = new Error(`${provider} down`);
+        err.status = 503;
+        throw err;
+      },
+    });
+  }, (err) => {
+    assert.equal(Array.isArray(err?.errors), true);
+    assert.equal(err.errors.length, 2);
+    assert.equal(err.errors[0].provider, 'coincap');
+    assert.equal(err.errors[1].provider, 'coingecko');
+    return true;
+  });
+}
+
 async function run(){
   await testFallbackAfterPrimaryFailure();
+  await testRetriesBeforeFallback();
+  await testFinalErrorIncludesProviderTrail();
   console.log('crypto-failover tests passed');
 }
 
