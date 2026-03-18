@@ -101,12 +101,16 @@ const seed = {
   cryptoHoldings: {},
   musicPlayer: {
     sourceType: 'stream', // stream | local
+    mode: 'stream', // stream | ambient
     currentStreamUrl: '',
     streamMode: 'unknown', // youtube | direct | embed | unknown
     favoriteStreamUrl: '',
     currentTrackName: '',
     volume: 0.7,
     isPlaying: false,
+    ambientPresetId: 'rain',
+    ambientSourceIndex: 0,
+    sleepTimerMin: 0,
   },
   cameraFeed: {
     sourceUrl: '',
@@ -206,6 +210,82 @@ let streamIframePlayer = null;
 let youtubeApiLoading = false;
 let youtubePlayerReady = false;
 let pendingYoutubeAction = null;
+let musicSleepTimer = null;
+let musicSleepEndsAt = 0;
+const AMBIENT_PRESETS = [
+  {
+    id: 'rain',
+    label: 'Rain',
+    sources: [
+      'https://www.youtube.com/watch?v=mPZkdNFkNps',
+      'https://www.youtube.com/watch?v=q76bMs-NwRk',
+    ],
+  },
+  {
+    id: 'thunder',
+    label: 'Thunder',
+    sources: [
+      'https://www.youtube.com/watch?v=yMRoNNKWuqQ',
+      'https://www.youtube.com/watch?v=ylj6v17x1xM',
+    ],
+  },
+  {
+    id: 'forest',
+    label: 'Forest',
+    sources: [
+      'https://www.youtube.com/watch?v=OdIJ2x3nxzQ',
+      'https://www.youtube.com/watch?v=3tn_2Tqf7n8',
+    ],
+  },
+  {
+    id: 'fireplace',
+    label: 'Fireplace',
+    sources: [
+      'https://www.youtube.com/watch?v=L_LUpnjgPso',
+      'https://www.youtube.com/watch?v=eyU3bRy2x44',
+    ],
+  },
+  {
+    id: 'ocean',
+    label: 'Ocean',
+    sources: [
+      'https://www.youtube.com/watch?v=bn9F19Hi1Lk',
+      'https://www.youtube.com/watch?v=V-_O7nl0Ii0',
+    ],
+  },
+  {
+    id: 'cafe',
+    label: 'Cafe',
+    sources: [
+      'https://www.youtube.com/watch?v=gaGrHUekGrc',
+      'https://www.youtube.com/watch?v=BOdLmxy06H0',
+    ],
+  },
+  {
+    id: 'wind',
+    label: 'Wind',
+    sources: [
+      'https://www.youtube.com/watch?v=-5KAN9_CzSA',
+      'https://www.youtube.com/watch?v=fr0c7iY9O2M',
+    ],
+  },
+  {
+    id: 'night',
+    label: 'Night Crickets',
+    sources: [
+      'https://www.youtube.com/watch?v=jA6B7Vr6f8U',
+      'https://www.youtube.com/watch?v=qJxY2r8m4gM',
+    ],
+  },
+  {
+    id: 'pink-noise',
+    label: 'Pink Noise',
+    sources: [
+      'https://www.youtube.com/watch?v=8SHf6wmX5MU',
+      'https://www.youtube.com/watch?v=ZXtimhT-ff4',
+    ],
+  },
+];
 let cameraSnapshotTimer = null;
 let cameraSnapshotBust = 0;
 let cameraLocalStream = null;
@@ -314,15 +394,27 @@ function load(){
 
   state.musicPlayer = {
     sourceType: 'stream',
+    mode: 'stream',
     currentStreamUrl: '',
     streamMode: 'unknown',
     favoriteStreamUrl: '',
     currentTrackName: '',
     volume: 0.7,
     isPlaying: false,
+    ambientPresetId: 'rain',
+    ambientSourceIndex: 0,
+    sleepTimerMin: 0,
     ...(state.musicPlayer || {}),
   };
+  state.musicPlayer.mode = state.musicPlayer.mode === 'ambient' ? 'ambient' : 'stream';
   state.musicPlayer.volume = Math.min(1, Math.max(0, Number(state.musicPlayer.volume ?? 0.7)));
+  state.musicPlayer.ambientPresetId = AMBIENT_PRESETS.some((preset) => preset.id === state.musicPlayer.ambientPresetId)
+    ? state.musicPlayer.ambientPresetId
+    : 'rain';
+  state.musicPlayer.ambientSourceIndex = Math.max(0, Math.floor(Number(state.musicPlayer.ambientSourceIndex || 0)));
+  state.musicPlayer.sleepTimerMin = [0, 15, 30, 60].includes(Number(state.musicPlayer.sleepTimerMin))
+    ? Number(state.musicPlayer.sleepTimerMin)
+    : 0;
 
   state.cameraFeed = {
     sourceUrl: '',
@@ -455,6 +547,12 @@ function load(){
   const utilityPodDndPatchNote = 'Patch: Utility Pod order now supports drag-and-drop across rows in Settings (arrow buttons still reorder within each row).';
   if (!state.changelog.some((entry) => entry?.message === utilityPodDndPatchNote)) {
     state.changelog.unshift({ id: id(), ts: now(), message: utilityPodDndPatchNote });
+    state.changelog = state.changelog.slice(0, 200);
+  }
+
+  const ambientModePatchNote = 'Patch: Music Player now includes compact Ambient mode with one-click nature presets, sleep timer, and quick fallback switching.';
+  if (!state.changelog.some((entry) => entry?.message === ambientModePatchNote)) {
+    state.changelog.unshift({ id: id(), ts: now(), message: ambientModePatchNote });
     state.changelog = state.changelog.slice(0, 200);
   }
 
@@ -2455,7 +2553,135 @@ function setMusicStatus(text){
   if (el) el.textContent = text;
 }
 
+function getAmbientPreset(presetId = state.musicPlayer.ambientPresetId){
+  return AMBIENT_PRESETS.find((preset) => preset.id === presetId) || AMBIENT_PRESETS[0];
+}
+
+function getAmbientSourceForPreset(presetId = state.musicPlayer.ambientPresetId, sourceIndex = state.musicPlayer.ambientSourceIndex){
+  const preset = getAmbientPreset(presetId);
+  const safeIndex = Math.max(0, Math.floor(Number(sourceIndex || 0))) % Math.max(1, preset.sources.length);
+  return {
+    preset,
+    sourceIndex: safeIndex,
+    sourceUrl: preset.sources[safeIndex] || '',
+    hasFallback: preset.sources.length > 1,
+  };
+}
+
+function clearMusicSleepTimer(){
+  if (musicSleepTimer) {
+    clearTimeout(musicSleepTimer);
+    musicSleepTimer = null;
+  }
+  musicSleepEndsAt = 0;
+}
+
+function armMusicSleepTimer(minutes){
+  const mins = Number(minutes || 0);
+  clearMusicSleepTimer();
+  state.musicPlayer.sleepTimerMin = [15, 30, 60].includes(mins) ? mins : 0;
+  save();
+  if (!state.musicPlayer.sleepTimerMin) return;
+  const ms = state.musicPlayer.sleepTimerMin * 60 * 1000;
+  musicSleepEndsAt = Date.now() + ms;
+  musicSleepTimer = setTimeout(() => {
+    stopMusic();
+    setMusicStatus(`Sleep timer ended (${state.musicPlayer.sleepTimerMin} min). Playback stopped.`);
+    state.musicPlayer.sleepTimerMin = 0;
+    save();
+    clearMusicSleepTimer();
+    renderMusicPlayer();
+  }, ms);
+}
+
+function loadAmbientPreset(presetId, sourceIndex = 0){
+  const { preset, sourceIndex: nextIndex, sourceUrl } = getAmbientSourceForPreset(presetId, sourceIndex);
+  state.musicPlayer.mode = 'ambient';
+  state.musicPlayer.sourceType = 'stream';
+  state.musicPlayer.ambientPresetId = preset.id;
+  state.musicPlayer.ambientSourceIndex = nextIndex;
+  state.musicPlayer.currentTrackName = `Ambient · ${preset.label}`;
+  state.musicPlayer.currentStreamUrl = sourceUrl;
+  save();
+  loadStreamIntoPlayer(sourceUrl);
+}
+
+function playAmbientPreset(presetId, sourceIndex = 0){
+  loadAmbientPreset(presetId, sourceIndex);
+  playMusic();
+}
+
+function tryNextAmbientSource(){
+  const { preset, sourceIndex, hasFallback } = getAmbientSourceForPreset();
+  if (!hasFallback) {
+    setMusicStatus(`No alternate source available for ${preset.label}.`);
+    return;
+  }
+  const nextIndex = (sourceIndex + 1) % preset.sources.length;
+  playAmbientPreset(preset.id, nextIndex);
+  setMusicStatus(`Trying alternate ${preset.label} source (${nextIndex + 1}/${preset.sources.length})...`);
+}
+
+function setMusicMode(mode){
+  state.musicPlayer.mode = mode === 'ambient' ? 'ambient' : 'stream';
+  save();
+}
+
+function loadManualStream(url){
+  const trimmed = String(url || '').trim();
+  if (!trimmed) return false;
+  state.musicPlayer.mode = 'stream';
+  state.musicPlayer.sourceType = 'stream';
+  state.musicPlayer.currentStreamUrl = trimmed;
+  state.musicPlayer.currentTrackName = 'Stream URL';
+  save();
+  loadStreamIntoPlayer(trimmed);
+  return true;
+}
+
+function saveFavoriteStream(url){
+  const trimmed = String(url || '').trim();
+  if (!trimmed) return false;
+  state.musicPlayer.favoriteStreamUrl = trimmed;
+  save();
+  return true;
+}
+
+function useFavoriteStream(){
+  const favorite = String(state.musicPlayer.favoriteStreamUrl || '').trim();
+  if (!favorite) return false;
+  state.musicPlayer.mode = 'stream';
+  state.musicPlayer.sourceType = 'stream';
+  state.musicPlayer.currentStreamUrl = favorite;
+  save();
+  loadStreamIntoPlayer(favorite);
+  return true;
+}
+
+function selectAmbientPreset(presetId){
+  const preset = getAmbientPreset(presetId);
+  state.musicPlayer.mode = 'ambient';
+  state.musicPlayer.ambientPresetId = preset.id;
+  state.musicPlayer.ambientSourceIndex = 0;
+  save();
+}
+
+function loadLocalMusicFile(file, audioEl){
+  if (!file || !audioEl) return false;
+  state.musicPlayer.mode = 'stream';
+  state.musicPlayer.sourceType = 'local';
+  state.musicPlayer.streamMode = 'unknown';
+  pendingYoutubeAction = null;
+  state.musicPlayer.currentTrackName = file.name;
+  audioEl.src = URL.createObjectURL(file);
+  audioEl.volume = state.musicPlayer.volume;
+  save();
+  setMusicStatus(`Local file loaded: ${file.name}`);
+  return true;
+}
+
 function syncMusicVolume(value){
+
   const vol = Math.min(1, Math.max(0, Number(value || 0)));
   state.musicPlayer.volume = vol;
   const { audio } = getMusicEls();
@@ -2582,6 +2808,8 @@ function stopMusic(){
   } else if (state.musicPlayer.streamMode === 'embed' && iframe) {
     iframe.src = '';
   }
+  clearMusicSleepTimer();
+  state.musicPlayer.sleepTimerMin = 0;
   state.musicPlayer.isPlaying = false;
   save();
   setMusicStatus('Playback stopped.');
@@ -2594,18 +2822,51 @@ function renderMusicPlayer(){
   const streamVal = escapeHtml(state.musicPlayer.currentStreamUrl || '');
   const fav = state.musicPlayer.favoriteStreamUrl || '';
   const hasFav = !!fav;
+  const isAmbientMode = state.musicPlayer.mode === 'ambient';
+  const ambient = getAmbientSourceForPreset();
+
+  const ambientButtons = AMBIENT_PRESETS.map((preset) => {
+    const active = ambient.preset.id === preset.id;
+    return `<button class="btn ${active ? '' : 'ghost'} music-ambient-chip" data-music-role="ambient-preset" data-ambient-id="${escapeHtml(preset.id)}">${escapeHtml(preset.label)}</button>`;
+  }).join('');
+
+  const sleepOptions = [15, 30, 60].map((mins) => {
+    const active = Number(state.musicPlayer.sleepTimerMin) === mins;
+    return `<button class="btn ${active ? '' : 'ghost'}" data-music-role="sleep-timer" data-sleep-min="${mins}">${mins}m</button>`;
+  }).join('');
 
   el.innerHTML = `
     <div class="music-player-shell" data-pod="music-player">
-      <input id="musicStreamUrlInput" data-music-role="stream-input" placeholder="YouTube/live stream URL" value="${streamVal}" />
-      <div class="row-wrap">
-        <button id="musicLoadStreamBtn" data-music-role="load-stream" class="btn">Load Stream</button>
-        <button id="musicSaveFavoriteBtn" data-music-role="save-favorite" class="btn ghost">Save Favorite</button>
-        <button id="musicUseFavoriteBtn" data-music-role="use-favorite" class="btn ghost" ${hasFav ? '' : 'disabled'}>Use Favorite</button>
+      <div class="music-mode-tabs">
+        <button class="btn ${isAmbientMode ? 'ghost' : ''}" data-music-role="mode" data-mode="stream">Stream</button>
+        <button class="btn ${isAmbientMode ? '' : 'ghost'}" data-music-role="mode" data-mode="ambient">Ambient</button>
       </div>
-      <div class="row-wrap">
-        <input id="musicLocalFileInput" data-music-role="local-file" type="file" accept="audio/*" />
+
+      <div class="music-mode-panel ${isAmbientMode ? 'music-player-hidden-panel' : ''}" data-music-panel="stream">
+        <input id="musicStreamUrlInput" data-music-role="stream-input" placeholder="YouTube/live stream URL" value="${streamVal}" />
+        <div class="row-wrap">
+          <button id="musicLoadStreamBtn" data-music-role="load-stream" class="btn">Load Stream</button>
+          <button id="musicSaveFavoriteBtn" data-music-role="save-favorite" class="btn ghost">Save Favorite</button>
+          <button id="musicUseFavoriteBtn" data-music-role="use-favorite" class="btn ghost" ${hasFav ? '' : 'disabled'}>Use Favorite</button>
+        </div>
+        <div class="row-wrap">
+          <input id="musicLocalFileInput" data-music-role="local-file" type="file" accept="audio/*" />
+        </div>
       </div>
+
+      <div class="music-mode-panel ${isAmbientMode ? '' : 'music-player-hidden-panel'}" data-music-panel="ambient">
+        <div class="music-ambient-grid">${ambientButtons}</div>
+        <div class="row-wrap">
+          <button class="btn" data-music-role="ambient-play">Play ${escapeHtml(ambient.preset.label)}</button>
+          <button class="btn ghost" data-music-role="ambient-next" ${ambient.hasFallback ? '' : 'disabled'}>Try Next Source</button>
+        </div>
+        <div class="row-wrap music-player-mini">
+          Sleep timer:
+          ${sleepOptions}
+          <button class="btn ghost" data-music-role="sleep-timer" data-sleep-min="0">Off</button>
+        </div>
+      </div>
+
       <div class="music-player-controls">
         <button id="musicPlayBtn" data-music-role="play" class="btn">Play</button>
         <button id="musicPauseBtn" data-music-role="pause" class="btn ghost">Pause</button>
@@ -2616,25 +2877,40 @@ function renderMusicPlayer(){
       </label>
       <iframe id="musicStreamIframe" data-music-role="iframe" class="music-player-hidden" allow="autoplay; encrypted-media" title="Music stream player"></iframe>
       <audio id="musicLocalAudio" data-music-role="audio" class="music-player-hidden" preload="metadata"></audio>
-      <div class="music-player-mini">Source: ${state.musicPlayer.sourceType === 'local' ? 'Local file' : 'Stream URL'}${hasFav ? ' · Favorite saved' : ''}</div>
+      <div class="music-player-mini">Source: ${state.musicPlayer.sourceType === 'local' ? 'Local file' : (isAmbientMode ? `Ambient · ${escapeHtml(ambient.preset.label)}` : 'Stream URL')}${hasFav ? ' · Favorite saved' : ''}${state.musicPlayer.sleepTimerMin ? ` · Sleep ${state.musicPlayer.sleepTimerMin}m` : ''}</div>
     </div>
   `;
 
   const els = getMusicEls();
-  if (els.audio) els.audio.volume = state.musicPlayer.volume;
+  if (els.audio) {
+    els.audio.volume = state.musicPlayer.volume;
+    els.audio.addEventListener('error', () => {
+      if (state.musicPlayer.mode === 'ambient') {
+        const current = getAmbientSourceForPreset();
+        setMusicStatus(`Ambient stream failed for ${current.preset.label}. Use Try Next Source.`);
+      } else {
+        setMusicStatus('Stream failed to load/play. Try another URL.');
+      }
+    });
+  }
 
   const musicPod = el.querySelector('[data-pod="music-player"]');
-  // Regression guard: bind controls only within the Music pod root so sibling pods cannot trigger music actions.
+  musicPod?.querySelectorAll('[data-music-role="mode"]').forEach((btn) => {
+    btn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const mode = btn.dataset.mode === 'ambient' ? 'ambient' : 'stream';
+      setMusicMode(mode);
+      renderMusicPlayer();
+    });
+  });
+
   musicPod?.querySelector('[data-music-role="load-stream"]')?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
     const url = (els.streamInput?.value || '').trim();
     if (!url) return;
-    state.musicPlayer.sourceType = 'stream';
-    state.musicPlayer.currentStreamUrl = url;
-    state.musicPlayer.currentTrackName = 'Stream URL';
-    save();
-    loadStreamIntoPlayer(url);
+    loadManualStream(url);
   });
 
   musicPod?.querySelector('[data-music-role="save-favorite"]')?.addEventListener('click', (event) => {
@@ -2642,8 +2918,7 @@ function renderMusicPlayer(){
     event.stopPropagation();
     const url = (els.streamInput?.value || state.musicPlayer.currentStreamUrl || '').trim();
     if (!url) return;
-    state.musicPlayer.favoriteStreamUrl = url;
-    save();
+    saveFavoriteStream(url);
     renderMusicPlayer();
     setMusicStatus('Saved favorite stream URL.');
   });
@@ -2652,24 +2927,47 @@ function renderMusicPlayer(){
     event.preventDefault();
     event.stopPropagation();
     if (!state.musicPlayer.favoriteStreamUrl) return;
-    state.musicPlayer.sourceType = 'stream';
-    state.musicPlayer.currentStreamUrl = state.musicPlayer.favoriteStreamUrl;
-    save();
+    useFavoriteStream();
     renderMusicPlayer();
-    loadStreamIntoPlayer(state.musicPlayer.currentStreamUrl);
+  });
+
+  musicPod?.querySelectorAll('[data-music-role="ambient-preset"]').forEach((btn) => {
+    btn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const presetId = String(btn.dataset.ambientId || '');
+      selectAmbientPreset(presetId);
+      renderMusicPlayer();
+    });
+  });
+
+  musicPod?.querySelector('[data-music-role="ambient-play"]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const current = getAmbientSourceForPreset();
+    playAmbientPreset(current.preset.id, current.sourceIndex);
+  });
+
+  musicPod?.querySelector('[data-music-role="ambient-next"]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    tryNextAmbientSource();
+  });
+
+  musicPod?.querySelectorAll('[data-music-role="sleep-timer"]').forEach((btn) => {
+    btn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const minutes = Number(btn.dataset.sleepMin || 0);
+      armMusicSleepTimer(minutes);
+      renderMusicPlayer();
+      setMusicStatus(minutes ? `Sleep timer set for ${minutes} minutes.` : 'Sleep timer disabled.');
+    });
   });
 
   musicPod?.querySelector('[data-music-role="local-file"]')?.addEventListener('change', () => {
     const file = els.fileInput.files?.[0];
-    if (!file || !els.audio) return;
-    state.musicPlayer.sourceType = 'local';
-    state.musicPlayer.streamMode = 'unknown';
-    pendingYoutubeAction = null;
-    state.musicPlayer.currentTrackName = file.name;
-    els.audio.src = URL.createObjectURL(file);
-    els.audio.volume = state.musicPlayer.volume;
-    save();
-    setMusicStatus(`Local file loaded: ${file.name}`);
+    loadLocalMusicFile(file, els.audio);
   });
 
   musicPod?.querySelector('[data-music-role="volume"]')?.addEventListener('input', (e) => {
@@ -2680,6 +2978,11 @@ function renderMusicPlayer(){
   musicPod?.querySelector('[data-music-role="play"]')?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
+    if (state.musicPlayer.mode === 'ambient') {
+      const current = getAmbientSourceForPreset();
+      playAmbientPreset(current.preset.id, current.sourceIndex);
+      return;
+    }
     playMusic();
   });
   musicPod?.querySelector('[data-music-role="pause"]')?.addEventListener('click', (event) => {
@@ -2699,7 +3002,7 @@ function renderMusicPlayer(){
       initYouTubePlayerIfReady();
     }
   } else if (!document.getElementById('musicPlayerStatus')?.textContent) {
-    setMusicStatus('Ready. Load a stream URL or choose a local audio file.');
+    setMusicStatus('Ready. Load a stream URL, choose Ambient preset, or pick a local audio file.');
   }
 }
 

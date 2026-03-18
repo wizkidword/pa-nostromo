@@ -785,6 +785,31 @@ menu {
   color: var(--muted);
 }
 
+.music-mode-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.music-mode-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.music-player-hidden-panel {
+  display: none;
+}
+
+.music-ambient-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.music-ambient-chip {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
 .utility-card-camera-feed {
   grid-column: span 2;
 }
