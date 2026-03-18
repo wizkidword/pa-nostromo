@@ -84,6 +84,19 @@ function normalizeUtilityLayoutState(layoutInput, knownPodIds = []){
     if (pending.size) rows.push([...pending]);
   }
 
+  // Migration: early gas-prices builds could append this pod as a lone tail row.
+  // Move it into row 2 (with date-time/calendar) unless user already placed it there.
+  const gasPodId = 'gas-prices';
+  const gasRowIndex = rows.findIndex((row) => row.includes(gasPodId));
+  const dateRowIndex = rows.findIndex((row) => row.includes('date-time') || row.includes('calendar'));
+  if (gasRowIndex >= 0 && dateRowIndex >= 0 && gasRowIndex !== dateRowIndex && !rows[dateRowIndex].includes(gasPodId)) {
+    rows[gasRowIndex] = rows[gasRowIndex].filter((podId) => podId !== gasPodId);
+    rows[dateRowIndex].push(gasPodId);
+  }
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    if (!rows[i].length) rows.splice(i, 1);
+  }
+
   const visibilityInput = (layoutInput && typeof layoutInput.visibility === 'object' && layoutInput.visibility)
     ? layoutInput.visibility
     : {};
