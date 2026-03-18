@@ -4522,12 +4522,29 @@ function renderPodVisibilitySettings(){
           <div class="pod-toggle-meta">${escapeHtml(podId)} · Row ${rowIndex + 1}</div>
         </label>
         <div class="pod-toggle-actions">
-          <button class="btn ghost" data-pod-move="up" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" ${upDisabled}>↑</button>
-          <button class="btn ghost" data-pod-move="down" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" ${downDisabled}>↓</button>
+          <button type="button" class="btn ghost" data-pod-move="up" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" ${upDisabled}>↑</button>
+          <button type="button" class="btn ghost" data-pod-move="down" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" ${downDisabled}>↓</button>
         </div>
       </div>
     `;
   }).join('')).join('');
+}
+
+function getEventClosestTarget(event, selector){
+  if (!event || !selector) return null;
+  const rawTarget = event.target;
+  const node = rawTarget && rawTarget.nodeType === Node.TEXT_NODE ? rawTarget.parentElement : rawTarget;
+  if (node && typeof node.closest === 'function') {
+    return node.closest(selector);
+  }
+  const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+  for (const entry of path) {
+    if (entry && typeof entry.closest === 'function') {
+      const match = entry.closest(selector);
+      if (match) return match;
+    }
+  }
+  return null;
 }
 
 function movePodWithinRow(rowIndex, podIndex, direction){
@@ -5350,7 +5367,7 @@ document.getElementById('settingRssInterval')?.addEventListener('change', (e)=> 
 });
 
 document.getElementById('settingsPodVisibilityList')?.addEventListener('change', (e) => {
-  const checkbox = e.target?.closest?.('[data-pod-visibility]');
+  const checkbox = getEventClosestTarget(e, '[data-pod-visibility]');
   if (!checkbox) return;
   const podId = String(checkbox.dataset.podVisibility || '').trim();
   if (!podId) return;
@@ -5361,8 +5378,9 @@ document.getElementById('settingsPodVisibilityList')?.addEventListener('change',
 });
 
 document.getElementById('settingsPodVisibilityList')?.addEventListener('click', (e) => {
-  const btn = e.target?.closest?.('[data-pod-move]');
+  const btn = getEventClosestTarget(e, '[data-pod-move]');
   if (!btn) return;
+  e.preventDefault();
   const rowIndex = Number(btn.dataset.podRow);
   const podIndex = Number(btn.dataset.podIndex);
   const direction = String(btn.dataset.podMove || '');
