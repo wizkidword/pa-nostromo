@@ -218,72 +218,81 @@ const AMBIENT_PRESETS = [
     id: 'rain',
     label: 'Rain',
     sources: [
-      'https://www.youtube.com/watch?v=mPZkdNFkNps',
-      'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+      { type: 'youtube', label: 'YouTube · Steady rain ambience', url: 'https://www.youtube.com/watch?v=mPZkdNFkNps' },
+      { type: 'youtube', label: 'YouTube · Rain + distant ambience', url: 'https://www.youtube.com/watch?v=jX6kn9_U8qk' },
+      { type: 'direct', label: 'Built-in fallback · Rain loop', url: '/assets/ambient/rain-fallback.ogg' },
     ],
   },
   {
     id: 'thunder',
     label: 'Thunder',
     sources: [
-      'https://www.youtube.com/watch?v=yMRoNNKWuqQ',
-      'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
+      { type: 'youtube', label: 'YouTube · Thunderstorm ambience', url: 'https://www.youtube.com/watch?v=yMRoNNKWuqQ' },
+      { type: 'youtube', label: 'YouTube · Heavy rain thunder', url: 'https://www.youtube.com/watch?v=q76bMs-NwRk' },
+      { type: 'direct', label: 'Built-in fallback · Thunder loop', url: '/assets/ambient/thunder-fallback.ogg' },
     ],
   },
   {
     id: 'forest',
     label: 'Forest',
     sources: [
-      'https://www.youtube.com/watch?v=OdIJ2x3nxzQ',
-      'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
+      { type: 'youtube', label: 'YouTube · Forest birds ambience', url: 'https://www.youtube.com/watch?v=OdIJ2x3nxzQ' },
+      { type: 'youtube', label: 'YouTube · Deep forest ambience', url: 'https://www.youtube.com/watch?v=xNN7iTA57jM' },
+      { type: 'direct', label: 'Built-in fallback · Forest loop', url: '/assets/ambient/forest-fallback.ogg' },
     ],
   },
   {
     id: 'fireplace',
     label: 'Fireplace',
     sources: [
-      'https://www.youtube.com/watch?v=L_LUpnjgPso',
-      'https://www.youtube.com/watch?v=eyU3bRy2x44',
+      { type: 'youtube', label: 'YouTube · Fireplace crackling', url: 'https://www.youtube.com/watch?v=L_LUpnjgPso' },
+      { type: 'youtube', label: 'YouTube · Fireplace room tone', url: 'https://www.youtube.com/watch?v=eyU3bRy2x44' },
+      { type: 'direct', label: 'Built-in fallback · Fireplace loop', url: '/assets/ambient/fireplace-fallback.ogg' },
     ],
   },
   {
     id: 'ocean',
     label: 'Ocean',
     sources: [
-      'https://www.youtube.com/watch?v=bn9F19Hi1Lk',
-      'https://www.youtube.com/watch?v=V-_O7nl0Ii0',
+      { type: 'youtube', label: 'YouTube · Ocean waves ambience', url: 'https://www.youtube.com/watch?v=bn9F19Hi1Lk' },
+      { type: 'youtube', label: 'YouTube · Shoreline waves', url: 'https://www.youtube.com/watch?v=V-_O7nl0Ii0' },
+      { type: 'direct', label: 'Built-in fallback · Ocean loop', url: '/assets/ambient/ocean-fallback.ogg' },
     ],
   },
   {
     id: 'cafe',
     label: 'Cafe',
     sources: [
-      'https://www.youtube.com/watch?v=gaGrHUekGrc',
-      'https://www.youtube.com/watch?v=BOdLmxy06H0',
+      { type: 'youtube', label: 'YouTube · Cafe ambience', url: 'https://www.youtube.com/watch?v=gaGrHUekGrc' },
+      { type: 'youtube', label: 'YouTube · Coffee shop room tone', url: 'https://www.youtube.com/watch?v=BOdLmxy06H0' },
+      { type: 'direct', label: 'Built-in fallback · Cafe murmur loop', url: '/assets/ambient/cafe-fallback.ogg' },
     ],
   },
   {
     id: 'wind',
     label: 'Wind',
     sources: [
-      'https://www.youtube.com/watch?v=-5KAN9_CzSA',
-      'https://www.youtube.com/watch?v=fr0c7iY9O2M',
+      { type: 'youtube', label: 'YouTube · Wind ambience', url: 'https://www.youtube.com/watch?v=-5KAN9_CzSA' },
+      { type: 'youtube', label: 'YouTube · Wind through trees', url: 'https://www.youtube.com/watch?v=fr0c7iY9O2M' },
+      { type: 'direct', label: 'Built-in fallback · Wind loop', url: '/assets/ambient/wind-fallback.ogg' },
     ],
   },
   {
     id: 'night',
     label: 'Night Crickets',
     sources: [
-      'https://www.youtube.com/watch?v=jA6B7Vr6f8U',
-      'https://www.youtube.com/watch?v=qJxY2r8m4gM',
+      { type: 'youtube', label: 'YouTube · Night crickets ambience', url: 'https://www.youtube.com/watch?v=jA6B7Vr6f8U' },
+      { type: 'youtube', label: 'YouTube · Summer night insects', url: 'https://www.youtube.com/watch?v=qJxY2r8m4gM' },
+      { type: 'direct', label: 'Built-in fallback · Crickets loop', url: '/assets/ambient/night-crickets-fallback.ogg' },
     ],
   },
   {
     id: 'pink-noise',
     label: 'Pink Noise',
     sources: [
-      'https://www.youtube.com/watch?v=8SHf6wmX5MU',
-      'https://www.youtube.com/watch?v=ZXtimhT-ff4',
+      { type: 'youtube', label: 'YouTube · Pink noise generator', url: 'https://www.youtube.com/watch?v=8SHf6wmX5MU' },
+      { type: 'youtube', label: 'YouTube · Deep pink noise', url: 'https://www.youtube.com/watch?v=ZXtimhT-ff4' },
+      { type: 'direct', label: 'Built-in fallback · Pink noise loop', url: '/assets/ambient/pink-noise-fallback.ogg' },
     ],
   },
 ];
@@ -552,6 +561,7 @@ function load(){
   ensureChangelogPatch(state, 'Patch: Utility Pod order now supports drag-and-drop across rows in Settings (arrow buttons still reorder within each row).');
   ensureChangelogPatch(state, 'Patch: Music Player now includes compact Ambient mode with one-click nature presets, sleep timer, and quick fallback switching.');
   ensureChangelogPatch(state, 'Patch: Ambient playback now auto-recovers from failed sources and includes direct-audio fallbacks with clearer error status.');
+  ensureChangelogPatch(state, 'Patch: Ambient presets now use category-matched source sets with built-in non-YouTube fallbacks for Rain/Thunder/Forest/Fireplace/Ocean/Cafe/Wind/Night Crickets/Pink Noise.');
 
   // Ensure reminder task exists for pod drag/drop idea.
   const mission = (state.projects || []).find((p) => p.name === 'Mission Control Dashboard');
@@ -2546,12 +2556,14 @@ function handleAmbientSourceFailure(reason = 'Ambient source failed.'){
     return;
   }
   const current = getAmbientSourceForPreset();
+  const sourceName = current.source?.label || `Source ${current.sourceIndex + 1}`;
   if (!current.hasFallback) {
-    setMusicStatus(`${reason} No alternate source available for ${current.preset.label}.`);
+    setMusicStatus(`${reason} ${sourceName} failed and no alternate source is available for ${current.preset.label}.`);
     return;
   }
   const nextIndex = (current.sourceIndex + 1) % current.preset.sources.length;
-  setMusicStatus(`${reason} Trying backup source ${nextIndex + 1}/${current.preset.sources.length}...`);
+  const nextSource = normalizeAmbientSource(current.preset.sources[nextIndex], nextIndex);
+  setMusicStatus(`${reason} Source ${current.sourceIndex + 1}/${current.preset.sources.length} failed (${sourceName}). Trying ${nextIndex + 1}/${current.preset.sources.length}: ${nextSource.label}...`);
   playAmbientPreset(current.preset.id, nextIndex);
 }
 
@@ -2605,13 +2617,30 @@ function getAmbientPreset(presetId = state.musicPlayer.ambientPresetId){
   return AMBIENT_PRESETS.find((preset) => preset.id === presetId) || AMBIENT_PRESETS[0];
 }
 
+function normalizeAmbientSource(rawSource, fallbackIndex = 0){
+  if (rawSource && typeof rawSource === 'object') {
+    return {
+      type: rawSource.type === 'direct' ? 'direct' : 'youtube',
+      label: String(rawSource.label || '').trim() || `Source ${fallbackIndex + 1}`,
+      url: String(rawSource.url || '').trim(),
+    };
+  }
+  return {
+    type: 'youtube',
+    label: `Source ${fallbackIndex + 1}`,
+    url: String(rawSource || '').trim(),
+  };
+}
+
 function getAmbientSourceForPreset(presetId = state.musicPlayer.ambientPresetId, sourceIndex = state.musicPlayer.ambientSourceIndex){
   const preset = getAmbientPreset(presetId);
   const safeIndex = Math.max(0, Math.floor(Number(sourceIndex || 0))) % Math.max(1, preset.sources.length);
+  const source = normalizeAmbientSource(preset.sources[safeIndex], safeIndex);
   return {
     preset,
     sourceIndex: safeIndex,
-    sourceUrl: preset.sources[safeIndex] || '',
+    source,
+    sourceUrl: source.url,
     hasFallback: preset.sources.length > 1,
   };
 }
@@ -2643,7 +2672,7 @@ function armMusicSleepTimer(minutes){
 }
 
 function loadAmbientPreset(presetId, sourceIndex = 0){
-  const { preset, sourceIndex: nextIndex, sourceUrl } = getAmbientSourceForPreset(presetId, sourceIndex);
+  const { preset, sourceIndex: nextIndex, sourceUrl, source } = getAmbientSourceForPreset(presetId, sourceIndex);
   state.musicPlayer.mode = 'ambient';
   state.musicPlayer.sourceType = 'stream';
   state.musicPlayer.ambientPresetId = preset.id;
@@ -2651,6 +2680,7 @@ function loadAmbientPreset(presetId, sourceIndex = 0){
   state.musicPlayer.currentTrackName = `Ambient · ${preset.label}`;
   state.musicPlayer.currentStreamUrl = sourceUrl;
   save();
+  setMusicStatus(`Trying ${preset.label} source ${nextIndex + 1}/${preset.sources.length}: ${source.label}...`);
   loadStreamIntoPlayer(sourceUrl);
 }
 
@@ -2666,8 +2696,9 @@ function tryNextAmbientSource(){
     return;
   }
   const nextIndex = (sourceIndex + 1) % preset.sources.length;
+  const nextSource = normalizeAmbientSource(preset.sources[nextIndex], nextIndex);
+  setMusicStatus(`Trying ${preset.label} source ${nextIndex + 1}/${preset.sources.length}: ${nextSource.label}...`);
   playAmbientPreset(preset.id, nextIndex);
-  setMusicStatus(`Trying alternate ${preset.label} source (${nextIndex + 1}/${preset.sources.length})...`);
 }
 
 function setMusicMode(mode){
@@ -2749,11 +2780,14 @@ function loadStreamIntoPlayer(url){
     youtubePlayerReady = false;
     clearAmbientYoutubeFallbackTimer();
     audio.pause();
+    audio.loop = false;
     audio.removeAttribute('src');
     iframe.src = `https://www.youtube.com/embed/${encodeURIComponent(ytId)}?enablejsapi=1&autoplay=0&playsinline=1`;
     ensureYoutubeApi();
     if (window.YT?.Player) initYouTubePlayerIfReady();
-    setMusicStatus('YouTube stream loaded. Press Play to start.');
+    if (state.musicPlayer.mode !== 'ambient') {
+      setMusicStatus('YouTube stream loaded. Press Play to start.');
+    }
     return;
   }
 
@@ -2762,8 +2796,11 @@ function loadStreamIntoPlayer(url){
   clearAmbientYoutubeFallbackTimer();
   iframe.src = '';
   audio.src = rawUrl;
+  audio.loop = state.musicPlayer.mode === 'ambient';
   audio.volume = state.musicPlayer.volume;
-  setMusicStatus('Direct stream URL loaded in HTML5 audio player.');
+  if (state.musicPlayer.mode !== 'ambient') {
+    setMusicStatus('Direct stream URL loaded in HTML5 audio player.');
+  }
 }
 
 function playMusic(){
@@ -2799,7 +2836,12 @@ function playMusic(){
     }
 
     if (!runPendingYoutubeAction()) {
-      setMusicStatus('YouTube player is loading — play will start automatically when ready.');
+      if (state.musicPlayer.mode === 'ambient') {
+        const ambient = getAmbientSourceForPreset();
+        setMusicStatus(`Trying ${ambient.preset.label} source ${ambient.sourceIndex + 1}/${ambient.preset.sources.length}: ${ambient.source.label} (YouTube loading)...`);
+      } else {
+        setMusicStatus('YouTube player is loading — play will start automatically when ready.');
+      }
       clearAmbientYoutubeFallbackTimer();
       if (state.musicPlayer.mode === 'ambient') {
         ambientYoutubeFallbackTimer = setTimeout(() => {
