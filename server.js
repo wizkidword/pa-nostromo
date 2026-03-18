@@ -3,6 +3,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const { execFile } = require('child_process');
 
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
@@ -74,6 +75,45 @@ const RSS_FETCH_MAX_BYTES = Math.max(128 * 1024, parsePositiveInt(process.env.RS
 const RSS_FETCH_MAX_FEEDS = Math.max(1, parsePositiveInt(process.env.RSS_FETCH_MAX_FEEDS, 12));
 const CRYPTO_PROXY_ALLOW_REMOTE = parseBool(process.env.CRYPTO_PROXY_ALLOW_REMOTE);
 const CRYPTO_PROXY_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.CRYPTO_PROXY_TIMEOUT_MS, 10000));
+
+function parseJsonSafely(raw, sourceLabel = 'json') {
+  try {
+    return { ok: true, value: JSON.parse(raw) };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `${sourceLabel}_json_parse_failed`,
+      message: String(err?.message || err),
+    };
+  }
+}
+
+function fetchJsonViaCurl(upstreamUrl, timeoutMs = CRYPTO_PROXY_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const timeoutSec = Math.max(2, Math.ceil(timeoutMs / 1000));
+    execFile(
+      'curl',
+      ['-fsSL', '--max-time', String(timeoutSec), upstreamUrl],
+      {
+        timeout: timeoutMs + 1000,
+        maxBuffer: 2 * 1024 * 1024,
+      },
+      (err, stdout, stderr) => {
+        if (err) {
+          const details = String(stderr || err?.message || err).trim() || 'curl execution failed';
+          return reject(new Error(details));
+        }
+
+        const parsed = parseJsonSafely(String(stdout || ''), 'curl');
+        if (!parsed.ok) {
+          return reject(new Error(parsed.message));
+        }
+
+        return resolve(parsed.value);
+      }
+    );
+  });
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -844,6 +884,8 @@ async function handleApiCryptoProxy(req, res) {
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CRYPTO_PROXY_TIMEOUT_MS);
+  let fetchFailure = null;
+
   try {
     const upstream = await fetch(upstreamUrl, {
       method: 'GET',
@@ -863,17 +905,45 @@ async function handleApiCryptoProxy(req, res) {
       });
     }
 
-    const json = await upstream.json();
-    return sendJson(res, 200, json);
+    const raw = await upstream.text();
+    const parsed = parseJsonSafely(raw, 'fetch');
+    if (parsed.ok) {
+      return sendJson(res, 200, parsed.value);
+    }
+
+    fetchFailure = {
+      error: parsed.error,
+      message: parsed.message,
+    };
   } catch (err) {
     const isAbort = String(err?.name || '') === 'AbortError';
-    return sendJson(res, isAbort ? 504 : 502, {
-      ok: false,
+    fetchFailure = {
       error: isAbort ? 'timeout' : 'crypto_proxy_fetch_failed',
       message: isAbort ? 'Crypto upstream request timed out.' : String(err?.message || err),
-    });
+    };
   } finally {
     clearTimeout(timeout);
+  }
+
+  try {
+    const json = await fetchJsonViaCurl(upstreamUrl.toString(), CRYPTO_PROXY_TIMEOUT_MS);
+    return sendJson(res, 200, json);
+  } catch (curlErr) {
+    return sendJson(res, 502, {
+      ok: false,
+      error: 'crypto_proxy_upstream_failed',
+      message: 'Upstream request failed via both fetch and curl fallback.',
+      details: {
+        fetch: {
+          error: fetchFailure?.error || 'crypto_proxy_fetch_failed',
+          message: fetchFailure?.message || 'Unknown fetch failure.',
+        },
+        curl: {
+          error: 'crypto_proxy_curl_failed',
+          message: String(curlErr?.message || curlErr),
+        },
+      },
+    });
   }
 }
 
@@ -965,11 +1035,18 @@ const server = http.createServer(async (req, res) => {
   return handleStatic(req, res);
 });
 
-server.listen(PORT, () => {
-  console.log(`Mission Control running on http://localhost:${PORT}`);
-  console.log(`Shared state file: ${STATE_PATH}`);
-  console.log(`State backup dir: ${BACKUPS_DIR} (retain latest ${BACKUP_RETENTION})`);
-  console.log(`Voice-to-Rowan relay: ${ROWAN_RELAY_URL ? 'configured' : 'not configured'} (${ROWAN_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
-  console.log(`Camera snapshot proxy: enabled (${CAMERA_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; allowlist entries: ${CAMERA_PROXY_ALLOWLIST.length})`);
-  console.log(`RSS fetch API: enabled (${RSS_FETCH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; max feeds/request: ${RSS_FETCH_MAX_FEEDS})`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Mission Control running on http://localhost:${PORT}`);
+    console.log(`Shared state file: ${STATE_PATH}`);
+    console.log(`State backup dir: ${BACKUPS_DIR} (retain latest ${BACKUP_RETENTION})`);
+    console.log(`Voice-to-Rowan relay: ${ROWAN_RELAY_URL ? 'configured' : 'not configured'} (${ROWAN_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
+    console.log(`Camera snapshot proxy: enabled (${CAMERA_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; allowlist entries: ${CAMERA_PROXY_ALLOWLIST.length})`);
+    console.log(`RSS fetch API: enabled (${RSS_FETCH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; max feeds/request: ${RSS_FETCH_MAX_FEEDS})`);
+  });
+}
+
+module.exports = {
+  parseJsonSafely,
+  fetchJsonViaCurl,
+};
