@@ -21,7 +21,7 @@ const debugCounters = window.MissionControlModules?.debug || null;
 const COLUMNS = [
   ['inbox', 'Inbox'],
   ['in_progress', 'In Progress'],
-  ['waiting_blocked', 'Waiting / Blocked'],
+  ['waiting_blocked', 'Debugging'],
   ['ready_to_publish', 'Ready to Publish'],
   ['done', 'Done'],
 ];
@@ -5164,7 +5164,7 @@ function renderStats(){
   const notesCount = state.notes.length;
   wrap.innerHTML = [
     ['Open Tasks', open],
-    ['Waiting/Blocked', blocked],
+    ['Debugging', blocked],
     ['Needs Approval', approvals],
     ['Done (7d)', doneWeek],
     ['Notes', notesCount],
