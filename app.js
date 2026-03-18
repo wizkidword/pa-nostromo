@@ -335,6 +335,12 @@ let lastSafetyBackupsRefreshAt = 0;
 
 function id(){ return Math.random().toString(36).slice(2,10); }
 function now(){ return new Date().toISOString(); }
+function ensureChangelogPatch(stateObj, message){
+  if (!Array.isArray(stateObj?.changelog) || !message) return;
+  if (stateObj.changelog.some((entry) => entry?.message === message)) return;
+  stateObj.changelog.unshift({ id: id(), ts: now(), message });
+  stateObj.changelog = stateObj.changelog.slice(0, 200);
+}
 function load(){
   const raw = localStorage.getItem(STORAGE_KEY);
   let state;
@@ -542,29 +548,10 @@ function load(){
 
   state.changelog = Array.isArray(state.changelog) ? state.changelog : [];
 
-  const portfolioPatchNote = 'Patch: Crypto Tracker now supports portfolio holdings (qty + avg buy) with unrealized P/L summary.';
-  if (!state.changelog.some((entry) => entry?.message === portfolioPatchNote)) {
-    state.changelog.unshift({ id: id(), ts: now(), message: portfolioPatchNote });
-    state.changelog = state.changelog.slice(0, 200);
-  }
-
-  const utilityPodDndPatchNote = 'Patch: Utility Pod order now supports drag-and-drop across rows in Settings (arrow buttons still reorder within each row).';
-  if (!state.changelog.some((entry) => entry?.message === utilityPodDndPatchNote)) {
-    state.changelog.unshift({ id: id(), ts: now(), message: utilityPodDndPatchNote });
-    state.changelog = state.changelog.slice(0, 200);
-  }
-
-  const ambientModePatchNote = 'Patch: Music Player now includes compact Ambient mode with one-click nature presets, sleep timer, and quick fallback switching.';
-  if (!state.changelog.some((entry) => entry?.message === ambientModePatchNote)) {
-    state.changelog.unshift({ id: id(), ts: now(), message: ambientModePatchNote });
-    state.changelog = state.changelog.slice(0, 200);
-  }
-
-  const ambientReliabilityPatchNote = 'Patch: Ambient playback now auto-recovers from failed sources and includes direct-audio fallbacks with clearer error status.';
-  if (!state.changelog.some((entry) => entry?.message === ambientReliabilityPatchNote)) {
-    state.changelog.unshift({ id: id(), ts: now(), message: ambientReliabilityPatchNote });
-    state.changelog = state.changelog.slice(0, 200);
-  }
+  ensureChangelogPatch(state, 'Patch: Crypto Tracker now supports portfolio holdings (qty + avg buy) with unrealized P/L summary.');
+  ensureChangelogPatch(state, 'Patch: Utility Pod order now supports drag-and-drop across rows in Settings (arrow buttons still reorder within each row).');
+  ensureChangelogPatch(state, 'Patch: Music Player now includes compact Ambient mode with one-click nature presets, sleep timer, and quick fallback switching.');
+  ensureChangelogPatch(state, 'Patch: Ambient playback now auto-recovers from failed sources and includes direct-audio fallbacks with clearer error status.');
 
   // Ensure reminder task exists for pod drag/drop idea.
   const mission = (state.projects || []).find((p) => p.name === 'Mission Control Dashboard');
