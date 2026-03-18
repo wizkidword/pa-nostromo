@@ -180,7 +180,7 @@ const seed = {
   ]
 };
 
-let state = load();
+let state;
 let coinDirectory = [];
 let topSymbolMap = new Map();
 let cryptoRefreshCooldownUntil = 0;
@@ -286,6 +286,9 @@ const AMBIENT_PRESETS = [
     ],
   },
 ];
+
+state = load();
+
 let cameraSnapshotTimer = null;
 let cameraSnapshotBust = 0;
 let cameraLocalStream = null;
