@@ -290,3 +290,8 @@ Early alpha. Built for real daily use and rapid iteration.
 ## License
 
 MIT
+
+## Contributors
+
+- Jacob Rockwell
+- Rowan
