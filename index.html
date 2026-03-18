@@ -159,6 +159,24 @@
         </div>
         <div id="calendarDayReminders" class="change-log-list mt8"></div>
       </div>
+      <div class="card utility-card" data-pod-id="gas-prices">
+        <div class="pod-header">
+          <h2>⛽ Gas Price Tracker <span id="gas-pricesStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
+        </div>
+        <div class="row-wrap mt6">
+          <input id="gasLocationInput" placeholder="ZIP or City, ST" class="w-130" />
+          <button id="gasFetchBtn" class="btn ghost">Auto Fetch</button>
+        </div>
+        <div id="gasPricesWidget" class="widget-block mt8">Enter a location and fetch gas prices, or save manual values.</div>
+        <div id="gasPricesMeta" class="note-meta mt6"></div>
+        <div class="row-wrap mt8">
+          <input id="gasManualRegular" placeholder="Regular" class="w-110" />
+          <input id="gasManualMid" placeholder="Mid" class="w-110" />
+          <input id="gasManualPremium" placeholder="Premium" class="w-110" />
+          <input id="gasManualDiesel" placeholder="Diesel" class="w-110" />
+          <button id="gasManualSaveBtn" class="btn">Save Manual</button>
+        </div>
+      </div>
     </div>
 
     <div class="utils-row" data-layout-row="utility-row-3">

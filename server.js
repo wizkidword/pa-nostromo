@@ -75,6 +75,8 @@ const RSS_FETCH_MAX_BYTES = Math.max(128 * 1024, parsePositiveInt(process.env.RS
 const RSS_FETCH_MAX_FEEDS = Math.max(1, parsePositiveInt(process.env.RSS_FETCH_MAX_FEEDS, 12));
 const CRYPTO_PROXY_ALLOW_REMOTE = parseBool(process.env.CRYPTO_PROXY_ALLOW_REMOTE);
 const CRYPTO_PROXY_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.CRYPTO_PROXY_TIMEOUT_MS, 10000));
+const GAS_PROXY_ALLOW_REMOTE = parseBool(process.env.GAS_PROXY_ALLOW_REMOTE);
+const GAS_PROXY_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.GAS_PROXY_TIMEOUT_MS, 10000));
 
 function parseJsonSafely(raw, sourceLabel = 'json') {
   try {
@@ -110,6 +112,33 @@ function fetchJsonViaCurl(upstreamUrl, timeoutMs = CRYPTO_PROXY_TIMEOUT_MS) {
         }
 
         return resolve(parsed.value);
+      }
+    );
+  });
+}
+
+function fetchTextViaCurl(upstreamUrl, timeoutMs = RSS_FETCH_TIMEOUT_MS, maxBytes = RSS_FETCH_MAX_BYTES) {
+  return new Promise((resolve, reject) => {
+    const timeoutSec = Math.max(2, Math.ceil(timeoutMs / 1000));
+    execFile(
+      'curl',
+      ['-fsSL', '--max-time', String(timeoutSec), upstreamUrl],
+      {
+        timeout: timeoutMs + 1000,
+        maxBuffer: maxBytes,
+      },
+      (err, stdout, stderr) => {
+        if (err) {
+          const details = String(stderr || err?.message || err).trim() || 'curl execution failed';
+          return reject(new Error(details));
+        }
+
+        const text = String(stdout || '');
+        if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+          return reject(new Error(`Feed too large (curl payload exceeded ${maxBytes} bytes)`));
+        }
+
+        return resolve(text);
       }
     );
   });
@@ -822,6 +851,7 @@ function parseFeedXml(xmlRaw, feedUrl) {
 async function fetchFeedXml(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), RSS_FETCH_TIMEOUT_MS);
+
   try {
     const response = await fetch(url, {
       method: 'GET',
@@ -848,6 +878,14 @@ async function fetchFeedXml(url) {
     }
 
     return buf.toString('utf8');
+  } catch (err) {
+    try {
+      return await fetchTextViaCurl(url, RSS_FETCH_TIMEOUT_MS, RSS_FETCH_MAX_BYTES);
+    } catch (curlErr) {
+      const fetchReason = String(err?.message || err || 'fetch failed');
+      const curlReason = String(curlErr?.message || curlErr || 'curl failed');
+      throw new Error(`${fetchReason} (curl fallback failed: ${curlReason})`);
+    }
   } finally {
     clearTimeout(timeout);
   }
@@ -947,6 +985,120 @@ async function handleApiCryptoProxy(req, res) {
   }
 }
 
+const US_STATE_ALIASES = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA', colorado: 'CO', connecticut: 'CT', delaware: 'DE',
+  florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS',
+  kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI', minnesota: 'MN', mississippi: 'MS',
+  missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM',
+  'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA',
+  'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT',
+  virginia: 'VA', washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY', 'district of columbia': 'DC', dc: 'DC',
+};
+
+function parseAaaCurrentAvgRow(html) {
+  const rowMatch = html.match(/<tr>\s*<td>\s*Current Avg\.?\s*<\/td>([\s\S]*?)<\/tr>/i);
+  if (!rowMatch) return null;
+  const cells = [...rowMatch[1].matchAll(/<td>\s*\$?\s*([0-9]+(?:\.[0-9]+)?)\s*<\/td>/gi)].map((m) => Number(m[1]));
+  if (!cells.length) return null;
+  return {
+    regular: Number.isFinite(cells[0]) ? cells[0].toFixed(3) : '',
+    mid: Number.isFinite(cells[1]) ? cells[1].toFixed(3) : '',
+    premium: Number.isFinite(cells[2]) ? cells[2].toFixed(3) : '',
+    diesel: Number.isFinite(cells[3]) ? cells[3].toFixed(3) : '',
+  };
+}
+
+async function resolveUsStateFromLocation(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return { code: null, label: '' };
+
+  const zip = raw.match(/^\d{5}$/)?.[0] || null;
+  if (zip) {
+    try {
+      const zipJson = await fetchJsonViaCurl(`https://api.zippopotam.us/us/${zip}`, GAS_PROXY_TIMEOUT_MS);
+      const place = zipJson?.places?.[0] || {};
+      const code = String(place['state abbreviation'] || '').trim().toUpperCase();
+      const city = String(place['place name'] || '').trim();
+      const stateName = String(place.state || '').trim();
+      if (code) {
+        return { code, label: city && stateName ? `${city}, ${stateName}` : (stateName || zip) };
+      }
+    } catch {
+      return { code: null, label: zip };
+    }
+  }
+
+  const upper = raw.toUpperCase();
+  const trailingCode = upper.match(/\b([A-Z]{2})\s*$/)?.[1] || null;
+  if (trailingCode && Object.values(US_STATE_ALIASES).includes(trailingCode)) {
+    return { code: trailingCode, label: raw };
+  }
+
+  const normalized = raw.toLowerCase().replace(/\s+/g, ' ').trim();
+  const fromAlias = US_STATE_ALIASES[normalized];
+  if (fromAlias) return { code: fromAlias, label: raw };
+
+  for (const [name, code] of Object.entries(US_STATE_ALIASES)) {
+    if (normalized.includes(name)) return { code, label: raw };
+  }
+
+  return { code: null, label: raw };
+}
+
+async function handleApiGasPrices(req, res) {
+  if (req.method !== 'GET') {
+    return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/gas-prices?location=ZIP_OR_CITY_STATE.' });
+  }
+
+  if (!GAS_PROXY_ALLOW_REMOTE && !isLocalRequest(req)) {
+    return sendJson(res, 403, {
+      ok: false,
+      error: 'local_only',
+      message: 'Gas proxy endpoint is local-only by default. Set GAS_PROXY_ALLOW_REMOTE=1 to allow remote requests.',
+    });
+  }
+
+  const reqUrl = new URL(req.url || '/api/gas-prices', `http://localhost:${PORT}`);
+  const location = String(reqUrl.searchParams.get('location') || '').trim();
+  if (!location) {
+    return sendJson(res, 400, { ok: false, error: 'missing_location', message: 'Provide location query param (ZIP or City, ST).' });
+  }
+
+  const resolved = await resolveUsStateFromLocation(location);
+  if (!resolved.code) {
+    return sendJson(res, 400, {
+      ok: false,
+      error: 'state_unresolved',
+      message: 'Could not resolve a U.S. state from that location. Try a 5-digit ZIP or include state (e.g., "Akron, OH").',
+    });
+  }
+
+  const upstreamUrl = `https://gasprices.aaa.com/?state=${encodeURIComponent(resolved.code)}`;
+  try {
+    const html = await fetchTextViaCurl(upstreamUrl, GAS_PROXY_TIMEOUT_MS, 600 * 1024);
+    const prices = parseAaaCurrentAvgRow(html);
+    if (!prices) {
+      return sendJson(res, 502, { ok: false, error: 'parse_failed', message: 'AAA page format changed or prices were unavailable.' });
+    }
+
+    return sendJson(res, 200, {
+      ok: true,
+      provider: 'aaa-state-average',
+      stateCode: resolved.code,
+      resolvedLocation: resolved.label || resolved.code,
+      sourceUrl: upstreamUrl,
+      fetchedAt: new Date().toISOString(),
+      prices,
+    });
+  } catch (err) {
+    return sendJson(res, 502, {
+      ok: false,
+      error: 'gas_upstream_failed',
+      message: String(err?.message || err || 'Failed to fetch gas prices from AAA').slice(0, 180),
+    });
+  }
+}
+
 async function handleApiRssFetch(req, res) {
   if (req.method !== 'POST') {
     return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/rss/fetch.' });
@@ -1031,6 +1183,7 @@ const server = http.createServer(async (req, res) => {
   if ((req.url || '').startsWith('/api/rowan-send')) return handleApiRowanSend(req, res);
   if ((req.url || '').startsWith('/api/camera-snapshot')) return handleApiCameraSnapshot(req, res);
   if ((req.url || '').startsWith('/api/rss/fetch')) return handleApiRssFetch(req, res);
+  if ((req.url || '').startsWith('/api/gas-prices')) return handleApiGasPrices(req, res);
   if ((req.url || '').startsWith('/api/crypto/')) return handleApiCryptoProxy(req, res);
   return handleStatic(req, res);
 });
@@ -1043,6 +1196,7 @@ if (require.main === module) {
     console.log(`Voice-to-Rowan relay: ${ROWAN_RELAY_URL ? 'configured' : 'not configured'} (${ROWAN_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
     console.log(`Camera snapshot proxy: enabled (${CAMERA_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; allowlist entries: ${CAMERA_PROXY_ALLOWLIST.length})`);
     console.log(`RSS fetch API: enabled (${RSS_FETCH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; max feeds/request: ${RSS_FETCH_MAX_FEEDS})`);
+    console.log(`Gas price proxy API: enabled (${GAS_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
   });
 }
 

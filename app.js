@@ -35,7 +35,7 @@ const DEFAULT_SETTINGS = {
 
 const DEFAULT_UTILITY_LAYOUT_ROWS = [
   ['shortcuts'],
-  ['date-time', 'calendar'],
+  ['date-time', 'calendar', 'gas-prices'],
   ['nba-scores', 'crypto-tracker', 'rss-feed'],
   ['camera-feed', 'live-streams'],
   ['voice-note', 'voice-to-rowan', 'music-player'],
@@ -80,6 +80,36 @@ function normalizeUtilityLayoutState(layoutInput, knownPodIds = []){
   }
 
   return { utilityRows: rows, visibility };
+}
+
+function normalizeGasPricesState(input){
+  const gasBaseValues = (values) => ({
+    regular: String(values?.regular || '').trim(),
+    mid: String(values?.mid || '').trim(),
+    premium: String(values?.premium || '').trim(),
+    diesel: String(values?.diesel || '').trim(),
+  });
+
+  const gas = {
+    location: String(input?.location || LOCAL_ZIP).trim().slice(0, 80),
+    resolvedLocation: String(input?.resolvedLocation || '').trim().slice(0, 120),
+    source: ['manual', 'aaa-state-average'].includes(input?.source) ? input.source : 'manual',
+    sourceUrl: String(input?.sourceUrl || '').trim().slice(0, 300),
+    fetchedAt: String(input?.fetchedAt || ''),
+    updatedAt: String(input?.updatedAt || ''),
+    manualUpdatedAt: String(input?.manualUpdatedAt || ''),
+    lastError: String(input?.lastError || '').slice(0, 300),
+    values: gasBaseValues(input?.values),
+    manualValues: gasBaseValues(input?.manualValues),
+  };
+
+  if (!Object.values(gas.values || {}).some(Boolean) && Object.values(gas.manualValues || {}).some(Boolean)) {
+    gas.values = { ...gas.manualValues };
+    gas.source = 'manual';
+    if (!gas.updatedAt) gas.updatedAt = gas.manualUpdatedAt || '';
+  }
+
+  return gas;
 }
 
 const REQUIRED_PROJECTS = [
@@ -156,6 +186,28 @@ const seed = {
     lastUpdatedAt: '',
     lastError: '',
   },
+  gasPrices: {
+    location: LOCAL_ZIP,
+    resolvedLocation: '',
+    source: 'manual',
+    sourceUrl: '',
+    fetchedAt: '',
+    updatedAt: '',
+    lastError: '',
+    manualUpdatedAt: '',
+    values: {
+      regular: '',
+      mid: '',
+      premium: '',
+      diesel: '',
+    },
+    manualValues: {
+      regular: '',
+      mid: '',
+      premium: '',
+      diesel: '',
+    },
+  },
   changelog: [],
   layout: createDefaultUtilityLayoutState(),
   shortcuts: [
@@ -195,6 +247,7 @@ const POLLING_DIAG_LOG_MIN_MS = 60 * 1000;
 const TRANSIENT_UPSTREAM_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const pollingFailureState = {
   weather: { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
+  'gas-prices': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'nba-scores': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'rss-feed': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'crypto-tracker': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
@@ -400,7 +453,6 @@ function load(){
 
   state.projects = Array.isArray(state.projects) ? state.projects : [];
   state.tasks = Array.isArray(state.tasks) ? state.tasks : [];
-
   // Migration: normalize renamed project + ensure required projects exist.
   const legacy = state.projects.find((p) => p.name === 'Retro Flash Homage Site');
   if (legacy) {
@@ -409,7 +461,6 @@ function load(){
     legacy.status = legacy.status || 'planning';
     legacy.lastUpdated = now();
   }
-
   state.notes = Array.isArray(state.notes) ? state.notes : [];
   state.notes = state.notes.map((n)=>({ pinned: !!n.pinned, ...n }));
   state.ideas = Array.isArray(state.ideas) ? state.ideas : [];
@@ -602,6 +653,8 @@ function load(){
   state.rss.refreshIntervalMin = Number.isFinite(rssRefresh) ? Math.min(180, Math.max(5, Math.round(rssRefresh))) : RSS_DEFAULT_REFRESH_MIN;
   state.rss.lastUpdatedAt = String(state.rss.lastUpdatedAt || '');
   state.rss.lastError = String(state.rss.lastError || '').slice(0, 300);
+
+  state.gasPrices = normalizeGasPricesState(state.gasPrices);
 
   state.changelog = Array.isArray(state.changelog) ? state.changelog : [];
 
@@ -1459,6 +1512,176 @@ async function renderWeather(options = {}){
     el.textContent = 'Weather unavailable right now.';
     if (ts) ts.textContent = `Update delayed: retry in ${Math.ceil(backoffMs / 1000)}s`;
   }
+}
+
+function formatGasPriceValue(input){
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  const cleaned = raw.replace(/[^0-9.]/g, '');
+  const num = Number(cleaned);
+  if (!Number.isFinite(num) || num <= 0) return '';
+  return `$${num.toFixed(3)}`;
+}
+
+function renderGasPricesView(){
+  const widget = document.getElementById('gasPricesWidget');
+  const meta = document.getElementById('gasPricesMeta');
+  const locationInput = document.getElementById('gasLocationInput');
+  if (!widget || !meta) return;
+
+  const gas = state.gasPrices || {};
+  if (locationInput && document.activeElement !== locationInput) {
+    locationInput.value = String(gas.location || '');
+  }
+
+  const displayValues = {
+    regular: gas.values?.regular || '',
+    mid: gas.values?.mid || '',
+    premium: gas.values?.premium || '',
+    diesel: gas.values?.diesel || '',
+  };
+
+  const cards = [
+    ['Regular', displayValues.regular],
+    ['Mid', displayValues.mid],
+    ['Premium', displayValues.premium],
+    ['Diesel', displayValues.diesel],
+  ].map(([label, value]) => `
+    <div class="change-log-item" style="padding:8px 10px;min-width:120px;">
+      <div class="note-meta">${label}</div>
+      <div style="font-weight:700;font-size:1.05rem;">${escapeHtml(value || '—')}</div>
+    </div>
+  `).join('');
+
+  widget.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;">${cards}</div>`;
+
+  const parts = [];
+  if (gas.resolvedLocation) parts.push(`Area: ${gas.resolvedLocation}`);
+  if (gas.source === 'aaa-state-average') parts.push('Source: AAA state average');
+  else parts.push('Source: manual override');
+  if (gas.updatedAt) parts.push(`Updated: ${new Date(gas.updatedAt).toLocaleString()}`);
+  if (gas.lastError) parts.push(`Auto fetch unavailable: ${gas.lastError}`);
+  meta.textContent = parts.join(' · ');
+
+  const manual = gas.manualValues || {};
+  const manualFields = {
+    regular: document.getElementById('gasManualRegular'),
+    mid: document.getElementById('gasManualMid'),
+    premium: document.getElementById('gasManualPremium'),
+    diesel: document.getElementById('gasManualDiesel'),
+  };
+  Object.entries(manualFields).forEach(([key, input]) => {
+    if (!input || document.activeElement === input) return;
+    input.value = String(manual[key] || '');
+  });
+
+  if (gas.lastError) {
+    setPodStatusSignal('gas-prices', gas.updatedAt ? 'degraded' : 'error', 'manual fallback');
+  } else if (gas.updatedAt) {
+    setPodStatusSignal('gas-prices', 'fresh');
+  } else {
+    setPodStatusSignal('gas-prices', 'neutral');
+  }
+}
+
+async function fetchGasPricesAuto(locationInput = ''){
+  const location = String(locationInput || state.gasPrices?.location || '').trim();
+  if (!location) {
+    state.gasPrices.lastError = 'Enter a ZIP or City, ST first.';
+    renderGasPricesView();
+    return;
+  }
+
+  state.gasPrices.location = location;
+  const backoffMs = pollingBackoffState('gas-prices').backoffUntil - Date.now();
+  if (backoffMs > 0) {
+    state.gasPrices.lastError = `Retrying in ${Math.ceil(backoffMs / 1000)}s due to upstream throttling.`;
+    renderGasPricesView();
+    return;
+  }
+
+  setPodStatusSignal('gas-prices', 'neutral', 'fetching');
+
+  try {
+    const res = await fetch(`/api/gas-prices?location=${encodeURIComponent(location)}`);
+    const data = await res.json();
+    if (!res.ok || !data?.ok || !data?.prices) {
+      const err = new Error(data?.message || `Gas upstream failed (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+
+    const normalized = {
+      regular: formatGasPriceValue(data.prices.regular),
+      mid: formatGasPriceValue(data.prices.mid),
+      premium: formatGasPriceValue(data.prices.premium),
+      diesel: formatGasPriceValue(data.prices.diesel),
+    };
+
+    const hasAutoValue = Object.values(normalized).some(Boolean);
+    if (!hasAutoValue) {
+      throw new Error('No grade prices were returned from auto source.');
+    }
+
+    state.gasPrices.values = normalized;
+    state.gasPrices.source = 'aaa-state-average';
+    state.gasPrices.sourceUrl = String(data.sourceUrl || 'https://gasprices.aaa.com/');
+    state.gasPrices.resolvedLocation = String(data.resolvedLocation || '');
+    state.gasPrices.fetchedAt = now();
+    state.gasPrices.updatedAt = now();
+    state.gasPrices.lastError = '';
+
+    clearPollingBackoff('gas-prices');
+    save('gas_prices_auto_fetch');
+  } catch (error) {
+    const fallbackMs = registerPollingFailure('gas-prices', error, 'Gas price service temporarily unavailable');
+    state.gasPrices.lastError = `${String(error?.message || 'Auto fetch unavailable').slice(0, 140)} (retry in ${Math.ceil(fallbackMs / 1000)}s)`;
+    if (!state.gasPrices.updatedAt && state.gasPrices.manualUpdatedAt) {
+      state.gasPrices.values = { ...(state.gasPrices.manualValues || {}) };
+      state.gasPrices.source = 'manual';
+      state.gasPrices.updatedAt = state.gasPrices.manualUpdatedAt;
+    }
+    save('gas_prices_auto_fetch_failed');
+  }
+
+  renderGasPricesView();
+}
+
+function saveGasPricesManual(){
+  const fields = {
+    regular: document.getElementById('gasManualRegular')?.value,
+    mid: document.getElementById('gasManualMid')?.value,
+    premium: document.getElementById('gasManualPremium')?.value,
+    diesel: document.getElementById('gasManualDiesel')?.value,
+  };
+
+  const manual = {
+    regular: formatGasPriceValue(fields.regular),
+    mid: formatGasPriceValue(fields.mid),
+    premium: formatGasPriceValue(fields.premium),
+    diesel: formatGasPriceValue(fields.diesel),
+  };
+
+  if (!Object.values(manual).some(Boolean)) {
+    state.gasPrices.lastError = 'Enter at least one manual price to save.';
+    renderGasPricesView();
+    return;
+  }
+
+  state.gasPrices.manualValues = manual;
+  state.gasPrices.values = { ...manual };
+  state.gasPrices.source = 'manual';
+  state.gasPrices.sourceUrl = '';
+  state.gasPrices.updatedAt = now();
+  state.gasPrices.manualUpdatedAt = state.gasPrices.updatedAt;
+  state.gasPrices.lastError = '';
+
+  save('gas_prices_manual_saved');
+  renderGasPricesView();
+}
+
+function renderGasPricesPod(){
+  renderPodWithFallback('gas-prices', renderGasPricesView);
 }
 
 function estDateYmdCompact(){
@@ -4928,6 +5151,7 @@ function renderRssPod(options = {}){
 
 function getUtilityPodLegacyRenderer(podId){
   if (podId === 'weather') return () => renderWeather();
+  if (podId === 'gas-prices') return () => renderGasPricesView();
   if (podId === 'nba-scores') return () => renderNbaScores();
   if (podId === 'crypto-tracker') return () => renderCrypto();
   if (podId === 'rss-feed') return () => renderRss();
@@ -4935,7 +5159,7 @@ function getUtilityPodLegacyRenderer(podId){
 }
 
 function syncUtilityPodLifecycle(){
-  const managed = ['weather', 'nba-scores', 'crypto-tracker', 'rss-feed'];
+  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'rss-feed'];
   managed.forEach((podId) => {
     const visible = state.layout?.visibility?.[podId] !== false;
     const legacyRender = getUtilityPodLegacyRenderer(podId);
@@ -5116,6 +5340,7 @@ function renderAll(){
   applyUtilityLayoutToDom();
   renderPodWithFallback('date-time', renderDateTime);
   renderPodWithFallback('calendar', renderCalendar);
+  renderGasPricesPod();
   renderCalendarRemindersPanel();
   renderTodayReminders();
   renderSettings();
@@ -6489,6 +6714,11 @@ if (!state.changelog.some((c) => c.message === dateWeatherMergePatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: dateWeatherMergePatch });
 }
 
+const gasPricesPatch = 'New utility pod: Gas Price Tracker added with hybrid auto-fetch (AAA state averages via local proxy) + persistent manual override fallback.';
+if (!state.changelog.some((c) => c.message === gasPricesPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: gasPricesPatch });
+}
+
 save('startup_patch_seed', { pushShared: false });
 renderAll();
 setInterval(renderDateTime, 1000);
@@ -6503,6 +6733,15 @@ document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
   renderCryptoPod({ manual: true });
 });
 document.getElementById('rssRefreshBtn')?.addEventListener('click', () => renderRssPod({ manual: true }));
+document.getElementById('gasFetchBtn')?.addEventListener('click', async () => {
+  const input = String(document.getElementById('gasLocationInput')?.value || '').trim();
+  await fetchGasPricesAuto(input);
+});
+document.getElementById('gasManualSaveBtn')?.addEventListener('click', saveGasPricesManual);
+document.getElementById('gasLocationInput')?.addEventListener('change', (e) => {
+  state.gasPrices.location = String(e.target.value || '').trim().slice(0, 80);
+  save('gas_prices_location_updated');
+});
 document.getElementById('rssShowReadToggle')?.addEventListener('change', (e) => {
   state.rss.showRead = !!e.target.checked;
   save('rss_show_read_toggled');
