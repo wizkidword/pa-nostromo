@@ -266,7 +266,7 @@ const AMBIENT_PRESETS = [
     label: 'Cafe',
     sources: [
       { type: 'youtube', label: 'YouTube · Cafe ambience', url: 'https://www.youtube.com/watch?v=gaGrHUekGrc' },
-      { type: 'youtube', label: 'YouTube · Coffee shop room tone', url: 'https://www.youtube.com/watch?v=BOdLmxy06H0' },
+      { type: 'youtube', label: 'YouTube · Coffee shop room tone', url: 'https://www.youtube.com/watch?v=uU_RxnJOdMQ' },
       { type: 'direct', label: 'Built-in fallback · Cafe murmur loop', url: '/assets/ambient/cafe-fallback.ogg' },
     ],
   },
@@ -274,8 +274,8 @@ const AMBIENT_PRESETS = [
     id: 'wind',
     label: 'Wind',
     sources: [
-      { type: 'youtube', label: 'YouTube · Wind ambience', url: 'https://www.youtube.com/watch?v=-5KAN9_CzSA' },
-      { type: 'youtube', label: 'YouTube · Wind through trees', url: 'https://www.youtube.com/watch?v=fr0c7iY9O2M' },
+      { type: 'youtube', label: 'YouTube · Wind ambience', url: 'https://www.youtube.com/watch?v=7WPsftkv1ZY' },
+      { type: 'youtube', label: 'YouTube · Wind through trees', url: 'https://www.youtube.com/watch?v=4KzFe50RQkQ' },
       { type: 'direct', label: 'Built-in fallback · Wind loop', url: '/assets/ambient/wind-fallback.ogg' },
     ],
   },
@@ -283,8 +283,8 @@ const AMBIENT_PRESETS = [
     id: 'night',
     label: 'Night Crickets',
     sources: [
-      { type: 'youtube', label: 'YouTube · Night crickets ambience', url: 'https://www.youtube.com/watch?v=jA6B7Vr6f8U' },
-      { type: 'youtube', label: 'YouTube · Summer night insects', url: 'https://www.youtube.com/watch?v=qJxY2r8m4gM' },
+      { type: 'youtube', label: 'YouTube · Night crickets ambience', url: 'https://www.youtube.com/watch?v=g1w3IT5WnYw' },
+      { type: 'youtube', label: 'YouTube · Summer night insects', url: 'https://www.youtube.com/watch?v=-zWS52fBtSE' },
       { type: 'direct', label: 'Built-in fallback · Crickets loop', url: '/assets/ambient/night-crickets-fallback.ogg' },
     ],
   },
@@ -293,7 +293,7 @@ const AMBIENT_PRESETS = [
     label: 'Pink Noise',
     sources: [
       { type: 'youtube', label: 'YouTube · Pink noise generator', url: 'https://www.youtube.com/watch?v=8SHf6wmX5MU' },
-      { type: 'youtube', label: 'YouTube · Deep pink noise', url: 'https://www.youtube.com/watch?v=ZXtimhT-ff4' },
+      { type: 'youtube', label: 'YouTube · Deep pink noise', url: 'https://www.youtube.com/watch?v=HIkAOMw_sjw' },
       { type: 'direct', label: 'Built-in fallback · Pink noise loop', url: '/assets/ambient/pink-noise-fallback.ogg' },
     ],
   },
@@ -565,6 +565,7 @@ function load(){
   ensureChangelogPatch(state, 'Patch: Ambient playback now auto-recovers from failed sources and includes direct-audio fallbacks with clearer error status.');
   ensureChangelogPatch(state, 'Patch: Ambient presets now use category-matched source sets with built-in non-YouTube fallbacks for Rain/Thunder/Forest/Fireplace/Ocean/Cafe/Wind/Night Crickets/Pink Noise.');
   ensureChangelogPatch(state, 'Patch: Music hotfix restored reliable Stream favorite/manual playback, isolated ambient fallback handling, and refreshed Thunder/Forest/Fireplace fallback audio assets.');
+  ensureChangelogPatch(state, 'Patch: Ambient source tuning corrected Cafe/Wind/Night Crickets/Pink Noise links and realigned fallback audio tone for category accuracy.');
 
   // Ensure reminder task exists for pod drag/drop idea.
   const mission = (state.projects || []).find((p) => p.name === 'Mission Control Dashboard');
