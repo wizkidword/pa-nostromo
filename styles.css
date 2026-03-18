@@ -645,7 +645,7 @@ form { display: grid; gap: 8px; }
 }
 
 .nba-scroll {
-  max-height: 270px; /* ~5 game rows visible */
+  max-height: 700px; /* align visible depth with taller utility pods like RSS */
 }
 
 input,
