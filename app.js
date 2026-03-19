@@ -1917,6 +1917,7 @@ function renderEverydayCalculatorPod(){
   const el = document.getElementById('everydayCalculatorWidget');
   if (!el) return;
 
+  const priorRoot = el.querySelector('[data-pod="everyday-calculator"]');
   const activeElement = document.activeElement;
   const activeCalcInput = activeElement && typeof activeElement.closest === 'function'
     ? activeElement.closest('[data-calc-input]')
@@ -1924,6 +1925,7 @@ function renderEverydayCalculatorPod(){
   const activeCalcInputName = activeCalcInput ? String(activeCalcInput.dataset.calcInput || '').trim() : '';
   const activeCalcInputSelectionStart = typeof activeCalcInput?.selectionStart === 'number' ? activeCalcInput.selectionStart : null;
   const activeCalcInputSelectionEnd = typeof activeCalcInput?.selectionEnd === 'number' ? activeCalcInput.selectionEnd : null;
+  const wasPodFocused = !!(priorRoot && activeElement && (activeElement === priorRoot || (typeof activeElement.closest === 'function' && activeElement.closest('[data-pod="everyday-calculator"]'))));
 
   state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
   const calc = state.everydayCalculator;
@@ -2058,6 +2060,8 @@ function renderEverydayCalculatorPod(){
         }
       }
     }
+  } else if (wasPodFocused) {
+    root.focus({ preventScroll: true });
   }
 
   setPodStatusSignal('everyday-calculator', 'fresh', 'ready');
