@@ -16,6 +16,8 @@ const SHARED_STATE_SYNC_CHANNEL = 'mission-control-shared-sync-channel-v1';
 const UNDO_WINDOW_MS = 12000;
 const SHORTCUT_GLOBAL_PROJECT_ID = '__global__';
 const CRYPTO_PROXY_API = '/api/crypto';
+const HOME_DEVICES_PING_API = '/api/home-devices/ping';
+const HOME_DEVICES_WAKE_API = '/api/home-devices/wake';
 const debugCounters = window.MissionControlModules?.debug || null;
 
 const COLUMNS = [
@@ -36,7 +38,7 @@ const DEFAULT_SETTINGS = {
 const DEFAULT_UTILITY_LAYOUT_ROWS = [
   ['shortcuts'],
   ['date-time', 'calendar', 'gas-prices'],
-  ['nba-scores', 'crypto-tracker', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor'],
+  ['nba-scores', 'crypto-tracker', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'],
   ['camera-feed', 'live-streams'],
   ['voice-note', 'voice-to-rowan', 'music-player'],
 ];
@@ -198,6 +200,45 @@ function normalizeSpeedTestState(input){
   };
 }
 
+
+function normalizeHomeDeviceControlState(input){
+  const devicesRaw = Array.isArray(input?.devices) ? input.devices : [];
+  const normalized = devicesRaw
+    .map((device, index) => {
+      const name = String(device?.name || '').trim().slice(0, 80);
+      const host = String(device?.host || '').trim().slice(0, 255);
+      if (!name || !host) return null;
+      const idVal = String(device?.id || `device-${index + 1}`).trim() || `device-${index + 1}`;
+      const tags = Array.isArray(device?.tags)
+        ? [...new Set(device.tags.map((tag) => String(tag || '').trim()).filter(Boolean))].slice(0, 10)
+        : String(device?.tags || '').split(',').map((tag) => tag.trim()).filter(Boolean).slice(0, 10);
+      return {
+        id: idVal,
+        name,
+        type: String(device?.type || 'device').trim().slice(0, 40) || 'device',
+        host,
+        uiUrl: String(device?.uiUrl || '').trim().slice(0, 400),
+        sshTarget: String(device?.sshTarget || '').trim().slice(0, 160),
+        rdpUrl: String(device?.rdpUrl || '').trim().slice(0, 400),
+        macAddress: String(device?.macAddress || '').trim().slice(0, 32),
+        notes: String(device?.notes || '').trim().slice(0, 240),
+        tags,
+        lastWakeStatus: String(device?.lastWakeStatus || ''),
+        lastWakeAt: String(device?.lastWakeAt || ''),
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    devices: normalized.slice(0, 60),
+    settingsOpen: !!input?.settingsOpen,
+    pingByDevice: (input?.pingByDevice && typeof input.pingByDevice === 'object') ? input.pingByDevice : {},
+    wakeModalDeviceId: String(input?.wakeModalDeviceId || ''),
+    toast: String(input?.toast || '').slice(0, 200),
+    toastAt: String(input?.toastAt || ''),
+  };
+}
+
 const REQUIRED_PROJECTS = [
   { name: 'Blast From The Ads', summary: 'Vintage ad content pipeline to social + WordPress', status: 'active', appLink: '', repoLink: '' },
   { name: 'Radio Map (Leaflet)', summary: 'Interactive radio station map web app', status: 'active', appLink: 'http://localhost:3399', repoLink: '' },
@@ -319,6 +360,14 @@ const seed = {
     history: [],
     lastError: '',
     running: false,
+  },
+  homeDeviceControl: {
+    devices: [],
+    settingsOpen: false,
+    pingByDevice: {},
+    wakeModalDeviceId: '',
+    toast: '',
+    toastAt: '',
   },
   changelog: [],
   layout: createDefaultUtilityLayoutState(),
@@ -777,7 +826,7 @@ function load(){
   state.rss.lastError = String(state.rss.lastError || '').slice(0, 300);
   state.gasPrices = normalizeGasPricesState(state.gasPrices); state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
   state.systemMonitor = normalizeSystemMonitorState(state.systemMonitor);
-  state.speedTest = normalizeSpeedTestState(state.speedTest); state.speedTest.running = false;
+  state.speedTest = normalizeSpeedTestState(state.speedTest); state.speedTest.running = false; state.homeDeviceControl = normalizeHomeDeviceControlState(state.homeDeviceControl);
   state.changelog = Array.isArray(state.changelog) ? state.changelog : [];
 
   ensureChangelogPatch(state, 'Patch: Crypto Tracker now supports portfolio holdings (qty + avg buy) with unrealized P/L summary.');
@@ -1637,6 +1686,7 @@ function renderSettings(){
 
   renderPodVisibilitySettings();
   mountRssSettingsFeeds();
+  mountHomeDevicesSettingsEditor();
   if (settingsPanel?.classList.contains('open')) refreshStateSafetyBackups();
 }
 
@@ -5889,6 +5939,7 @@ async function runSpeedTest({ reason = 'manual' } = {}){
   speedTestInFlight = true;
   state.speedTest.running = true;
   renderSpeedTestPod();
+  renderHomeDeviceControlPod();
 
   try {
     const res = await fetch('/api/speed-test', { cache: 'no-store' });
@@ -6093,11 +6144,12 @@ function getUtilityPodLegacyRenderer(podId){
   if (podId === 'everyday-calculator') return () => renderEverydayCalculatorPod();
   if (podId === 'system-resource-monitor') return () => renderSystemResourceMonitorPod();
   if (podId === 'speed-test') return () => renderSpeedTestPod();
+  if (podId === 'home-device-control') return () => renderHomeDeviceControlPod();
   return null;
 }
 
 function syncUtilityPodLifecycle(){
-  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor'];
+  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'];
   managed.forEach((podId) => {
     const visible = state.layout?.visibility?.[podId] !== false;
     const legacyRender = getUtilityPodLegacyRenderer(podId);
@@ -6275,6 +6327,162 @@ function clearPodDragUi(){
   if (!wrap) return;
   wrap.querySelectorAll('.pod-toggle-row.is-dragging').forEach((el) => el.classList.remove('is-dragging'));
   wrap.querySelectorAll('.pod-toggle-row-group.is-drop-target').forEach((el) => el.classList.remove('is-drop-target'));
+}
+
+function normalizeMacAddress(value){
+  const clean = String(value || '').trim().replace(/-/g, ':').toUpperCase();
+  if (!clean) return '';
+  return /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(clean) ? clean : clean;
+}
+
+function homeDeviceActionAvailability(device){
+  const hasRemote = !!(device?.rdpUrl || device?.sshTarget || device?.uiUrl);
+  return {
+    remote: { enabled: hasRemote, reason: hasRemote ? '' : 'Add rdpUrl, sshTarget, or uiUrl.' },
+    ui: { enabled: !!device?.uiUrl, reason: device?.uiUrl ? '' : 'Missing uiUrl.' },
+    ping: { enabled: !!device?.host, reason: device?.host ? '' : 'Missing host.' },
+    copySsh: { enabled: !!device?.sshTarget, reason: device?.sshTarget ? '' : 'Missing sshTarget.' },
+    wake: { enabled: !!device?.macAddress, reason: device?.macAddress ? '' : 'Missing macAddress.' },
+  };
+}
+
+function resolveRemoteTarget(device){
+  if (device?.rdpUrl) return { type: 'rdp', value: device.rdpUrl };
+  if (device?.sshTarget) return { type: 'ssh', value: `ssh://${device.sshTarget.replace(/^ssh:\/\//i, '')}` };
+  if (device?.uiUrl) return { type: 'ui', value: device.uiUrl };
+  return null;
+}
+
+async function pingHomeDevice(deviceId){
+  const device = state.homeDeviceControl.devices.find((d) => d.id === deviceId);
+  if (!device?.host) return;
+  state.homeDeviceControl.pingByDevice[deviceId] = { status: 'running', checkedAt: now(), message: 'Pinging…' };
+  renderHomeDeviceControlPod();
+  try {
+    const res = await fetch(HOME_DEVICES_PING_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ host: device.host }) });
+    const payload = await res.json().catch(() => ({}));
+    state.homeDeviceControl.pingByDevice[deviceId] = { status: payload?.ok ? (payload.reachable ? 'up' : 'down') : 'error', checkedAt: now(), latencyMs: Number.isFinite(Number(payload?.latencyMs)) ? Number(payload.latencyMs) : null, message: payload?.message || (payload?.reachable ? 'Reachable' : 'Unreachable') };
+  } catch (error) {
+    state.homeDeviceControl.pingByDevice[deviceId] = { status: 'error', checkedAt: now(), message: `Ping unavailable: ${String(error?.message || error)}` };
+  }
+  save('home_device_ping_checked');
+  renderHomeDeviceControlPod();
+}
+
+async function wakeHomeDevice(deviceId){
+  const device = state.homeDeviceControl.devices.find((d) => d.id === deviceId);
+  if (!device?.macAddress) return;
+  try {
+    const res = await fetch(HOME_DEVICES_WAKE_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ macAddress: device.macAddress, host: device.host }) });
+    const payload = await res.json().catch(() => ({}));
+    device.lastWakeStatus = payload?.ok ? `Wake sent (${payload?.tool || 'unknown'})` : `Wake failed: ${payload?.message || 'Unknown error'}`;
+    device.lastWakeAt = now();
+  } catch (error) {
+    device.lastWakeStatus = `Wake unavailable: ${String(error?.message || error)}`;
+    device.lastWakeAt = now();
+  }
+  state.homeDeviceControl.wakeModalDeviceId = '';
+  commitState('home_device_wake_triggered');
+}
+
+function renderHomeDeviceControlPod(){
+  const wrap = document.getElementById('homeDeviceControlWidget');
+  if (!wrap) return;
+  const devices = state.homeDeviceControl?.devices || [];
+  if (!devices.length) {
+    wrap.innerHTML = '<div class="note-meta">No home devices configured yet. Add one in Settings → Data & Feeds.</div>';
+    return;
+  }
+
+  wrap.innerHTML = `<div class="home-device-grid">${devices.map((device) => {
+    const status = state.homeDeviceControl.pingByDevice?.[device.id] || {};
+    const av = homeDeviceActionAvailability(device);
+    const wakeMeta = device.lastWakeAt ? `${new Date(device.lastWakeAt).toLocaleString()} · ${device.lastWakeStatus || 'wake attempted'}` : 'No wake attempts yet.';
+    return `<article class="home-device-card">
+      <div class="row-between-wrap gap10"><strong>${escapeHtml(device.name)}</strong><span class="badge">${escapeHtml(device.type || 'device')}</span></div>
+      <div class="note-meta">Host: ${escapeHtml(device.host || '—')}</div>
+      ${device.tags?.length ? `<div class="note-meta">Tags: ${escapeHtml(device.tags.join(', '))}</div>` : ''}
+      <div class="home-device-actions mt8">
+        <button class="btn ghost" data-home-device-action="remote" data-device-id="${escapeHtml(device.id)}" ${av.remote.enabled ? '' : 'disabled'} title="${escapeHtml(av.remote.reason)}">Open Remote</button>
+        <button class="btn ghost" data-home-device-action="ui" data-device-id="${escapeHtml(device.id)}" ${av.ui.enabled ? '' : 'disabled'} title="${escapeHtml(av.ui.reason)}">Open UI</button>
+        <button class="btn ghost" data-home-device-action="ping" data-device-id="${escapeHtml(device.id)}" ${av.ping.enabled ? '' : 'disabled'} title="${escapeHtml(av.ping.reason)}">Ping</button>
+        <button class="btn ghost" data-home-device-action="copy-ssh" data-device-id="${escapeHtml(device.id)}" ${av.copySsh.enabled ? '' : 'disabled'} title="${escapeHtml(av.copySsh.reason)}">Copy SSH</button>
+        <button class="btn" data-home-device-action="wake" data-device-id="${escapeHtml(device.id)}" ${av.wake.enabled ? '' : 'disabled'} title="${escapeHtml(av.wake.reason)}">Wake</button>
+      </div>
+      <div class="note-meta mt6">Ping: ${status.status === 'running' ? 'Running…' : (status.message || 'Not checked')} ${status.latencyMs != null ? `(${Math.round(status.latencyMs)}ms)` : ''}</div>
+      <div class="note-meta">Wake: ${escapeHtml(wakeMeta)}</div>
+    </article>`;
+  }).join('')}</div>`;
+
+  wrap.querySelectorAll('[data-home-device-action]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const deviceId = String(btn.getAttribute('data-device-id') || '');
+      const device = state.homeDeviceControl.devices.find((d) => d.id === deviceId);
+      if (!device) return;
+      const action = String(btn.getAttribute('data-home-device-action') || '');
+      if (action === 'remote') { const target = resolveRemoteTarget(device); if (target?.value) window.open(target.value, '_blank', 'noopener,noreferrer'); }
+      if (action === 'ui' && device.uiUrl) window.open(device.uiUrl, '_blank', 'noopener,noreferrer');
+      if (action === 'ping') await pingHomeDevice(device.id);
+      if (action === 'copy-ssh' && device.sshTarget) { try { await navigator.clipboard.writeText(device.sshTarget); } catch {} }
+      if (action === 'wake') { state.homeDeviceControl.wakeModalDeviceId = device.id; renderHomeDeviceControlPod(); }
+    });
+  });
+
+  const wakeId = state.homeDeviceControl.wakeModalDeviceId;
+  if (wakeId) {
+    const device = devices.find((d) => d.id === wakeId);
+    if (device) {
+      wrap.insertAdjacentHTML('beforeend', `<div class="home-device-modal-backdrop"><div class="home-device-modal"><strong>Send Wake-on-LAN?</strong><div class="note-meta mt6">${escapeHtml(device.name)} · ${escapeHtml(normalizeMacAddress(device.macAddress))}</div><div class="row-wrap mt8"><button class="btn" data-home-device-confirm-wake="${escapeHtml(device.id)}">Send Wake</button><button class="btn ghost" data-home-device-cancel-wake="1">Cancel</button></div></div></div>`);
+      wrap.querySelector('[data-home-device-cancel-wake]')?.addEventListener('click', () => { state.homeDeviceControl.wakeModalDeviceId = ''; renderHomeDeviceControlPod(); });
+      wrap.querySelector('[data-home-device-confirm-wake]')?.addEventListener('click', () => wakeHomeDevice(device.id));
+    }
+  }
+}
+
+function mountHomeDevicesSettingsEditor(){
+  const wrap = document.getElementById('settingsHomeDevicesList');
+  if (!wrap) return;
+  const devices = state.homeDeviceControl?.devices || [];
+  wrap.innerHTML = devices.map((device) => `<div class="change-log-item"><div class="row-between-wrap gap8"><strong>${escapeHtml(device.name)}</strong><button class="btn note-delete" type="button" data-home-device-remove="${escapeHtml(device.id)}">Remove</button></div><div class="home-device-settings-grid mt8">
+    <input data-home-device-field="name" data-device-id="${escapeHtml(device.id)}" value="${escapeHtml(device.name)}" placeholder="Name" />
+    <input data-home-device-field="type" data-device-id="${escapeHtml(device.id)}" value="${escapeHtml(device.type || '')}" placeholder="Type" />
+    <input data-home-device-field="host" data-device-id="${escapeHtml(device.id)}" value="${escapeHtml(device.host || '')}" placeholder="Host/IP" />
+    <input data-home-device-field="uiUrl" data-device-id="${escapeHtml(device.id)}" value="${escapeHtml(device.uiUrl || '')}" placeholder="UI URL" />
+    <input data-home-device-field="sshTarget" data-device-id="${escapeHtml(device.id)}" value="${escapeHtml(device.sshTarget || '')}" placeholder="SSH target user@host" />
+    <input data-home-device-field="rdpUrl" data-device-id="${escapeHtml(device.id)}" value="${escapeHtml(device.rdpUrl || '')}" placeholder="RDP URL" />
+    <input data-home-device-field="macAddress" data-device-id="${escapeHtml(device.id)}" value="${escapeHtml(device.macAddress || '')}" placeholder="MAC address" />
+    <input data-home-device-field="tags" data-device-id="${escapeHtml(device.id)}" value="${escapeHtml((device.tags || []).join(', '))}" placeholder="Tags comma-separated" />
+    <input data-home-device-field="notes" data-device-id="${escapeHtml(device.id)}" value="${escapeHtml(device.notes || '')}" placeholder="Notes" />
+  </div></div>`).join('') || '<div class="note-meta">No devices yet.</div>';
+
+  wrap.querySelectorAll('[data-home-device-field]').forEach((input) => {
+    input.addEventListener('change', () => {
+      const deviceId = String(input.getAttribute('data-device-id') || '');
+      const field = String(input.getAttribute('data-home-device-field') || '');
+      const device = state.homeDeviceControl.devices.find((d) => d.id === deviceId);
+      if (!device || !field) return;
+      if (field === 'tags') device.tags = String(input.value || '').split(',').map((v) => v.trim()).filter(Boolean).slice(0, 10);
+      else if (field === 'macAddress') device[field] = normalizeMacAddress(input.value);
+      else device[field] = String(input.value || '').trim();
+      commitState('home_device_updated');
+    });
+  });
+
+  wrap.querySelectorAll('[data-home-device-remove]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const idVal = String(btn.getAttribute('data-home-device-remove') || '');
+      state.homeDeviceControl.devices = state.homeDeviceControl.devices.filter((d) => d.id !== idVal);
+      commitState('home_device_removed');
+    });
+  });
+
+  const addBtn = document.getElementById('addHomeDeviceBtn');
+  if (addBtn) {
+    addBtn.onclick = () => {
+      state.homeDeviceControl.devices.push({ id: id(), name: 'New Device', type: 'device', host: '', uiUrl: '', sshTarget: '', rdpUrl: '', macAddress: '', notes: '', tags: [], lastWakeStatus: '', lastWakeAt: '' });
+      commitState('home_device_added');
+    };
+  }
 }
 
 function renderAll(){

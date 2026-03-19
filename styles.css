@@ -1495,3 +1495,10 @@ menu {
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.03);
 }
+.home-device-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;}
+.home-device-card{border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px;background:rgba(255,255,255,.02);}
+.home-device-actions{display:flex;flex-wrap:wrap;gap:6px;}
+.home-device-actions .btn{padding:4px 8px;font-size:12px;}
+.home-device-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:1500;}
+.home-device-modal{background:var(--panel,#1f232a);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:12px;max-width:320px;width:90%;}
+.home-device-settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px;}

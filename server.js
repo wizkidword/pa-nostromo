@@ -83,6 +83,8 @@ const SYS_MONITOR_TIMEOUT_MS = Math.max(1000, parsePositiveInt(process.env.SYS_M
 const SYS_MONITOR_MAX_PROCESSES = Math.max(10, parsePositiveInt(process.env.SYS_MONITOR_MAX_PROCESSES, 120));
 const SPEED_TEST_ALLOW_REMOTE = parseBool(process.env.SPEED_TEST_ALLOW_REMOTE);
 const SPEED_TEST_TIMEOUT_MS = Math.max(3000, parsePositiveInt(process.env.SPEED_TEST_TIMEOUT_MS, 30000));
+const HOME_DEVICE_ALLOW_REMOTE = parseBool(process.env.HOME_DEVICE_ALLOW_REMOTE);
+const HOME_DEVICE_TIMEOUT_MS = Math.max(1000, parsePositiveInt(process.env.HOME_DEVICE_TIMEOUT_MS, 2500));
 
 function parseAllowlistInput(value) {
   return [...new Set(String(value || '')
@@ -238,6 +240,73 @@ async function handleApiSystemResources(req, res) {
       allowlistMatches,
     },
   });
+}
+
+function isPrivateOrLocalHost(hostValue) {
+  const host = String(hostValue || '').trim().toLowerCase();
+  if (!host) return false;
+  if (host === 'localhost' || host.endsWith('.local')) return true;
+  if (/^127./.test(host) || host === '::1') return true;
+  if (/^10./.test(host)) return true;
+  if (/^192.168./.test(host)) return true;
+  if (/^172.(1[6-9]|2\d|3[0-1])./.test(host)) return true;
+  return false;
+}
+
+function runExecFile(bin, args, timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    execFile(bin, args, { timeout: timeoutMs, maxBuffer: 512 * 1024 }, (error, stdout, stderr) => {
+      resolve({ ok: !error, error, stdout: String(stdout || ''), stderr: String(stderr || '') });
+    });
+  });
+}
+
+async function handleApiHomeDevicePing(req, res) {
+  if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/home-devices/ping.' });
+  if (!isLocalRequest(req) && !HOME_DEVICE_ALLOW_REMOTE) {
+    return sendJson(res, 403, { ok: false, error: 'forbidden_remote', message: 'Home-device endpoint only accepts local requests.' });
+  }
+  const bodyRaw = await readBody(req);
+  const parsed = parseJsonSafely(bodyRaw || '{}', 'home_device_ping');
+  if (!parsed.ok) return sendJson(res, 400, { ok: false, error: parsed.error, message: parsed.message });
+  const host = String(parsed.value?.host || '').trim();
+  if (!host) return sendJson(res, 400, { ok: false, error: 'missing_host', message: 'host is required.' });
+  if (!isPrivateOrLocalHost(host)) return sendJson(res, 400, { ok: false, error: 'host_not_local', message: 'host must be local/private IP or .local hostname.' });
+
+  const start = Date.now();
+  const out = await runExecFile('ping', ['-c', '1', '-W', '1', host], HOME_DEVICE_TIMEOUT_MS);
+  const latencyMs = Date.now() - start;
+  if (out.ok) return sendJson(res, 200, { ok: true, reachable: true, host, latencyMs, message: 'Host reachable.' });
+  return sendJson(res, 200, { ok: true, reachable: false, host, latencyMs: null, message: out.stderr || out.error?.message || 'Ping failed.' });
+}
+
+async function handleApiHomeDeviceWake(req, res) {
+  if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/home-devices/wake.' });
+  if (!isLocalRequest(req) && !HOME_DEVICE_ALLOW_REMOTE) {
+    return sendJson(res, 403, { ok: false, error: 'forbidden_remote', message: 'Home-device endpoint only accepts local requests.' });
+  }
+  const bodyRaw = await readBody(req);
+  const parsed = parseJsonSafely(bodyRaw || '{}', 'home_device_wake');
+  if (!parsed.ok) return sendJson(res, 400, { ok: false, error: parsed.error, message: parsed.message });
+  const macAddress = String(parsed.value?.macAddress || '').trim().replace(/-/g, ':').toUpperCase();
+  const host = String(parsed.value?.host || '').trim();
+  if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(macAddress)) {
+    return sendJson(res, 400, { ok: false, error: 'invalid_mac', message: 'macAddress must be AA:BB:CC:DD:EE:FF.' });
+  }
+  if (host && !isPrivateOrLocalHost(host)) {
+    return sendJson(res, 400, { ok: false, error: 'host_not_local', message: 'host must be local/private IP or .local hostname.' });
+  }
+
+  const attempts = [
+    { tool: 'wakeonlan', args: [macAddress] },
+    { tool: 'etherwake', args: [macAddress] },
+  ];
+  for (const attempt of attempts) {
+    const out = await runExecFile(attempt.tool, attempt.args, HOME_DEVICE_TIMEOUT_MS);
+    if (out.ok) return sendJson(res, 200, { ok: true, tool: attempt.tool, macAddress, message: 'Wake packet sent.' });
+  }
+
+  return sendJson(res, 503, { ok: false, error: 'wake_unavailable', message: 'No wake utility available (install wakeonlan or etherwake).' });
 }
 
 function parseJsonSafely(raw, sourceLabel = 'json') {
@@ -1477,6 +1546,8 @@ const server = http.createServer(async (req, res) => {
   if ((req.url || '').startsWith('/api/crypto/')) return handleApiCryptoProxy(req, res);
   if ((req.url || '').startsWith('/api/system-resources')) return handleApiSystemResources(req, res);
   if ((req.url || '').startsWith('/api/speed-test')) return handleApiSpeedTest(req, res);
+  if ((req.url || '').startsWith('/api/home-devices/ping')) return handleApiHomeDevicePing(req, res);
+  if ((req.url || '').startsWith('/api/home-devices/wake')) return handleApiHomeDeviceWake(req, res);
   return handleStatic(req, res);
 });
 

@@ -100,6 +100,11 @@
               <button id="addRssFeedBtn" class="btn">+ Add Feed</button>
             </div>
             <div id="settingsRssFeedsList" class="change-log-list"></div>
+            <h4 class="mt10 mb8">Home Device Inventory</h4>
+            <div class="row-wrap">
+              <button id="addHomeDeviceBtn" class="btn">+ Add Device</button>
+            </div>
+            <div id="settingsHomeDevicesList" class="change-log-list"></div>
           </section>
 
           <section class="settings-section" data-settings-section="shortcuts" hidden>
@@ -248,6 +253,12 @@
         </div>
         <div id="systemResourceMonitorWidget" class="widget-block">Loading system metrics...</div>
         <div id="systemResourceMonitorMeta" class="note-meta mt6">Collecting host stats...</div>
+      </div>
+      <div class="card utility-card" data-pod-id="home-device-control">
+        <div class="pod-header">
+          <h2>🏠 Home Device Control <span id="home-device-controlStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
+        </div>
+        <div id="homeDeviceControlWidget" class="widget-block">Loading home devices...</div>
       </div>
     </div>
 
