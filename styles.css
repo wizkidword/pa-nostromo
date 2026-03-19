@@ -869,9 +869,71 @@ menu {
 }
 
 .camera-feed-shell,
-.live-streams-shell {
+.live-streams-shell,
+.system-monitor-shell {
   display: grid;
   gap: 8px;
+}
+
+.sysmon-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.sysmon-metric {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: var(--surface-soft);
+  display: grid;
+  gap: 2px;
+}
+
+.sysmon-metric span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sysmon-metric strong {
+  font-size: 13px;
+}
+
+.sysmon-metric strong small {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.sysmon-grid-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sysmon-process-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  border-bottom: 1px dashed var(--border-soft);
+  padding: 4px 0;
+}
+
+.sysmon-process-item:last-child {
+  border-bottom: 0;
+}
+
+.sysmon-process-name small,
+.sysmon-process-usage small {
+  color: var(--muted);
+  margin-left: 4px;
+}
+
+.sysmon-settings {
+  border-top: 1px dashed var(--border-strong);
+  padding-top: 8px;
 }
 
 .camera-feed-inline-label {
@@ -1135,6 +1197,11 @@ menu {
 
 @media (max-width: 680px) {
   .utils-row {
+    grid-template-columns: 1fr;
+  }
+
+  .sysmon-grid-two,
+  .sysmon-metrics-grid {
     grid-template-columns: 1fr;
   }
 

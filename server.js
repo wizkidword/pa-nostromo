@@ -4,6 +4,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
+const os = require('os');
 
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
@@ -77,6 +78,165 @@ const CRYPTO_PROXY_ALLOW_REMOTE = parseBool(process.env.CRYPTO_PROXY_ALLOW_REMOT
 const CRYPTO_PROXY_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.CRYPTO_PROXY_TIMEOUT_MS, 10000));
 const GAS_PROXY_ALLOW_REMOTE = parseBool(process.env.GAS_PROXY_ALLOW_REMOTE);
 const GAS_PROXY_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.GAS_PROXY_TIMEOUT_MS, 10000));
+const SYS_MONITOR_ALLOW_REMOTE = parseBool(process.env.SYS_MONITOR_ALLOW_REMOTE);
+const SYS_MONITOR_TIMEOUT_MS = Math.max(1000, parsePositiveInt(process.env.SYS_MONITOR_TIMEOUT_MS, 1500));
+const SYS_MONITOR_MAX_PROCESSES = Math.max(10, parsePositiveInt(process.env.SYS_MONITOR_MAX_PROCESSES, 120));
+
+function parseAllowlistInput(value) {
+  return [...new Set(String(value || '')
+    .split(',')
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean)
+    .slice(0, 30))];
+}
+
+function readNetTotals() {
+  try {
+    const raw = fs.readFileSync('/proc/net/dev', 'utf8');
+    let rx = 0;
+    let tx = 0;
+    for (const line of raw.split(/\r?\n/).slice(2)) {
+      if (!line.includes(':')) continue;
+      const [, valuesRaw] = line.split(':');
+      const cols = valuesRaw.trim().split(/\s+/);
+      if (cols.length < 10) continue;
+      const r = Number(cols[0]);
+      const t = Number(cols[8]);
+      if (Number.isFinite(r)) rx += r;
+      if (Number.isFinite(t)) tx += t;
+    }
+    return { rxBytes: rx, txBytes: tx };
+  } catch {
+    return null;
+  }
+}
+
+function readDiskUsagePercent() {
+  return new Promise((resolve) => {
+    execFile('df', ['-kP', '/'], { timeout: SYS_MONITOR_TIMEOUT_MS, maxBuffer: 512 * 1024 }, (err, stdout) => {
+      if (err) return resolve(null);
+      const lines = String(stdout || '').trim().split(/\r?\n/);
+      if (lines.length < 2) return resolve(null);
+      const cols = lines[lines.length - 1].trim().split(/\s+/);
+      const percentRaw = cols[4] || '';
+      const percent = Number(String(percentRaw).replace('%', ''));
+      resolve(Number.isFinite(percent) ? percent : null);
+    });
+  });
+}
+
+function readTopProcesses() {
+  return new Promise((resolve) => {
+    execFile(
+      'ps',
+      ['-eo', 'pid=,comm=,%cpu=,%mem=', '--sort=-%cpu'],
+      { timeout: SYS_MONITOR_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+      (err, stdout) => {
+        if (err) return resolve([]);
+        const rows = String(stdout || '')
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => {
+            const parts = line.split(/\s+/);
+            if (parts.length < 4) return null;
+            const pid = Number(parts[0]);
+            const name = String(parts[1] || '').trim();
+            const cpu = Number(parts[2]);
+            const mem = Number(parts[3]);
+            if (!Number.isFinite(pid) || !name) return null;
+            return {
+              pid,
+              name,
+              cpuPercent: Number.isFinite(cpu) ? Math.max(0, cpu) : 0,
+              memPercent: Number.isFinite(mem) ? Math.max(0, mem) : 0,
+            };
+          })
+          .filter(Boolean)
+          .slice(0, SYS_MONITOR_MAX_PROCESSES);
+        resolve(rows);
+      }
+    );
+  });
+}
+
+async function handleApiSystemResources(req, res) {
+  if (!isLocalRequest(req) && !SYS_MONITOR_ALLOW_REMOTE) {
+    return sendJson(res, 403, {
+      ok: false,
+      error: 'forbidden_remote',
+      message: 'System monitor endpoint only accepts local requests.',
+    });
+  }
+
+  const reqUrl = new URL(req.url || '/api/system-resources', `http://localhost:${PORT}`);
+  const allowlist = parseAllowlistInput(reqUrl.searchParams.get('allowlist') || '');
+  const memTotal = os.totalmem();
+  const memFree = os.freemem();
+  const netBefore = readNetTotals();
+  const cpuBefore = os.cpus();
+
+  await new Promise((r) => setTimeout(r, 250));
+
+  const [diskPercent, processes] = await Promise.all([
+    readDiskUsagePercent(),
+    readTopProcesses(),
+  ]);
+
+  const cpuAfter = os.cpus();
+  const netAfter = readNetTotals();
+
+  let cpuPercent = null;
+  if (Array.isArray(cpuBefore) && Array.isArray(cpuAfter) && cpuBefore.length && cpuBefore.length === cpuAfter.length) {
+    let totalIdle = 0;
+    let totalTick = 0;
+    for (let i = 0; i < cpuBefore.length; i += 1) {
+      const a = cpuBefore[i].times;
+      const b = cpuAfter[i].times;
+      const idle = Math.max(0, (b.idle || 0) - (a.idle || 0));
+      const totalA = (a.user || 0) + (a.nice || 0) + (a.sys || 0) + (a.irq || 0) + (a.idle || 0);
+      const totalB = (b.user || 0) + (b.nice || 0) + (b.sys || 0) + (b.irq || 0) + (b.idle || 0);
+      totalIdle += idle;
+      totalTick += Math.max(0, totalB - totalA);
+    }
+    if (totalTick > 0) cpuPercent = Math.max(0, Math.min(100, Number((((totalTick - totalIdle) / totalTick) * 100).toFixed(1))));
+  }
+
+  const memUsedPercent = memTotal > 0
+    ? Math.max(0, Math.min(100, Number((((memTotal - memFree) / memTotal) * 100).toFixed(1))))
+    : null;
+
+  const topCpu = [...processes].sort((a, b) => b.cpuPercent - a.cpuPercent).slice(0, 3);
+  const topMemory = [...processes].sort((a, b) => b.memPercent - a.memPercent).slice(0, 3);
+  const allowlistMatches = allowlist.length
+    ? processes.filter((proc) => allowlist.some((needle) => proc.name.toLowerCase().includes(needle))).slice(0, 8)
+    : [];
+
+  const netRx = (netBefore && netAfter) ? Math.max(0, netAfter.rxBytes - netBefore.rxBytes) : null;
+  const netTx = (netBefore && netAfter) ? Math.max(0, netAfter.txBytes - netBefore.txBytes) : null;
+
+  return sendJson(res, 200, {
+    ok: true,
+    sampledAt: new Date().toISOString(),
+    host: {
+      cpuPercent,
+      memoryPercent: memUsedPercent,
+      diskPercent,
+      network: {
+        downBytesPerSec: netRx != null ? Math.round(netRx * 4) : null,
+        upBytesPerSec: netTx != null ? Math.round(netTx * 4) : null,
+      },
+      uptimeSec: Math.floor(os.uptime()),
+    },
+    processes: {
+      scanned: processes.length,
+      topCpu,
+      topMemory,
+      allowlist,
+      allowlistMatches,
+    },
+  });
+}
 
 function parseJsonSafely(raw, sourceLabel = 'json') {
   try {
@@ -1185,6 +1345,7 @@ const server = http.createServer(async (req, res) => {
   if ((req.url || '').startsWith('/api/rss/fetch')) return handleApiRssFetch(req, res);
   if ((req.url || '').startsWith('/api/gas-prices')) return handleApiGasPrices(req, res);
   if ((req.url || '').startsWith('/api/crypto/')) return handleApiCryptoProxy(req, res);
+  if ((req.url || '').startsWith('/api/system-resources')) return handleApiSystemResources(req, res);
   return handleStatic(req, res);
 });
 

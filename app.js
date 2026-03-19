@@ -36,7 +36,7 @@ const DEFAULT_SETTINGS = {
 const DEFAULT_UTILITY_LAYOUT_ROWS = [
   ['shortcuts'],
   ['date-time', 'calendar', 'gas-prices'],
-  ['nba-scores', 'crypto-tracker', 'rss-feed', 'everyday-calculator'],
+  ['nba-scores', 'crypto-tracker', 'rss-feed', 'everyday-calculator', 'system-resource-monitor'],
   ['camera-feed', 'live-streams'],
   ['voice-note', 'voice-to-rowan', 'music-player'],
 ];
@@ -155,6 +155,15 @@ function normalizeEverydayCalculatorState(input){
   };
 }
 
+function normalizeSystemMonitorState(input){
+  return {
+    allowlist: Array.isArray(input?.allowlist)
+      ? [...new Set(input.allowlist.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean))].slice(0, 30)
+      : ['node', 'chrome', 'openclaw', 'code', 'python'],
+    settingsOpen: !!input?.settingsOpen,
+  };
+}
+
 const REQUIRED_PROJECTS = [
   { name: 'Blast From The Ads', summary: 'Vintage ad content pipeline to social + WordPress', status: 'active', appLink: '', repoLink: '' },
   { name: 'Radio Map (Leaflet)', summary: 'Interactive radio station map web app', status: 'active', appLink: 'http://localhost:3399', repoLink: '' },
@@ -262,6 +271,10 @@ const seed = {
     taxPercent: 8,
     tipPanelOpen: true,
   },
+  systemMonitor: {
+    allowlist: ['node', 'chrome', 'openclaw', 'code', 'python'],
+    settingsOpen: false,
+  },
   changelog: [],
   layout: createDefaultUtilityLayoutState(),
   shortcuts: [
@@ -305,7 +318,13 @@ const pollingFailureState = {
   'nba-scores': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'rss-feed': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'crypto-tracker': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
+  'system-resource-monitor': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
 };
+let systemMonitorTimer = null;
+let systemMonitorLastPayload = null;
+let systemMonitorLastUpdatedAt = '';
+let systemMonitorLastError = '';
+let systemMonitorInFlight = false;
 let changeLogVisible = false;
 let changeLogLimit = 10;
 let pendingChanges = [];
@@ -707,8 +726,8 @@ function load(){
   state.rss.refreshIntervalMin = Number.isFinite(rssRefresh) ? Math.min(180, Math.max(5, Math.round(rssRefresh))) : RSS_DEFAULT_REFRESH_MIN;
   state.rss.lastUpdatedAt = String(state.rss.lastUpdatedAt || '');
   state.rss.lastError = String(state.rss.lastError || '').slice(0, 300);
-
   state.gasPrices = normalizeGasPricesState(state.gasPrices); state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
+  state.systemMonitor = normalizeSystemMonitorState(state.systemMonitor);
   state.changelog = Array.isArray(state.changelog) ? state.changelog : [];
 
   ensureChangelogPatch(state, 'Patch: Crypto Tracker now supports portfolio holdings (qty + avg buy) with unrealized P/L summary.');
@@ -5474,6 +5493,134 @@ window.onYouTubeIframeAPIReady = function(){
   initYouTubePlayerIfReady();
 };
 
+function formatRateBytesPerSec(value){
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return '—';
+  if (n < 1024) return `${Math.round(n)} B/s`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB/s`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB/s`;
+}
+
+function renderProcessList(items = [], mode = 'cpu'){
+  if (!Array.isArray(items) || !items.length) return '<div class="note-meta">No process data.</div>';
+  return items.slice(0, 3).map((proc) => {
+    const primary = mode === 'cpu' ? `${Number(proc.cpuPercent || 0).toFixed(1)}% CPU` : `${Number(proc.memPercent || 0).toFixed(1)}% RAM`;
+    const secondary = mode === 'cpu' ? `${Number(proc.memPercent || 0).toFixed(1)}% RAM` : `${Number(proc.cpuPercent || 0).toFixed(1)}% CPU`;
+    return `<div class="sysmon-process-item"><span class="sysmon-process-name">${escapeHtml(proc.name || 'unknown')} <small>#${Number(proc.pid || 0)}</small></span><span class="sysmon-process-usage">${primary}<small>${secondary}</small></span></div>`;
+  }).join('');
+}
+
+function stopSystemMonitorPolling(){
+  if (systemMonitorTimer) {
+    clearInterval(systemMonitorTimer);
+    systemMonitorTimer = null;
+  }
+}
+
+async function fetchSystemMonitorSnapshot(){
+  if (systemMonitorInFlight) return;
+  const visible = state.layout?.visibility?.['system-resource-monitor'] !== false;
+  const cardVisible = !!document.querySelector('[data-pod-id="system-resource-monitor"]:not(.is-hidden)');
+  if (!visible || !cardVisible) return;
+
+  systemMonitorInFlight = true;
+  try {
+    const allowlist = (state.systemMonitor?.allowlist || []).join(',');
+    const res = await fetch(`/api/system-resources?allowlist=${encodeURIComponent(allowlist)}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const payload = await res.json();
+    if (!payload?.ok) throw new Error(String(payload?.message || payload?.error || 'System monitor unavailable'));
+    systemMonitorLastPayload = payload;
+    systemMonitorLastUpdatedAt = payload.sampledAt || now();
+    systemMonitorLastError = '';
+    setPodStatusSignal('system-resource-monitor', 'fresh', 'Live');
+    clearPollingBackoff('system-resource-monitor');
+  } catch (error) {
+    const reason = String(error?.message || error || 'Unable to fetch system monitor').slice(0, 180);
+    systemMonitorLastError = reason;
+    const backoffMs = registerPollingFailure('system-resource-monitor', error, reason);
+    setPodStatusSignal('system-resource-monitor', 'stale', `Stale (${Math.ceil(backoffMs / 1000)}s)`);
+  } finally {
+    systemMonitorInFlight = false;
+    renderSystemResourceMonitorPod();
+  }
+}
+
+function startSystemMonitorPolling(){
+  stopSystemMonitorPolling();
+  systemMonitorTimer = setInterval(() => {
+    const backoff = pollingBackoffState('system-resource-monitor').backoffUntil - Date.now();
+    if (backoff > 0) return;
+    fetchSystemMonitorSnapshot();
+  }, 3000);
+}
+
+function renderSystemResourceMonitorPod(){
+  const el = document.getElementById('systemResourceMonitorWidget');
+  const meta = document.getElementById('systemResourceMonitorMeta');
+  if (!el) return;
+
+  const payload = systemMonitorLastPayload;
+  const host = payload?.host || {};
+  const processes = payload?.processes || {};
+  const stale = !!systemMonitorLastError;
+  const lastLabel = systemMonitorLastUpdatedAt ? new Date(systemMonitorLastUpdatedAt).toLocaleTimeString() : 'Never';
+
+  const allowlistText = (state.systemMonitor?.allowlist || []).join(', ');
+  el.innerHTML = `
+    <div class="system-monitor-shell" data-pod="system-resource-monitor">
+      <div class="sysmon-metrics-grid">
+        <div class="sysmon-metric"><span>CPU</span><strong>${Number.isFinite(host.cpuPercent) ? host.cpuPercent.toFixed(1) : '—'}%</strong></div>
+        <div class="sysmon-metric"><span>RAM</span><strong>${Number.isFinite(host.memoryPercent) ? host.memoryPercent.toFixed(1) : '—'}%</strong></div>
+        <div class="sysmon-metric"><span>Disk</span><strong>${Number.isFinite(host.diskPercent) ? host.diskPercent.toFixed(1) : '—'}%</strong></div>
+        <div class="sysmon-metric"><span>Net</span><strong>↓ ${formatRateBytesPerSec(host.network?.downBytesPerSec)} <small>↑ ${formatRateBytesPerSec(host.network?.upBytesPerSec)}</small></strong></div>
+      </div>
+
+      <div class="sysmon-grid-two">
+        <div><div class="note-meta">Top CPU</div>${renderProcessList(processes.topCpu, 'cpu')}</div>
+        <div><div class="note-meta">Top RAM</div>${renderProcessList(processes.topMemory, 'ram')}</div>
+      </div>
+
+      <div class="row-between-wrap mt8">
+        <button type="button" class="btn ghost" id="sysMonToggleSettingsBtn">${state.systemMonitor?.settingsOpen ? 'Hide' : 'Edit'} Allowlist</button>
+        <button type="button" class="btn ghost" id="sysMonRefreshBtn">Refresh</button>
+      </div>
+
+      ${state.systemMonitor?.settingsOpen ? `
+        <div class="sysmon-settings mt8">
+          <label class="note-meta" for="sysMonAllowlistInput">Allowlist (comma-separated process names)</label>
+          <input id="sysMonAllowlistInput" value="${escapeHtml(allowlistText)}" placeholder="node, chrome, code" />
+          <div class="row-wrap mt6">
+            <button type="button" class="btn" id="sysMonSaveAllowlistBtn">Save</button>
+            <span class="note-meta">Default: node, chrome, openclaw, code, python</span>
+          </div>
+          <div class="note-meta mt6">Matches: ${(processes.allowlistMatches || []).map((p) => `${p.name}#${p.pid}`).join(', ') || 'none in current sample'}</div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+
+  if (meta) {
+    meta.textContent = stale
+      ? `Showing last known data (${lastLabel}). Latest error: ${systemMonitorLastError}`
+      : `Live sample updated at ${lastLabel}. Refreshes every 3s.`;
+  }
+
+  document.getElementById('sysMonToggleSettingsBtn')?.addEventListener('click', () => {
+    state.systemMonitor.settingsOpen = !state.systemMonitor.settingsOpen;
+    save('system_monitor_toggle_settings');
+    renderSystemResourceMonitorPod();
+  });
+  document.getElementById('sysMonRefreshBtn')?.addEventListener('click', () => fetchSystemMonitorSnapshot());
+  document.getElementById('sysMonSaveAllowlistBtn')?.addEventListener('click', () => {
+    const raw = String(document.getElementById('sysMonAllowlistInput')?.value || '');
+    const next = [...new Set(raw.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean))].slice(0, 30);
+    state.systemMonitor.allowlist = next.length ? next : ['node', 'chrome', 'openclaw', 'code', 'python'];
+    save('system_monitor_allowlist_saved');
+    fetchSystemMonitorSnapshot();
+  });
+}
+
 function getPodRegistry(){
   return window.MissionControlModules?.podRegistry || null;
 }
@@ -5539,18 +5686,21 @@ function getUtilityPodLegacyRenderer(podId){
   if (podId === 'crypto-tracker') return () => renderCrypto();
   if (podId === 'rss-feed') return () => renderRss();
   if (podId === 'everyday-calculator') return () => renderEverydayCalculatorPod();
+  if (podId === 'system-resource-monitor') return () => renderSystemResourceMonitorPod();
   return null;
 }
 
 function syncUtilityPodLifecycle(){
-  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'rss-feed', 'everyday-calculator'];
+  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'rss-feed', 'everyday-calculator', 'system-resource-monitor'];
   managed.forEach((podId) => {
     const visible = state.layout?.visibility?.[podId] !== false;
     const legacyRender = getUtilityPodLegacyRenderer(podId);
     if (visible) {
       runPodLifecycleAction('mount', podId, legacyRender, { visible: true, trigger: 'layout_sync' });
+      if (podId === 'system-resource-monitor') startSystemMonitorPolling();
     } else {
       runPodLifecycleAction('destroy', podId, legacyRender, { visible: false, trigger: 'layout_sync' });
+      if (podId === 'system-resource-monitor') stopSystemMonitorPolling();
     }
   });
 }
@@ -5726,6 +5876,7 @@ function renderAll(){
   renderPodWithFallback('calendar', renderCalendar);
   renderGasPricesPod();
   renderEverydayCalculatorPod();
+  renderSystemResourceMonitorPod();
   renderCalendarRemindersPanel();
   renderTodayReminders();
   renderSettings();
@@ -7069,6 +7220,8 @@ if (!state.changelog.some((c) => c.message === gasPricesPatch)) {
 
 save('startup_patch_seed', { pushShared: false });
 renderAll();
+startSystemMonitorPolling();
+fetchSystemMonitorSnapshot();
 setInterval(renderDateTime, 1000);
 document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => renderWeatherPod({ manual: true }));
 document.getElementById('nbaRefreshBtn')?.addEventListener('click', () => renderNbaPod({ manual: true }));
@@ -7132,6 +7285,10 @@ window.addEventListener('storage', (event) => {
   if (event.key === SHARED_STATE_SYNC_EVENT_KEY && event.newValue) {
     scheduleSharedHydrate('storage_sync_event');
   }
+});
+
+window.addEventListener('beforeunload', () => {
+  stopSystemMonitorPolling();
 });
 
 try {
