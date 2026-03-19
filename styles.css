@@ -875,6 +875,29 @@ menu {
   gap: 8px;
 }
 
+.sysmon-row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sysmon-hot-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.sysmon-hot-badge small {
+  color: var(--muted);
+}
+
 .sysmon-metrics-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -888,6 +911,21 @@ menu {
   background: var(--surface-soft);
   display: grid;
   gap: 2px;
+}
+
+.sysmon-metric--good {
+  border-color: color-mix(in srgb, #28b463 55%, var(--border-strong));
+  background: color-mix(in srgb, #28b463 12%, var(--surface-soft));
+}
+
+.sysmon-metric--warn {
+  border-color: color-mix(in srgb, #f1c40f 70%, var(--border-strong));
+  background: color-mix(in srgb, #f1c40f 16%, var(--surface-soft));
+}
+
+.sysmon-metric--danger {
+  border-color: color-mix(in srgb, #e74c3c 70%, var(--border-strong));
+  background: color-mix(in srgb, #e74c3c 14%, var(--surface-soft));
 }
 
 .sysmon-metric span {
@@ -934,6 +972,16 @@ menu {
 .sysmon-settings {
   border-top: 1px dashed var(--border-strong);
   padding-top: 8px;
+}
+
+.sysmon-settings .btn-xs {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.sysmon-settings .btn.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .camera-feed-inline-label {

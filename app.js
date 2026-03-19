@@ -5501,6 +5501,33 @@ function formatRateBytesPerSec(value){
   return `${(n / (1024 * 1024)).toFixed(2)} MB/s`;
 }
 
+const SYSMON_SEVERITY_THRESHOLDS = {
+  goodMax: 59.9,
+  warnMax: 84.9,
+};
+
+const SYSMON_ALLOWLIST_PRESETS = {
+  dev: ['node', 'code', 'chrome', 'openclaw', 'python', 'git', 'docker'],
+  media: ['chrome', 'firefox', 'vlc', 'obs', 'ffmpeg', 'spotify', 'discord'],
+  minimal: ['node', 'openclaw', 'code'],
+};
+
+function classifySysMonSeverity(percent){
+  const n = Number(percent);
+  if (!Number.isFinite(n)) return 'neutral';
+  if (n <= SYSMON_SEVERITY_THRESHOLDS.goodMax) return 'good';
+  if (n <= SYSMON_SEVERITY_THRESHOLDS.warnMax) return 'warn';
+  return 'danger';
+}
+
+function applySystemMonitorAllowlistPreset(preset){
+  const next = [...new Set((SYSMON_ALLOWLIST_PRESETS[preset] || []).map((v) => String(v || '').trim().toLowerCase()).filter(Boolean))].slice(0, 30);
+  if (!next.length) return;
+  state.systemMonitor.allowlist = next;
+  save(`system_monitor_allowlist_preset_${preset}`);
+  fetchSystemMonitorSnapshot();
+}
+
 function renderProcessList(items = [], mode = 'cpu'){
   if (!Array.isArray(items) || !items.length) return '<div class="note-meta">No process data.</div>';
   return items.slice(0, 3).map((proc) => {
@@ -5567,12 +5594,28 @@ function renderSystemResourceMonitorPod(){
   const lastLabel = systemMonitorLastUpdatedAt ? new Date(systemMonitorLastUpdatedAt).toLocaleTimeString() : 'Never';
 
   const allowlistText = (state.systemMonitor?.allowlist || []).join(', ');
+  const hotProcess = Array.isArray(processes.topCpu) && processes.topCpu.length ? processes.topCpu[0] : null;
+  const cpuSeverity = classifySysMonSeverity(host.cpuPercent);
+  const memorySeverity = classifySysMonSeverity(host.memoryPercent);
+  const diskSeverity = classifySysMonSeverity(host.diskPercent);
+  const activeAllowlist = state.systemMonitor?.allowlist || [];
+  const presetState = {
+    dev: SYSMON_ALLOWLIST_PRESETS.dev.every((name) => activeAllowlist.includes(name)),
+    media: SYSMON_ALLOWLIST_PRESETS.media.every((name) => activeAllowlist.includes(name)),
+    minimal: SYSMON_ALLOWLIST_PRESETS.minimal.every((name) => activeAllowlist.includes(name)),
+  };
+
   el.innerHTML = `
     <div class="system-monitor-shell" data-pod="system-resource-monitor">
+      <div class="sysmon-row-between">
+        <div class="note-meta">Host Snapshot</div>
+        ${hotProcess ? `<span class="sysmon-hot-badge" title="Highest current CPU process">🔥 ${escapeHtml(hotProcess.name || 'unknown')} <small>#${Number(hotProcess.pid || 0)} · ${Number(hotProcess.cpuPercent || 0).toFixed(1)}%</small></span>` : '<span class="note-meta">Hot process unavailable</span>'}
+      </div>
+
       <div class="sysmon-metrics-grid">
-        <div class="sysmon-metric"><span>CPU</span><strong>${Number.isFinite(host.cpuPercent) ? host.cpuPercent.toFixed(1) : '—'}%</strong></div>
-        <div class="sysmon-metric"><span>RAM</span><strong>${Number.isFinite(host.memoryPercent) ? host.memoryPercent.toFixed(1) : '—'}%</strong></div>
-        <div class="sysmon-metric"><span>Disk</span><strong>${Number.isFinite(host.diskPercent) ? host.diskPercent.toFixed(1) : '—'}%</strong></div>
+        <div class="sysmon-metric sysmon-metric--${cpuSeverity}"><span>CPU</span><strong>${Number.isFinite(host.cpuPercent) ? host.cpuPercent.toFixed(1) : '—'}%</strong></div>
+        <div class="sysmon-metric sysmon-metric--${memorySeverity}"><span>RAM</span><strong>${Number.isFinite(host.memoryPercent) ? host.memoryPercent.toFixed(1) : '—'}%</strong></div>
+        <div class="sysmon-metric sysmon-metric--${diskSeverity}"><span>Disk</span><strong>${Number.isFinite(host.diskPercent) ? host.diskPercent.toFixed(1) : '—'}%</strong></div>
         <div class="sysmon-metric"><span>Net</span><strong>↓ ${formatRateBytesPerSec(host.network?.downBytesPerSec)} <small>↑ ${formatRateBytesPerSec(host.network?.upBytesPerSec)}</small></strong></div>
       </div>
 
@@ -5593,6 +5636,12 @@ function renderSystemResourceMonitorPod(){
           <div class="row-wrap mt6">
             <button type="button" class="btn" id="sysMonSaveAllowlistBtn">Save</button>
             <span class="note-meta">Default: node, chrome, openclaw, code, python</span>
+          </div>
+          <div class="row-wrap mt6">
+            <span class="note-meta">Presets:</span>
+            <button type="button" class="btn ghost btn-xs ${presetState.dev ? 'is-active' : ''}" data-sysmon-preset="dev">Dev</button>
+            <button type="button" class="btn ghost btn-xs ${presetState.media ? 'is-active' : ''}" data-sysmon-preset="media">Media</button>
+            <button type="button" class="btn ghost btn-xs ${presetState.minimal ? 'is-active' : ''}" data-sysmon-preset="minimal">Minimal</button>
           </div>
           <div class="note-meta mt6">Matches: ${(processes.allowlistMatches || []).map((p) => `${p.name}#${p.pid}`).join(', ') || 'none in current sample'}</div>
         </div>
@@ -5618,6 +5667,13 @@ function renderSystemResourceMonitorPod(){
     state.systemMonitor.allowlist = next.length ? next : ['node', 'chrome', 'openclaw', 'code', 'python'];
     save('system_monitor_allowlist_saved');
     fetchSystemMonitorSnapshot();
+  });
+  el.querySelectorAll('[data-sysmon-preset]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const preset = String(btn.getAttribute('data-sysmon-preset') || '').trim().toLowerCase();
+      applySystemMonitorAllowlistPreset(preset);
+      renderSystemResourceMonitorPod();
+    });
   });
 }
 
