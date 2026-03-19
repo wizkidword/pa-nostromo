@@ -377,6 +377,8 @@ let changeLogVisible = false;
 let changeLogLimit = 10;
 let pendingChanges = [];
 let settingsPodDragState = null;
+let activeSettingsSection = 'general';
+let settingsPaneDragState = null;
 let alarmTimer = null;
 let alarmEndTs = null;
 let alarmAudioCtx = null;
@@ -1290,6 +1292,93 @@ function logChange(message){
   flushPendingChanges();
 }
 
+function setActiveSettingsSection(sectionId, options = {}){
+  const target = String(sectionId || '').trim();
+  if (!target) return;
+  const sections = [...document.querySelectorAll('[data-settings-section]')];
+  const navButtons = [...document.querySelectorAll('[data-settings-section-btn]')];
+  if (!sections.length || !navButtons.length) return;
+
+  let matched = false;
+  sections.forEach((section) => {
+    const isActive = section.dataset.settingsSection === target;
+    section.hidden = !isActive;
+    section.classList.toggle('is-active', isActive);
+    if (isActive) matched = true;
+  });
+
+  if (!matched) return;
+
+  navButtons.forEach((btn) => {
+    const isActive = btn.dataset.settingsSectionBtn === target;
+    btn.classList.toggle('is-active', isActive);
+    btn.setAttribute('aria-current', isActive ? 'page' : 'false');
+  });
+
+  activeSettingsSection = target;
+  if (!options.preserveScroll) {
+    const pane = document.getElementById('settingsContentPane');
+    if (pane) pane.scrollTop = 0;
+  }
+}
+
+function setupSettingsSectionNav(){
+  document.querySelectorAll('[data-settings-section-btn]').forEach((btn) => {
+    btn.addEventListener('click', () => setActiveSettingsSection(btn.dataset.settingsSectionBtn));
+  });
+  setActiveSettingsSection(activeSettingsSection, { preserveScroll: true });
+}
+
+function setupSettingsPaneDragScroll(){
+  const pane = document.getElementById('settingsContentPane');
+  if (!pane || pane.dataset.dragScrollBound === '1') return;
+  pane.dataset.dragScrollBound = '1';
+
+  const interactiveSelector = 'input, select, textarea, button, a, label, [contenteditable="true"], [draggable="true"], .btn';
+
+  pane.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target?.closest?.(interactiveSelector)) return;
+
+    settingsPaneDragState = {
+      startY: e.clientY,
+      startScrollTop: pane.scrollTop,
+      moved: false,
+    };
+    pane.classList.add('dragging');
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!settingsPaneDragState) return;
+    const deltaY = e.clientY - settingsPaneDragState.startY;
+    if (Math.abs(deltaY) > 2) settingsPaneDragState.moved = true;
+    pane.scrollTop = settingsPaneDragState.startScrollTop - deltaY;
+    e.preventDefault();
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!settingsPaneDragState) return;
+    settingsPaneDragState = null;
+    pane.classList.remove('dragging');
+  });
+
+  pane.addEventListener('mouseleave', () => {
+    if (!settingsPaneDragState) pane.classList.remove('dragging');
+  });
+}
+
+function updatePatchNotesOverflowAffordance(){
+  const list = document.getElementById('changeLogList');
+  if (!list) return;
+  const hasOverflow = list.scrollHeight - list.clientHeight > 4;
+  const hasTop = list.scrollTop > 2;
+  const hasBottom = list.scrollTop + list.clientHeight < list.scrollHeight - 2;
+
+  list.classList.toggle('has-overflow-top', !!hasOverflow && hasTop);
+  list.classList.toggle('has-overflow-bottom', !!hasOverflow && hasBottom);
+}
+
 function renderChangeLog(){
   const section = document.getElementById('changeLogSection');
   const toggleBtn = document.getElementById('toggleChangeLogBtn');
@@ -1300,11 +1389,15 @@ function renderChangeLog(){
   section.style.display = changeLogVisible ? 'block' : 'none';
   toggleBtn.textContent = changeLogVisible ? 'Hide Patch Notes' : 'Show Patch Notes';
 
-  if (!changeLogVisible) return;
+  if (!changeLogVisible) {
+    updatePatchNotesOverflowAffordance();
+    return;
+  }
 
   if (!state.changelog.length) {
     el.innerHTML = '<div class="note-meta">No patch notes yet.</div>';
     if (moreBtn) moreBtn.style.display = 'none';
+    updatePatchNotesOverflowAffordance();
     return;
   }
 
@@ -1316,6 +1409,7 @@ function renderChangeLog(){
   if (moreBtn) {
     moreBtn.style.display = state.changelog.length > changeLogLimit ? 'inline-block' : 'none';
   }
+  updatePatchNotesOverflowAffordance();
 }
 
 window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
@@ -6918,6 +7012,7 @@ const settingsPanel = document.getElementById('settingsPanel');
 document.getElementById('openSettingsBtn')?.addEventListener('click', ()=> {
   settingsPanel?.classList.add('open');
   settingsPanel?.setAttribute('aria-hidden','false');
+  setActiveSettingsSection(activeSettingsSection, { preserveScroll: true });
   refreshStateSafetyBackups(true);
 });
 document.getElementById('closeSettingsBtn')?.addEventListener('click', ()=> {
@@ -7125,6 +7220,9 @@ document.getElementById('addChangeLogBtn')?.addEventListener('click', () => {
   changeLogVisible = true;
   renderChangeLog();
 });
+
+document.getElementById('changeLogList')?.addEventListener('scroll', updatePatchNotesOverflowAffordance);
+window.addEventListener('resize', updatePatchNotesOverflowAffordance);
 
 document.getElementById('addNoteBtn').onclick = ()=> {
   state.notes.unshift({
@@ -7533,6 +7631,8 @@ if (!state.changelog.some((c) => c.message === speedTestPatch)) {
 }
 
 save('startup_patch_seed', { pushShared: false });
+setupSettingsSectionNav();
+setupSettingsPaneDragScroll();
 renderAll();
 startSystemMonitorPolling();
 startSpeedTestAutoRun();

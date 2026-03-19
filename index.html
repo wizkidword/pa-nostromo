@@ -35,86 +35,108 @@
       <h2>Settings</h2>
       <button id="closeSettingsBtn" class="btn ghost">Close</button>
     </div>
-    <div class="settings-body">
-      <label>Theme
-        <select id="settingTheme">
-          <option value="dark">Dark</option>
-          <option value="light">Light</option>
-          <option value="system">System</option>
-        </select>
-      </label>
-      <label class="row-between-wrap gap10">
-        <span>Fullscreen mode</span>
-        <input id="settingFullscreen" type="checkbox" class="w-auto" />
-      </label>
-      <label>Weather refresh interval
-        <select id="settingWeatherInterval">
-          <option value="5">Every 5 minutes</option>
-          <option value="15">Every 15 minutes</option>
-          <option value="30">Every 30 minutes</option>
-        </select>
-      </label>
-      <label>Default new task column
-        <select id="settingDefaultTaskColumn">
-          <option value="inbox">Inbox</option>
-          <option value="in_progress">In Progress</option>
-          <option value="waiting_blocked">Debugging</option>
-          <option value="ready_to_publish">Ready to Publish</option>
-          <option value="done">Done</option>
-        </select>
-      </label>
 
-      <hr class="settings-divider" />
-      <h3 class="m0">RSS Feeds</h3>
-      <label>RSS auto-refresh interval
-        <select id="settingRssInterval">
-          <option value="15">Every 15 minutes</option>
-          <option value="30">Every 30 minutes</option>
-          <option value="60">Every 60 minutes</option>
-        </select>
-      </label>
-      <div class="row-wrap">
-        <input id="rssFeedUrlInput" placeholder="https://example.com/feed.xml" />
-        <input id="rssFeedTagInput" placeholder="Tag (optional)" class="w-130" />
-        <button id="addRssFeedBtn" class="btn">+ Add Feed</button>
-      </div>
-      <div id="settingsRssFeedsList" class="change-log-list"></div>
+    <div class="settings-shell">
+      <nav class="settings-nav" aria-label="Settings sections">
+        <button type="button" class="settings-nav-btn is-active" data-settings-section-btn="general">General</button>
+        <button type="button" class="settings-nav-btn" data-settings-section-btn="pods-layout">Pods &amp; Layout</button>
+        <button type="button" class="settings-nav-btn" data-settings-section-btn="data-feeds">Data &amp; Feeds</button>
+        <button type="button" class="settings-nav-btn" data-settings-section-btn="shortcuts">Shortcuts</button>
+        <button type="button" class="settings-nav-btn" data-settings-section-btn="system-safety">System &amp; Safety</button>
+        <button type="button" class="settings-nav-btn" data-settings-section-btn="patch-notes">Patch Notes</button>
+      </nav>
 
-      <hr class="settings-divider" />
-      <h3 class="m0">State Safety</h3>
-      <p class="note-meta">Export a full backup anytime. Import requires explicit confirmation and may overwrite newer shared state.</p>
-      <div class="row-wrap">
-        <button id="exportStateBtn" class="btn">Export State JSON</button>
-        <button id="importStateBtn" class="btn ghost">Import State JSON</button>
-        <button id="refreshBackupsBtn" class="btn ghost">Refresh Backups</button>
-        <input id="importStateFileInput" type="file" accept="application/json,.json" hidden />
-      </div>
-      <div id="stateSafetyUndoBar" class="state-safety-undo" hidden>
-        <span id="stateSafetyUndoText" class="note-meta"></span>
-        <button id="stateSafetyUndoBtn" class="btn ghost" type="button">Undo</button>
-      </div>
-      <div id="stateSafetyBackupsList" class="change-log-list"></div>
+      <div id="settingsContentPane" class="settings-content-pane scroll-box" aria-label="Settings content">
+        <div class="settings-body">
+          <section class="settings-section is-active" data-settings-section="general">
+            <h3 class="m0">General</h3>
+            <label>Theme
+              <select id="settingTheme">
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+                <option value="system">System</option>
+              </select>
+            </label>
+            <label class="row-between-wrap gap10">
+              <span>Fullscreen mode</span>
+              <input id="settingFullscreen" type="checkbox" class="w-auto" />
+            </label>
+            <label>Weather refresh interval
+              <select id="settingWeatherInterval">
+                <option value="5">Every 5 minutes</option>
+                <option value="15">Every 15 minutes</option>
+                <option value="30">Every 30 minutes</option>
+              </select>
+            </label>
+            <label>Default new task column
+              <select id="settingDefaultTaskColumn">
+                <option value="inbox">Inbox</option>
+                <option value="in_progress">In Progress</option>
+                <option value="waiting_blocked">Debugging</option>
+                <option value="ready_to_publish">Ready to Publish</option>
+                <option value="done">Done</option>
+              </select>
+            </label>
+          </section>
 
-      <hr class="settings-divider" />
-      <h3 class="m0">Shortcuts</h3>
-      <button id="addShortcutBtn" class="btn settings-toggle-start">+ New Shortcut</button>
-      <div id="settingsShortcutsList" class="change-log-list"></div>
+          <section class="settings-section" data-settings-section="pods-layout" hidden>
+            <h3 class="m0">Pods &amp; Layout</h3>
+            <p class="note-meta">Show/hide utility pods, use arrows for row-local moves, and drag pods between utility rows.</p>
+            <div id="settingsPodVisibilityList" class="change-log-list"></div>
+          </section>
 
-      <hr class="settings-divider" />
-      <h3 class="m0">Utility Pods</h3>
-      <p class="note-meta">Show/hide utility pods, use arrows for row-local moves, and drag pods between utility rows.</p>
-      <div id="settingsPodVisibilityList" class="change-log-list"></div>
+          <section class="settings-section" data-settings-section="data-feeds" hidden>
+            <h3 class="m0">Data &amp; Feeds</h3>
+            <label>RSS auto-refresh interval
+              <select id="settingRssInterval">
+                <option value="15">Every 15 minutes</option>
+                <option value="30">Every 30 minutes</option>
+                <option value="60">Every 60 minutes</option>
+              </select>
+            </label>
+            <div class="row-wrap">
+              <input id="rssFeedUrlInput" placeholder="https://example.com/feed.xml" />
+              <input id="rssFeedTagInput" placeholder="Tag (optional)" class="w-130" />
+              <button id="addRssFeedBtn" class="btn">+ Add Feed</button>
+            </div>
+            <div id="settingsRssFeedsList" class="change-log-list"></div>
+          </section>
 
-      <hr class="settings-divider" />
-      <button id="toggleChangeLogBtn" class="btn ghost settings-toggle-start">Show Patch Notes</button>
-      <div id="changeLogSection" style="display:none">
-        <h3 class="m0">Change Log (Patch Notes)</h3>
-        <label>Add manual note
-          <input id="changeLogInput" placeholder="e.g. Added changelog to settings panel" />
-        </label>
-        <button id="addChangeLogBtn" class="btn">+ Add Patch Note</button>
-        <div id="changeLogList" class="change-log-list"></div>
-        <button id="changeLogLoadMoreBtn" class="btn ghost changelog-loadmore">Load older</button>
+          <section class="settings-section" data-settings-section="shortcuts" hidden>
+            <h3 class="m0">Shortcuts</h3>
+            <button id="addShortcutBtn" class="btn settings-toggle-start">+ New Shortcut</button>
+            <div id="settingsShortcutsList" class="change-log-list"></div>
+          </section>
+
+          <section class="settings-section" data-settings-section="system-safety" hidden>
+            <h3 class="m0">System &amp; Safety</h3>
+            <p class="note-meta">Export a full backup anytime. Import requires explicit confirmation and may overwrite newer shared state.</p>
+            <div class="row-wrap">
+              <button id="exportStateBtn" class="btn">Export State JSON</button>
+              <button id="importStateBtn" class="btn ghost">Import State JSON</button>
+              <button id="refreshBackupsBtn" class="btn ghost">Refresh Backups</button>
+              <input id="importStateFileInput" type="file" accept="application/json,.json" hidden />
+            </div>
+            <div id="stateSafetyUndoBar" class="state-safety-undo" hidden>
+              <span id="stateSafetyUndoText" class="note-meta"></span>
+              <button id="stateSafetyUndoBtn" class="btn ghost" type="button">Undo</button>
+            </div>
+            <div id="stateSafetyBackupsList" class="change-log-list"></div>
+          </section>
+
+          <section class="settings-section" data-settings-section="patch-notes" hidden>
+            <h3 class="m0">Patch Notes</h3>
+            <button id="toggleChangeLogBtn" class="btn ghost settings-toggle-start">Show Patch Notes</button>
+            <div id="changeLogSection" class="patch-notes-panel" style="display:none">
+              <label>Add manual note
+                <input id="changeLogInput" placeholder="e.g. Added changelog to settings panel" />
+              </label>
+              <button id="addChangeLogBtn" class="btn">+ Add Patch Note</button>
+              <div id="changeLogList" class="change-log-list patch-notes-scroll"></div>
+              <button id="changeLogLoadMoreBtn" class="btn ghost changelog-loadmore">Load older</button>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   </aside>
