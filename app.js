@@ -36,7 +36,7 @@ const DEFAULT_SETTINGS = {
 const DEFAULT_UTILITY_LAYOUT_ROWS = [
   ['shortcuts'],
   ['date-time', 'calendar', 'gas-prices'],
-  ['nba-scores', 'crypto-tracker', 'rss-feed', 'everyday-calculator', 'system-resource-monitor'],
+  ['nba-scores', 'crypto-tracker', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor'],
   ['camera-feed', 'live-streams'],
   ['voice-note', 'voice-to-rowan', 'music-player'],
 ];
@@ -164,6 +164,40 @@ function normalizeSystemMonitorState(input){
   };
 }
 
+function normalizeSpeedTestState(input){
+  const rawHistory = Array.isArray(input?.history) ? input.history : [];
+  const history = rawHistory
+    .map((entry) => ({
+      id: String(entry?.id || id()),
+      ts: String(entry?.ts || now()),
+      pingMs: Number.isFinite(Number(entry?.pingMs)) ? Math.max(0, Number(entry.pingMs)) : null,
+      downloadMbps: Number.isFinite(Number(entry?.downloadMbps)) ? Math.max(0, Number(entry.downloadMbps)) : null,
+      uploadMbps: Number.isFinite(Number(entry?.uploadMbps)) ? Math.max(0, Number(entry.uploadMbps)) : null,
+      source: ['backend-speedtest', 'browser-estimate'].includes(entry?.source) ? entry.source : 'browser-estimate',
+      backendTool: String(entry?.backendTool || '').slice(0, 40),
+      note: String(entry?.note || '').slice(0, 220),
+    }))
+    .sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')))
+    .slice(0, 10);
+
+  const autoIntervalMin = Number(input?.autoIntervalMin);
+  const thresholdPing = Number(input?.warningThresholds?.pingMs);
+  const thresholdDown = Number(input?.warningThresholds?.downloadMbps);
+  const thresholdUp = Number(input?.warningThresholds?.uploadMbps);
+
+  return {
+    autoIntervalMin: [0, 15, 30, 60].includes(autoIntervalMin) ? autoIntervalMin : 0,
+    warningThresholds: {
+      pingMs: Number.isFinite(thresholdPing) ? Math.min(2000, Math.max(1, thresholdPing)) : 100,
+      downloadMbps: Number.isFinite(thresholdDown) ? Math.min(10000, Math.max(1, thresholdDown)) : 100,
+      uploadMbps: Number.isFinite(thresholdUp) ? Math.min(5000, Math.max(1, thresholdUp)) : 20,
+    },
+    history,
+    lastError: String(input?.lastError || '').slice(0, 220),
+    running: !!input?.running,
+  };
+}
+
 const REQUIRED_PROJECTS = [
   { name: 'Blast From The Ads', summary: 'Vintage ad content pipeline to social + WordPress', status: 'active', appLink: '', repoLink: '' },
   { name: 'Radio Map (Leaflet)', summary: 'Interactive radio station map web app', status: 'active', appLink: 'http://localhost:3399', repoLink: '' },
@@ -275,6 +309,17 @@ const seed = {
     allowlist: ['node', 'chrome', 'openclaw', 'code', 'python'],
     settingsOpen: false,
   },
+  speedTest: {
+    autoIntervalMin: 0,
+    warningThresholds: {
+      pingMs: 100,
+      downloadMbps: 100,
+      uploadMbps: 20,
+    },
+    history: [],
+    lastError: '',
+    running: false,
+  },
   changelog: [],
   layout: createDefaultUtilityLayoutState(),
   shortcuts: [
@@ -319,8 +364,11 @@ const pollingFailureState = {
   'rss-feed': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'crypto-tracker': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'system-resource-monitor': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
+  'speed-test': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
 };
 let systemMonitorTimer = null;
+let speedTestAutoTimer = null;
+let speedTestInFlight = false;
 let systemMonitorLastPayload = null;
 let systemMonitorLastUpdatedAt = '';
 let systemMonitorLastError = '';
@@ -688,7 +736,6 @@ function load(){
       createdAt: String(p?.createdAt || now()),
     })).filter((p) => p.name && p.value)
     : [];
-
   state.rss = {
     feeds: [],
     items: [],
@@ -728,6 +775,7 @@ function load(){
   state.rss.lastError = String(state.rss.lastError || '').slice(0, 300);
   state.gasPrices = normalizeGasPricesState(state.gasPrices); state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
   state.systemMonitor = normalizeSystemMonitorState(state.systemMonitor);
+  state.speedTest = normalizeSpeedTestState(state.speedTest); state.speedTest.running = false;
   state.changelog = Array.isArray(state.changelog) ? state.changelog : [];
 
   ensureChangelogPatch(state, 'Patch: Crypto Tracker now supports portfolio holdings (qty + avg buy) with unrealized P/L summary.');
@@ -5677,6 +5725,207 @@ function renderSystemResourceMonitorPod(){
   });
 }
 
+function getLatestSpeedTestResult(){
+  return Array.isArray(state.speedTest?.history) && state.speedTest.history.length ? state.speedTest.history[0] : null;
+}
+
+function speedTestHasWarning(result){
+  if (!result) return false;
+  const thresholds = state.speedTest?.warningThresholds || {};
+  const pingWarn = Number.isFinite(result.pingMs) && Number.isFinite(Number(thresholds.pingMs))
+    ? result.pingMs > Number(thresholds.pingMs)
+    : false;
+  const downWarn = Number.isFinite(result.downloadMbps) && Number.isFinite(Number(thresholds.downloadMbps))
+    ? result.downloadMbps < Number(thresholds.downloadMbps)
+    : false;
+  const upWarn = Number.isFinite(result.uploadMbps) && Number.isFinite(Number(thresholds.uploadMbps))
+    ? result.uploadMbps < Number(thresholds.uploadMbps)
+    : false;
+  return pingWarn || downWarn || upWarn;
+}
+
+async function estimateBrowserSpeedFallback(note = ''){
+  const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  const downlink = Number(conn?.downlink);
+  const rtt = Number(conn?.rtt);
+  const pingMs = Number.isFinite(rtt) && rtt > 0 ? Math.round(rtt) : null;
+  const downloadMbps = Number.isFinite(downlink) && downlink > 0 ? Number(downlink.toFixed(1)) : null;
+  const uploadMbps = Number.isFinite(downlink) && downlink > 0 ? Number(Math.max(0.5, downlink * 0.35).toFixed(1)) : null;
+
+  return {
+    id: id(),
+    ts: now(),
+    pingMs,
+    downloadMbps,
+    uploadMbps,
+    source: 'browser-estimate',
+    backendTool: '',
+    note: note || 'Fallback estimate based on browser Network Information API.',
+  };
+}
+
+function stopSpeedTestAutoRun(){
+  if (speedTestAutoTimer) {
+    clearInterval(speedTestAutoTimer);
+    speedTestAutoTimer = null;
+  }
+}
+
+function startSpeedTestAutoRun(){
+  stopSpeedTestAutoRun();
+  const intervalMin = Number(state.speedTest?.autoIntervalMin || 0);
+  if (!intervalMin) return;
+  if (state.layout?.visibility?.['speed-test'] === false) return;
+  if (document.hidden) return;
+  speedTestAutoTimer = setInterval(() => {
+    if (document.hidden) return;
+    if (state.layout?.visibility?.['speed-test'] === false) return;
+    runSpeedTest({ reason: 'auto_interval' });
+  }, intervalMin * 60 * 1000);
+}
+
+async function runSpeedTest({ reason = 'manual' } = {}){
+  if (speedTestInFlight) return;
+  speedTestInFlight = true;
+  state.speedTest.running = true;
+  renderSpeedTestPod();
+
+  try {
+    const res = await fetch('/api/speed-test', { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const payload = await res.json();
+    let entry;
+
+    if (payload?.ok && payload?.mode === 'backend') {
+      entry = {
+        id: id(),
+        ts: payload.sampledAt || now(),
+        pingMs: Number.isFinite(Number(payload.metrics?.pingMs)) ? Number(payload.metrics.pingMs) : null,
+        downloadMbps: Number.isFinite(Number(payload.metrics?.downloadMbps)) ? Number(payload.metrics.downloadMbps) : null,
+        uploadMbps: Number.isFinite(Number(payload.metrics?.uploadMbps)) ? Number(payload.metrics.uploadMbps) : null,
+        source: 'backend-speedtest',
+        backendTool: String(payload.backendTool || ''),
+        note: '',
+      };
+      clearPollingBackoff('speed-test');
+    } else {
+      entry = await estimateBrowserSpeedFallback(String(payload?.message || payload?.reason || 'Backend speed test unavailable.'));
+      const backoffMs = registerPollingFailure('speed-test', new Error(payload?.reason || 'backend_unavailable'), 'Backend unavailable; using browser estimate.');
+      setPodStatusSignal('speed-test', 'stale', `Fallback (${Math.ceil(backoffMs / 1000)}s)`);
+    }
+
+    state.speedTest.history = [entry, ...(state.speedTest.history || [])].slice(0, 10);
+    state.speedTest.lastError = '';
+
+    if (speedTestHasWarning(entry)) {
+      setPodStatusSignal('speed-test', 'degraded', 'Below threshold');
+    } else {
+      setPodStatusSignal('speed-test', 'fresh', entry.source === 'backend-speedtest' ? 'Backend' : 'Estimate');
+    }
+
+    save(`speed_test_${reason}`);
+  } catch (error) {
+    const reasonText = String(error?.message || error || 'Speed test failed').slice(0, 180);
+    state.speedTest.lastError = reasonText;
+    const backoffMs = registerPollingFailure('speed-test', error, reasonText);
+    setPodStatusSignal('speed-test', 'error', `Retry in ${Math.ceil(backoffMs / 1000)}s`);
+    save('speed_test_failed');
+  } finally {
+    state.speedTest.running = false;
+    speedTestInFlight = false;
+    renderSpeedTestPod();
+  }
+}
+
+function formatSpeedMetric(value, unit){
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return '—';
+  return `${n.toFixed(1)} ${unit}`;
+}
+
+function renderSpeedTestPod(){
+  const el = document.getElementById('speedTestWidget');
+  const meta = document.getElementById('speedTestMeta');
+  if (!el) return;
+
+  const latest = getLatestSpeedTestResult();
+  const warning = speedTestHasWarning(latest);
+  const history = Array.isArray(state.speedTest?.history) ? state.speedTest.history.slice(0, 10) : [];
+  const thresholds = state.speedTest?.warningThresholds || {};
+
+  el.innerHTML = `
+    <div class="speed-test-shell" data-pod="speed-test">
+      <div class="row-between-wrap">
+        <div class="speed-test-metrics">
+          <div class="speed-metric"><span>Ping</span><strong>${formatSpeedMetric(latest?.pingMs, 'ms')}</strong></div>
+          <div class="speed-metric"><span>Down</span><strong>${formatSpeedMetric(latest?.downloadMbps, 'Mbps')}</strong></div>
+          <div class="speed-metric"><span>Up</span><strong>${formatSpeedMetric(latest?.uploadMbps, 'Mbps')}</strong></div>
+        </div>
+      </div>
+
+      ${warning ? '<div class="speed-test-warning">⚠️ Connection below threshold.</div>' : ''}
+
+      <div class="row-wrap">
+        <button type="button" class="btn ghost" id="speedTestRunBtn" ${state.speedTest?.running ? 'disabled' : ''}>${state.speedTest?.running ? 'Running…' : 'Run now'}</button>
+        <label class="camera-feed-inline-label">Auto
+          <select id="speedTestIntervalSelect" class="w-auto">
+            <option value="0" ${Number(state.speedTest?.autoIntervalMin || 0) === 0 ? 'selected' : ''}>Off</option>
+            <option value="15" ${Number(state.speedTest?.autoIntervalMin || 0) === 15 ? 'selected' : ''}>15m</option>
+            <option value="30" ${Number(state.speedTest?.autoIntervalMin || 0) === 30 ? 'selected' : ''}>30m</option>
+            <option value="60" ${Number(state.speedTest?.autoIntervalMin || 0) === 60 ? 'selected' : ''}>1h</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="speed-threshold-grid">
+        <label class="camera-feed-inline-label">Max Ping <input id="speedWarnPing" type="number" min="1" max="2000" value="${Number(thresholds.pingMs || 100)}" class="w-110" /></label>
+        <label class="camera-feed-inline-label">Min Down <input id="speedWarnDown" type="number" min="1" max="10000" value="${Number(thresholds.downloadMbps || 100)}" class="w-110" /></label>
+        <label class="camera-feed-inline-label">Min Up <input id="speedWarnUp" type="number" min="1" max="5000" value="${Number(thresholds.uploadMbps || 20)}" class="w-110" /></label>
+      </div>
+
+      <div class="speed-history-list">
+        ${(history.length ? history : [{ id: 'empty', ts: '', source: '', pingMs: null, downloadMbps: null, uploadMbps: null, note: 'No runs yet.' }]).map((run) => `
+          <div class="speed-history-item">
+            <div><strong>${run.ts ? new Date(run.ts).toLocaleTimeString() : '—'}</strong> · ${escapeHtml(run.source || 'n/a')} ${run.backendTool ? `(${escapeHtml(run.backendTool)})` : ''}</div>
+            <div class="note-meta">P ${formatSpeedMetric(run.pingMs, 'ms')} · D ${formatSpeedMetric(run.downloadMbps, 'Mbps')} · U ${formatSpeedMetric(run.uploadMbps, 'Mbps')}</div>
+            ${run.note ? `<div class="note-meta">${escapeHtml(run.note)}</div>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+
+  if (meta) {
+    const latestText = latest?.ts ? new Date(latest.ts).toLocaleString() : 'Never';
+    const sourceText = latest?.source ? ` · ${latest.source}` : '';
+    meta.textContent = state.speedTest?.lastError
+      ? `Last error: ${state.speedTest.lastError}`
+      : `Last run: ${latestText}${sourceText}`;
+  }
+
+  document.getElementById('speedTestRunBtn')?.addEventListener('click', () => runSpeedTest({ reason: 'manual' }));
+  document.getElementById('speedTestIntervalSelect')?.addEventListener('change', (e) => {
+    state.speedTest.autoIntervalMin = [0, 15, 30, 60].includes(Number(e.target.value)) ? Number(e.target.value) : 0;
+    save('speed_test_interval_changed');
+    startSpeedTestAutoRun();
+  });
+
+  ['speedWarnPing', 'speedWarnDown', 'speedWarnUp'].forEach((idKey) => {
+    document.getElementById(idKey)?.addEventListener('change', () => {
+      const ping = Number(document.getElementById('speedWarnPing')?.value || 100);
+      const down = Number(document.getElementById('speedWarnDown')?.value || 100);
+      const up = Number(document.getElementById('speedWarnUp')?.value || 20);
+      state.speedTest.warningThresholds = {
+        pingMs: Math.min(2000, Math.max(1, ping)),
+        downloadMbps: Math.min(10000, Math.max(1, down)),
+        uploadMbps: Math.min(5000, Math.max(1, up)),
+      };
+      save('speed_test_thresholds_updated');
+      renderSpeedTestPod();
+    });
+  });
+}
+
 function getPodRegistry(){
   return window.MissionControlModules?.podRegistry || null;
 }
@@ -5743,20 +5992,23 @@ function getUtilityPodLegacyRenderer(podId){
   if (podId === 'rss-feed') return () => renderRss();
   if (podId === 'everyday-calculator') return () => renderEverydayCalculatorPod();
   if (podId === 'system-resource-monitor') return () => renderSystemResourceMonitorPod();
+  if (podId === 'speed-test') return () => renderSpeedTestPod();
   return null;
 }
 
 function syncUtilityPodLifecycle(){
-  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'rss-feed', 'everyday-calculator', 'system-resource-monitor'];
+  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor'];
   managed.forEach((podId) => {
     const visible = state.layout?.visibility?.[podId] !== false;
     const legacyRender = getUtilityPodLegacyRenderer(podId);
     if (visible) {
       runPodLifecycleAction('mount', podId, legacyRender, { visible: true, trigger: 'layout_sync' });
       if (podId === 'system-resource-monitor') startSystemMonitorPolling();
+      if (podId === 'speed-test') startSpeedTestAutoRun();
     } else {
       runPodLifecycleAction('destroy', podId, legacyRender, { visible: false, trigger: 'layout_sync' });
       if (podId === 'system-resource-monitor') stopSystemMonitorPolling();
+      if (podId === 'speed-test') stopSpeedTestAutoRun();
     }
   });
 }
@@ -5933,6 +6185,7 @@ function renderAll(){
   renderGasPricesPod();
   renderEverydayCalculatorPod();
   renderSystemResourceMonitorPod();
+  renderSpeedTestPod();
   renderCalendarRemindersPanel();
   renderTodayReminders();
   renderSettings();
@@ -7274,9 +7527,15 @@ if (!state.changelog.some((c) => c.message === gasPricesPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: gasPricesPatch });
 }
 
+const speedTestPatch = 'New utility pod: Speed Test added with backend-preferred checks, browser estimate fallback, auto-run intervals, and persisted last-10 history + thresholds.';
+if (!state.changelog.some((c) => c.message === speedTestPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: speedTestPatch });
+}
+
 save('startup_patch_seed', { pushShared: false });
 renderAll();
 startSystemMonitorPolling();
+startSpeedTestAutoRun();
 fetchSystemMonitorSnapshot();
 setInterval(renderDateTime, 1000);
 document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => renderWeatherPod({ manual: true }));
@@ -7345,6 +7604,15 @@ window.addEventListener('storage', (event) => {
 
 window.addEventListener('beforeunload', () => {
   stopSystemMonitorPolling();
+  stopSpeedTestAutoRun();
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopSpeedTestAutoRun();
+  } else {
+    startSpeedTestAutoRun();
+  }
 });
 
 try {

@@ -81,6 +81,8 @@ const GAS_PROXY_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.GAS_PRO
 const SYS_MONITOR_ALLOW_REMOTE = parseBool(process.env.SYS_MONITOR_ALLOW_REMOTE);
 const SYS_MONITOR_TIMEOUT_MS = Math.max(1000, parsePositiveInt(process.env.SYS_MONITOR_TIMEOUT_MS, 1500));
 const SYS_MONITOR_MAX_PROCESSES = Math.max(10, parsePositiveInt(process.env.SYS_MONITOR_MAX_PROCESSES, 120));
+const SPEED_TEST_ALLOW_REMOTE = parseBool(process.env.SPEED_TEST_ALLOW_REMOTE);
+const SPEED_TEST_TIMEOUT_MS = Math.max(3000, parsePositiveInt(process.env.SPEED_TEST_TIMEOUT_MS, 30000));
 
 function parseAllowlistInput(value) {
   return [...new Set(String(value || '')
@@ -1145,6 +1147,134 @@ async function handleApiCryptoProxy(req, res) {
   }
 }
 
+function execFileSafe(command, args, options = {}) {
+  return new Promise((resolve) => {
+    execFile(command, args, options, (error, stdout, stderr) => {
+      resolve({
+        ok: !error,
+        error,
+        stdout: String(stdout || ''),
+        stderr: String(stderr || ''),
+      });
+    });
+  });
+}
+
+function round1(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Number(n.toFixed(1)) : null;
+}
+
+function normalizeBackendSpeedResult(tool, json) {
+  if (!json || typeof json !== 'object') return null;
+
+  if (tool === 'speedtest') {
+    const pingMs = round1(json?.ping?.latency);
+    const downloadMbps = round1((Number(json?.download?.bandwidth) * 8) / 1_000_000);
+    const uploadMbps = round1((Number(json?.upload?.bandwidth) * 8) / 1_000_000);
+    if (downloadMbps == null && uploadMbps == null && pingMs == null) return null;
+    return { pingMs, downloadMbps, uploadMbps };
+  }
+
+  if (tool === 'speedtest-cli') {
+    const pingMs = round1(json?.ping);
+    const downloadMbps = round1(Number(json?.download) / 1_000_000);
+    const uploadMbps = round1(Number(json?.upload) / 1_000_000);
+    if (downloadMbps == null && uploadMbps == null && pingMs == null) return null;
+    return { pingMs, downloadMbps, uploadMbps };
+  }
+
+  if (tool === 'fast') {
+    const pingMs = round1(json?.latency ?? json?.ping);
+    const downloadRaw = Number(json?.downloadSpeed ?? json?.download);
+    const uploadRaw = Number(json?.uploadSpeed ?? json?.upload);
+    const unit = String(json?.downloadUnit || json?.unit || 'Mbps').toLowerCase();
+    const mul = unit === 'kbps' ? 0.001 : unit === 'gbps' ? 1000 : 1;
+    const downloadMbps = round1(downloadRaw * mul);
+    const uploadMbps = round1(uploadRaw * mul);
+    if (downloadMbps == null && uploadMbps == null && pingMs == null) return null;
+    return { pingMs, downloadMbps, uploadMbps };
+  }
+
+  return null;
+}
+
+async function runBackendSpeedTest() {
+  const candidates = [
+    { tool: 'speedtest', cmd: 'speedtest', args: ['--accept-license', '--accept-gdpr', '-f', 'json'] },
+    { tool: 'speedtest-cli', cmd: 'speedtest-cli', args: ['--json'] },
+    { tool: 'fast', cmd: 'fast', args: ['--upload', '--json'] },
+  ];
+
+  const checked = [];
+  for (const candidate of candidates) {
+    checked.push(candidate.tool);
+    const result = await execFileSafe(candidate.cmd, candidate.args, {
+      timeout: SPEED_TEST_TIMEOUT_MS,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    if (!result.ok) continue;
+
+    const parsed = parseJsonSafely(result.stdout, `${candidate.tool}_json`);
+    if (!parsed.ok) continue;
+
+    const metrics = normalizeBackendSpeedResult(candidate.tool, parsed.value);
+    if (!metrics) continue;
+
+    return { ok: true, tool: candidate.tool, metrics, checked };
+  }
+
+  return {
+    ok: false,
+    checked,
+    reason: 'backend_tools_unavailable',
+    message: 'No supported backend speed test CLI found (tried speedtest, speedtest-cli, fast).',
+  };
+}
+
+async function handleApiSpeedTest(req, res) {
+  if (req.method !== 'GET') {
+    return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/speed-test.' });
+  }
+
+  if (!SPEED_TEST_ALLOW_REMOTE && !isLocalRequest(req)) {
+    return sendJson(res, 403, {
+      ok: false,
+      error: 'local_only',
+      message: 'Speed test endpoint is local-only by default. Set SPEED_TEST_ALLOW_REMOTE=1 to allow remote requests.',
+    });
+  }
+
+  try {
+    const run = await runBackendSpeedTest();
+    if (!run.ok) {
+      return sendJson(res, 200, {
+        ok: true,
+        mode: 'fallback_required',
+        sampledAt: new Date().toISOString(),
+        reason: run.reason,
+        message: run.message,
+        checkedTools: run.checked,
+      });
+    }
+
+    return sendJson(res, 200, {
+      ok: true,
+      mode: 'backend',
+      sampledAt: new Date().toISOString(),
+      backendTool: run.tool,
+      checkedTools: run.checked,
+      metrics: run.metrics,
+    });
+  } catch (err) {
+    return sendJson(res, 500, {
+      ok: false,
+      error: 'speed_test_failed',
+      message: String(err?.message || err || 'Speed test failed').slice(0, 180),
+    });
+  }
+}
+
 const US_STATE_ALIASES = {
   alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA', colorado: 'CO', connecticut: 'CT', delaware: 'DE',
   florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS',
@@ -1346,6 +1476,7 @@ const server = http.createServer(async (req, res) => {
   if ((req.url || '').startsWith('/api/gas-prices')) return handleApiGasPrices(req, res);
   if ((req.url || '').startsWith('/api/crypto/')) return handleApiCryptoProxy(req, res);
   if ((req.url || '').startsWith('/api/system-resources')) return handleApiSystemResources(req, res);
+  if ((req.url || '').startsWith('/api/speed-test')) return handleApiSpeedTest(req, res);
   return handleStatic(req, res);
 });
 
@@ -1358,6 +1489,7 @@ if (require.main === module) {
     console.log(`Camera snapshot proxy: enabled (${CAMERA_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; allowlist entries: ${CAMERA_PROXY_ALLOWLIST.length})`);
     console.log(`RSS fetch API: enabled (${RSS_FETCH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; max feeds/request: ${RSS_FETCH_MAX_FEEDS})`);
     console.log(`Gas price proxy API: enabled (${GAS_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
+    console.log(`Speed test API: enabled (${SPEED_TEST_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; timeout ${SPEED_TEST_TIMEOUT_MS}ms)`);
   });
 }
 

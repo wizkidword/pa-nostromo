@@ -870,9 +870,64 @@ menu {
 
 .camera-feed-shell,
 .live-streams-shell,
-.system-monitor-shell {
+.system-monitor-shell,
+.speed-test-shell {
   display: grid;
   gap: 8px;
+}
+
+.speed-test-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  width: 100%;
+}
+
+.speed-metric {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: var(--surface-soft);
+}
+
+.speed-metric span {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.speed-metric strong {
+  font-size: 13px;
+}
+
+.speed-threshold-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.speed-history-list {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.speed-history-item {
+  border: 1px dashed var(--border-soft);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: color-mix(in oklab, var(--surface) 86%, transparent);
+}
+
+.speed-test-warning {
+  border: 1px solid color-mix(in srgb, #f1c40f 70%, var(--border-strong));
+  background: color-mix(in srgb, #f1c40f 16%, var(--surface-soft));
+  color: #fde68a;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
 }
 
 .sysmon-row-between {
