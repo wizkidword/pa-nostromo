@@ -135,6 +135,56 @@ Verified from `package.json`:
 - `npm run test:crypto`
 - `npm run test:crypto-proxy`
 
+## Gas Provider Bake-off Harness (RapidAPI)
+
+Quickly compare station-level gas APIs and normalize responses into a common shape.
+
+### Setup
+
+1. Add env vars in `.env` (or exported in shell):
+
+```bash
+RAPIDAPI_KEY=your_rapidapi_key
+GAS_BAKEOFF_PROVIDERS_JSON='[
+  {
+    "name": "Provider 1",
+    "host": "provider-one.p.rapidapi.com",
+    "path": "/stations/search",
+    "method": "GET",
+    "query": { "zip": "{location}" }
+  },
+  {
+    "name": "Provider 2",
+    "host": "provider-two.p.rapidapi.com",
+    "path": "/nearby",
+    "method": "GET",
+    "query": { "location": "{location}" }
+  }
+]'
+```
+
+2. Run (defaults to ZIP `44224` when omitted):
+
+```bash
+node scripts/gas-provider-bakeoff.mjs
+node scripts/gas-provider-bakeoff.mjs --location 44224
+```
+
+### Output
+
+The script prints:
+
+- side-by-side scorecard per provider: coverage count, `% with price`, `% with updatedAt`
+- sample stations per provider
+- normalized preview with fields:
+  - `name`
+  - `address`
+  - `distance`
+  - `regular`, `mid`, `premium`, `diesel`
+  - `updatedAt`
+
+If env vars are missing/invalid, it exits gracefully with setup instructions.
+
 ## Roadmap / Status
 
 **Status:** early alpha, actively iterated.
