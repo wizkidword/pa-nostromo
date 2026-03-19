@@ -1768,6 +1768,7 @@ function formatCalculatorNumber(value){
 function performEverydayCalculatorAction(type, payload = ''){
   state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
   const calc = state.everydayCalculator;
+  let didMutate = false;
 
   if (type === 'digit') {
     const digit = String(payload || '').replace(/[^0-9]/g, '').slice(0, 1);
@@ -1778,12 +1779,15 @@ function performEverydayCalculatorAction(type, payload = ''){
     } else {
       calc.display = calc.display === '0' ? digit : `${calc.display}${digit}`.slice(0, 20);
     }
+    didMutate = true;
   } else if (type === 'decimal') {
     if (calc.waitingForSecondOperand) {
       calc.display = '0.';
       calc.waitingForSecondOperand = false;
+      didMutate = true;
     } else if (!calc.display.includes('.')) {
       calc.display = `${calc.display}.`;
+      didMutate = true;
     }
   } else if (type === 'clear') {
     calc.display = '0';
@@ -1792,6 +1796,7 @@ function performEverydayCalculatorAction(type, payload = ''){
     calc.waitingForSecondOperand = false;
     calc.lastOperator = null;
     calc.lastOperand = null;
+    didMutate = true;
   } else if (type === 'backspace') {
     if (calc.waitingForSecondOperand) {
       calc.display = '0';
@@ -1800,6 +1805,7 @@ function performEverydayCalculatorAction(type, payload = ''){
       calc.display = calc.display.length <= 1 ? '0' : calc.display.slice(0, -1);
       if (calc.display === '-' || calc.display === '-0') calc.display = '0';
     }
+    didMutate = true;
   } else if (type === 'operator') {
     const nextOperator = ['+', '-', '*', '/'].includes(payload) ? payload : null;
     if (!nextOperator) return;
@@ -1820,6 +1826,7 @@ function performEverydayCalculatorAction(type, payload = ''){
     }
     calc.operator = nextOperator;
     calc.waitingForSecondOperand = true;
+    didMutate = true;
   } else if (type === 'equals') {
     const inputValue = Number(calc.display);
     if (calc.operator && Number.isFinite(calc.firstOperand) && Number.isFinite(inputValue)) {
@@ -1836,24 +1843,44 @@ function performEverydayCalculatorAction(type, payload = ''){
       calc.lastOperand = operand;
       calc.operator = null;
       calc.waitingForSecondOperand = true;
+      didMutate = true;
     } else if (calc.lastOperator && Number.isFinite(inputValue) && Number.isFinite(calc.lastOperand)) {
       const nextValue = applyCalculatorOperation(inputValue, Number(calc.lastOperand), calc.lastOperator);
       if (nextValue != null) {
         calc.display = formatCalculatorNumber(nextValue);
         calc.firstOperand = nextValue;
         calc.waitingForSecondOperand = true;
+        didMutate = true;
       }
     }
   } else if (type === 'toggle-tip-tax') {
     calc.tipPanelOpen = !calc.tipPanelOpen;
+    didMutate = true;
   } else if (type === 'tip-percent') {
-    const val = Number(payload);
-    if (Number.isFinite(val)) calc.tipPercent = Math.min(1000, Math.max(0, val));
+    const raw = String(payload ?? '').trim();
+    if (!raw) return;
+    const val = Number(raw);
+    if (Number.isFinite(val)) {
+      const nextVal = Math.min(1000, Math.max(0, val));
+      if (nextVal !== calc.tipPercent) {
+        calc.tipPercent = nextVal;
+        didMutate = true;
+      }
+    }
   } else if (type === 'tax-percent') {
-    const val = Number(payload);
-    if (Number.isFinite(val)) calc.taxPercent = Math.min(1000, Math.max(0, val));
+    const raw = String(payload ?? '').trim();
+    if (!raw) return;
+    const val = Number(raw);
+    if (Number.isFinite(val)) {
+      const nextVal = Math.min(1000, Math.max(0, val));
+      if (nextVal !== calc.taxPercent) {
+        calc.taxPercent = nextVal;
+        didMutate = true;
+      }
+    }
   }
 
+  if (!didMutate) return;
   save('everyday_calculator_updated');
   renderEverydayCalculatorPod();
 }
@@ -1933,7 +1960,7 @@ function renderEverydayCalculatorPod(){
     performEverydayCalculatorAction(action, value);
   };
 
-  root.onchange = (event) => {
+  root.oninput = (event) => {
     const input = getEventClosestTarget(event, '[data-calc-input]');
     if (!input) return;
     const action = String(input.dataset.calcInput || '').trim();
@@ -1941,9 +1968,10 @@ function renderEverydayCalculatorPod(){
   };
 
   root.onkeydown = (event) => {
-    const editableTarget = getEventClosestTarget(event, 'input, textarea, [contenteditable=""], [contenteditable="true"], [data-calc-input]');
-    const calcInputFocused = !!(document.activeElement && typeof document.activeElement.closest === 'function' && document.activeElement.closest('[data-calc-input]'));
-    if (editableTarget || calcInputFocused) return;
+    const isTypingContext = !!getEventClosestTarget(event, 'input, textarea, [contenteditable=""], [contenteditable="true"], [data-calc-input]');
+    const activeElement = document.activeElement;
+    const calcInputFocused = !!(activeElement && typeof activeElement.closest === 'function' && activeElement.closest('[data-calc-input]'));
+    if (isTypingContext || calcInputFocused) return;
 
     const k = event.key;
     if (/^[0-9]$/.test(k)) {
