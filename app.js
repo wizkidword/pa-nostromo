@@ -1862,8 +1862,13 @@ function renderEverydayCalculatorPod(){
   const el = document.getElementById('everydayCalculatorWidget');
   if (!el) return;
 
-  const activeCalcInput = getEventClosestTarget(document.activeElement, '[data-calc-input]');
+  const activeElement = document.activeElement;
+  const activeCalcInput = activeElement && typeof activeElement.closest === 'function'
+    ? activeElement.closest('[data-calc-input]')
+    : null;
   const activeCalcInputName = activeCalcInput ? String(activeCalcInput.dataset.calcInput || '').trim() : '';
+  const activeCalcInputSelectionStart = typeof activeCalcInput?.selectionStart === 'number' ? activeCalcInput.selectionStart : null;
+  const activeCalcInputSelectionEnd = typeof activeCalcInput?.selectionEnd === 'number' ? activeCalcInput.selectionEnd : null;
 
   state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
   const calc = state.everydayCalculator;
@@ -1936,9 +1941,9 @@ function renderEverydayCalculatorPod(){
   };
 
   root.onkeydown = (event) => {
-    const target = event.target;
-    const isEditable = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
-    if (isEditable) return;
+    const editableTarget = getEventClosestTarget(event, 'input, textarea, [contenteditable=""], [contenteditable="true"], [data-calc-input]');
+    const calcInputFocused = !!(document.activeElement && typeof document.activeElement.closest === 'function' && document.activeElement.closest('[data-calc-input]'));
+    if (editableTarget || calcInputFocused) return;
 
     const k = event.key;
     if (/^[0-9]$/.test(k)) {
@@ -1974,7 +1979,19 @@ function renderEverydayCalculatorPod(){
 
   if (activeCalcInputName) {
     const refreshedInput = root.querySelector(`[data-calc-input="${activeCalcInputName}"]`);
-    if (refreshedInput) refreshedInput.focus();
+    if (refreshedInput) {
+      refreshedInput.focus({ preventScroll: true });
+      const canRestoreSelection = typeof refreshedInput.setSelectionRange === 'function'
+        && typeof activeCalcInputSelectionStart === 'number'
+        && typeof activeCalcInputSelectionEnd === 'number';
+      if (canRestoreSelection) {
+        try {
+          refreshedInput.setSelectionRange(activeCalcInputSelectionStart, activeCalcInputSelectionEnd);
+        } catch (_) {
+          // Number inputs may not support selection restoration in all browsers.
+        }
+      }
+    }
   }
 
   setPodStatusSignal('everyday-calculator', 'fresh', 'ready');
