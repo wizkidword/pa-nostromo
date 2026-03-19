@@ -1765,7 +1765,7 @@ function formatCalculatorNumber(value){
   return String(fixed);
 }
 
-function performEverydayCalculatorAction(type, payload = ''){
+function performEverydayCalculatorAction(type, payload = '', options = {}){
   state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
   const calc = state.everydayCalculator;
   let didMutate = false;
@@ -1882,7 +1882,35 @@ function performEverydayCalculatorAction(type, payload = ''){
 
   if (!didMutate) return;
   save('everyday_calculator_updated');
-  renderEverydayCalculatorPod();
+  if (!options.skipRender) renderEverydayCalculatorPod();
+}
+
+function updateEverydayCalculatorSummary(root, tipPercentRaw, taxPercentRaw){
+  if (!root) return;
+  state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
+  const calc = state.everydayCalculator;
+
+  const subtotal = Number(calc.display);
+  const safeSubtotal = Number.isFinite(subtotal) ? subtotal : 0;
+
+  const tipParsed = Number(String(tipPercentRaw ?? '').trim());
+  const taxParsed = Number(String(taxPercentRaw ?? '').trim());
+  const tipPercent = Number.isFinite(tipParsed) ? Math.min(1000, Math.max(0, tipParsed)) : Number(calc.tipPercent || 0);
+  const taxPercent = Number.isFinite(taxParsed) ? Math.min(1000, Math.max(0, taxParsed)) : Number(calc.taxPercent || 0);
+
+  const tipAmount = safeSubtotal * (tipPercent / 100);
+  const taxAmount = safeSubtotal * (taxPercent / 100);
+  const finalTotal = safeSubtotal + tipAmount + taxAmount;
+
+  const subtotalEl = root.querySelector('[data-calc-summary="subtotal"]');
+  const taxEl = root.querySelector('[data-calc-summary="tax"]');
+  const tipEl = root.querySelector('[data-calc-summary="tip"]');
+  const finalEl = root.querySelector('[data-calc-summary="final"]');
+
+  if (subtotalEl) subtotalEl.textContent = `$${safeSubtotal.toFixed(2)}`;
+  if (taxEl) taxEl.textContent = `$${taxAmount.toFixed(2)}`;
+  if (tipEl) tipEl.textContent = `$${tipAmount.toFixed(2)}`;
+  if (finalEl) finalEl.textContent = `$${finalTotal.toFixed(2)}`;
 }
 
 function renderEverydayCalculatorPod(){
@@ -1940,10 +1968,10 @@ function renderEverydayCalculatorPod(){
         </div>
         <div class="note-meta mt6">Tip is applied to subtotal only (before tax).</div>
         <div class="everyday-calc-summary mt8">
-          <div><span>Subtotal</span><strong>$${safeSubtotal.toFixed(2)}</strong></div>
-          <div><span>Tax</span><strong>$${taxAmount.toFixed(2)}</strong></div>
-          <div><span>Tip</span><strong>$${tipAmount.toFixed(2)}</strong></div>
-          <div class="is-total"><span>Final Total</span><strong>$${finalTotal.toFixed(2)}</strong></div>
+          <div><span>Subtotal</span><strong data-calc-summary="subtotal">$${safeSubtotal.toFixed(2)}</strong></div>
+          <div><span>Tax</span><strong data-calc-summary="tax">$${taxAmount.toFixed(2)}</strong></div>
+          <div><span>Tip</span><strong data-calc-summary="tip">$${tipAmount.toFixed(2)}</strong></div>
+          <div class="is-total"><span>Final Total</span><strong data-calc-summary="final">$${finalTotal.toFixed(2)}</strong></div>
         </div>
       </div>
     </div>
@@ -1964,7 +1992,11 @@ function renderEverydayCalculatorPod(){
     const input = getEventClosestTarget(event, '[data-calc-input]');
     if (!input) return;
     const action = String(input.dataset.calcInput || '').trim();
-    performEverydayCalculatorAction(action, input.value);
+    performEverydayCalculatorAction(action, input.value, { skipRender: true });
+
+    const tipInput = root.querySelector('[data-calc-input="tip-percent"]');
+    const taxInput = root.querySelector('[data-calc-input="tax-percent"]');
+    updateEverydayCalculatorSummary(root, tipInput?.value, taxInput?.value);
   };
 
   root.onkeydown = (event) => {
