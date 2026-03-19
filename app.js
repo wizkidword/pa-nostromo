@@ -1862,6 +1862,9 @@ function renderEverydayCalculatorPod(){
   const el = document.getElementById('everydayCalculatorWidget');
   if (!el) return;
 
+  const activeCalcInput = getEventClosestTarget(document.activeElement, '[data-calc-input]');
+  const activeCalcInputName = activeCalcInput ? String(activeCalcInput.dataset.calcInput || '').trim() : '';
+
   state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
   const calc = state.everydayCalculator;
   const subtotal = Number(calc.display);
@@ -1968,6 +1971,11 @@ function renderEverydayCalculatorPod(){
       performEverydayCalculatorAction('clear');
     }
   };
+
+  if (activeCalcInputName) {
+    const refreshedInput = root.querySelector(`[data-calc-input="${activeCalcInputName}"]`);
+    if (refreshedInput) refreshedInput.focus();
+  }
 
   setPodStatusSignal('everyday-calculator', 'fresh', 'ready');
 }
