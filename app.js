@@ -1334,7 +1334,7 @@ function setupSettingsPaneDragScroll(){
   if (!pane || pane.dataset.dragScrollBound === '1') return;
   pane.dataset.dragScrollBound = '1';
 
-  const interactiveSelector = 'input, select, textarea, button, a, label, [contenteditable="true"], [draggable="true"], .btn';
+  const interactiveSelector = 'input, select, textarea, button, a, label, [contenteditable="true"], [draggable="true"], .btn, .change-log-list, .patch-notes-scroll';
 
   pane.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
