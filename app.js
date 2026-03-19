@@ -207,7 +207,7 @@ function normalizeHomeDeviceControlState(input){
     .map((device, index) => {
       const name = String(device?.name || '').trim().slice(0, 80);
       const host = String(device?.host || '').trim().slice(0, 255);
-      if (!name || !host) return null;
+      if (!name) return null;
       const idVal = String(device?.id || `device-${index + 1}`).trim() || `device-${index + 1}`;
       const tags = Array.isArray(device?.tags)
         ? [...new Set(device.tags.map((tag) => String(tag || '').trim()).filter(Boolean))].slice(0, 10)
@@ -6476,13 +6476,6 @@ function mountHomeDevicesSettingsEditor(){
     });
   });
 
-  const addBtn = document.getElementById('addHomeDeviceBtn');
-  if (addBtn) {
-    addBtn.onclick = () => {
-      state.homeDeviceControl.devices.push({ id: id(), name: 'New Device', type: 'device', host: '', uiUrl: '', sshTarget: '', rdpUrl: '', macAddress: '', notes: '', tags: [], lastWakeStatus: '', lastWakeAt: '' });
-      commitState('home_device_added');
-    };
-  }
 }
 
 function renderAll(){
