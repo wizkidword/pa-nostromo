@@ -7365,6 +7365,24 @@ document.getElementById('addRssFeedBtn')?.addEventListener('click', async () => 
   await renderRssPod();
 });
 
+document.getElementById('addHomeDeviceBtn')?.addEventListener('click', () => {
+  state.homeDeviceControl.devices.push({
+    id: id(),
+    name: 'New Device',
+    type: 'device',
+    host: '',
+    uiUrl: '',
+    sshTarget: '',
+    rdpUrl: '',
+    macAddress: '',
+    notes: '',
+    tags: [],
+    lastWakeStatus: '',
+    lastWakeAt: '',
+  });
+  commitState('home_device_added');
+});
+
 document.getElementById('settingFullscreen')?.addEventListener('change', async (e)=> {
   if (e.target.checked) {
     if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
