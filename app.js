@@ -5611,10 +5611,7 @@ function checkedShortcutFilterIdsFromDom(){
 }
 
 function shortcutDefaultsFromActiveFilters(){
-  const checked = checkedShortcutFilterIdsFromDom();
-  if (checked.length) return [...new Set(checked)];
-  const stateFilters = [...activeShortcutFilterSet()];
-  return stateFilters.length ? stateFilters : [SHORTCUT_GLOBAL_PROJECT_ID];
+  return [SHORTCUT_GLOBAL_PROJECT_ID];
 }
 
 function extractUrlFromDrop(dataTransfer){
@@ -5653,18 +5650,7 @@ function renderShortcutsPod(){
   const wrap = document.getElementById('shortcutsWidget');
   if (!wrap) return;
 
-  const activeFilters = activeShortcutFilterSet();
-  const enabledShortcuts = (state.shortcuts || []).filter((sc) => sc.enabled !== false);
-  const visible = !activeFilters.size
-    ? enabledShortcuts
-    : enabledShortcuts.filter((sc) => (sc.projectIds || []).some((pid) => activeFilters.has(pid)));
-
-  const filterRows = shortcutAssignmentOptions().map((p) => `
-    <label class="shortcut-check-row">
-      <input type="checkbox" data-shortcut-filter="${p.id}" ${activeFilters.has(p.id) ? 'checked' : ''} />
-      <span class="shortcut-check-label">${escapeHtml(p.name)}</span>
-    </label>
-  `).join('');
+  const visible = (state.shortcuts || []).filter((sc) => sc.enabled !== false);
 
   const cards = visible.length
     ? visible.map((sc) => `
@@ -5673,37 +5659,14 @@ function renderShortcutsPod(){
         <span>${escapeHtml(sc.category || 'Shortcut')}</span>
       </a>
     `).join('')
-    : '<div class="note-meta">No shortcuts match current project filters.</div>';
+    : '<div class="note-meta">No shortcuts yet. Drop a link below or add one in Settings.</div>';
 
   wrap.innerHTML = `
-    <div class="shortcut-filter-toolbar">
-      <button class="btn ghost" id="shortcutFilterAllBtn" type="button">Show all</button>
-      <span class="note-meta">Filter by project:</span>
-    </div>
-    <div class="shortcut-project-checklist shortcut-filter-checklist">${filterRows}</div>
     <div id="shortcutDropzone" class="shortcut-dropzone" title="Drop bookmark/link here to create a shortcut">
       Drop a bookmark or link here to create a shortcut
     </div>
     <div class="shortcut-links">${cards}</div>
   `;
-
-  document.querySelectorAll('[data-shortcut-filter]').forEach((el) => {
-    el.addEventListener('change', (e) => {
-      const next = activeShortcutFilterSet();
-      const pid = e.target.dataset.shortcutFilter;
-      if (e.target.checked) next.add(pid);
-      else next.delete(pid);
-      state.settings.shortcutsFilterProjectIds = [...next];
-      save();
-      renderShortcutsPod();
-    });
-  });
-
-  document.getElementById('shortcutFilterAllBtn')?.addEventListener('click', () => {
-    state.settings.shortcutsFilterProjectIds = [];
-    save();
-    renderShortcutsPod();
-  });
 
   const dropzone = document.getElementById('shortcutDropzone');
   if (dropzone) {
