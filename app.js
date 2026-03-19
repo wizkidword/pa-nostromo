@@ -1881,7 +1881,7 @@ function performEverydayCalculatorAction(type, payload = '', options = {}){
   }
 
   if (!didMutate) return;
-  save('everyday_calculator_updated');
+  save('everyday_calculator_updated', { pushShared: options.pushShared !== false });
   if (!options.skipRender) renderEverydayCalculatorPod();
 }
 
@@ -1992,11 +1992,17 @@ function renderEverydayCalculatorPod(){
     const input = getEventClosestTarget(event, '[data-calc-input]');
     if (!input) return;
     const action = String(input.dataset.calcInput || '').trim();
-    performEverydayCalculatorAction(action, input.value, { skipRender: true });
+    performEverydayCalculatorAction(action, input.value, { skipRender: true, pushShared: false });
 
     const tipInput = root.querySelector('[data-calc-input="tip-percent"]');
     const taxInput = root.querySelector('[data-calc-input="tax-percent"]');
     updateEverydayCalculatorSummary(root, tipInput?.value, taxInput?.value);
+  };
+
+  root.onchange = (event) => {
+    const input = getEventClosestTarget(event, '[data-calc-input]');
+    if (!input) return;
+    save('everyday_calculator_input_commit');
   };
 
   root.onkeydown = (event) => {
