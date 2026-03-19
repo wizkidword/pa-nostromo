@@ -36,7 +36,7 @@ const DEFAULT_SETTINGS = {
 const DEFAULT_UTILITY_LAYOUT_ROWS = [
   ['shortcuts'],
   ['date-time', 'calendar', 'gas-prices'],
-  ['nba-scores', 'crypto-tracker', 'rss-feed'],
+  ['nba-scores', 'crypto-tracker', 'rss-feed', 'everyday-calculator'],
   ['camera-feed', 'live-streams'],
   ['voice-note', 'voice-to-rowan', 'music-player'],
 ];
@@ -139,6 +139,22 @@ function normalizeGasPricesState(input){
   return gas;
 }
 
+function normalizeEverydayCalculatorState(input){
+  const parsedTip = Number(input?.tipPercent);
+  const parsedTax = Number(input?.taxPercent);
+  return {
+    display: String(input?.display || '0').slice(0, 20),
+    firstOperand: Number.isFinite(Number(input?.firstOperand)) ? Number(input.firstOperand) : null,
+    operator: ['+', '-', '*', '/'].includes(input?.operator) ? input.operator : null,
+    waitingForSecondOperand: !!input?.waitingForSecondOperand,
+    lastOperator: ['+', '-', '*', '/'].includes(input?.lastOperator) ? input.lastOperator : null,
+    lastOperand: Number.isFinite(Number(input?.lastOperand)) ? Number(input.lastOperand) : null,
+    tipPercent: Number.isFinite(parsedTip) ? Math.min(1000, Math.max(0, parsedTip)) : 18,
+    taxPercent: Number.isFinite(parsedTax) ? Math.min(1000, Math.max(0, parsedTax)) : 8,
+    tipPanelOpen: input?.tipPanelOpen !== false,
+  };
+}
+
 const REQUIRED_PROJECTS = [
   { name: 'Blast From The Ads', summary: 'Vintage ad content pipeline to social + WordPress', status: 'active', appLink: '', repoLink: '' },
   { name: 'Radio Map (Leaflet)', summary: 'Interactive radio station map web app', status: 'active', appLink: 'http://localhost:3399', repoLink: '' },
@@ -234,6 +250,17 @@ const seed = {
       premium: '',
       diesel: '',
     },
+  },
+  everydayCalculator: {
+    display: '0',
+    firstOperand: null,
+    operator: null,
+    waitingForSecondOperand: false,
+    lastOperator: null,
+    lastOperand: null,
+    tipPercent: 18,
+    taxPercent: 8,
+    tipPanelOpen: true,
   },
   changelog: [],
   layout: createDefaultUtilityLayoutState(),
@@ -681,8 +708,7 @@ function load(){
   state.rss.lastUpdatedAt = String(state.rss.lastUpdatedAt || '');
   state.rss.lastError = String(state.rss.lastError || '').slice(0, 300);
 
-  state.gasPrices = normalizeGasPricesState(state.gasPrices);
-
+  state.gasPrices = normalizeGasPricesState(state.gasPrices); state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
   state.changelog = Array.isArray(state.changelog) ? state.changelog : [];
 
   ensureChangelogPatch(state, 'Patch: Crypto Tracker now supports portfolio holdings (qty + avg buy) with unrealized P/L summary.');
@@ -693,6 +719,7 @@ function load(){
   ensureChangelogPatch(state, 'Patch: Music hotfix restored reliable Stream favorite/manual playback, isolated ambient fallback handling, and refreshed Thunder/Forest/Fireplace fallback audio assets.');
   ensureChangelogPatch(state, 'Patch: Ambient source tuning corrected Cafe/Wind/Night Crickets/Pink Noise links and realigned fallback audio tone for category accuracy.');
   ensureChangelogPatch(state, 'Patch: Renamed Mini Notes Board to Ideas and retired the Kanban Ideas column (legacy idea tasks are migrated into Ideas notes).');
+  ensureChangelogPatch(state, 'New utility pod: Everyday Calculator added with keyboard-friendly basic math + collapsible tip/tax helper (tip applies to subtotal only).');
 
   // Ensure reminder task exists for pod drag/drop idea.
   const mission = (state.projects || []).find((p) => p.name === 'Mission Control Dashboard');
@@ -1716,6 +1743,233 @@ function saveGasPricesManual(){
 
 function renderGasPricesPod(){
   renderPodWithFallback('gas-prices', renderGasPricesView);
+}
+
+function applyCalculatorOperation(firstOperand, secondOperand, operator){
+  if (!Number.isFinite(firstOperand) || !Number.isFinite(secondOperand)) return null;
+  if (operator === '+') return firstOperand + secondOperand;
+  if (operator === '-') return firstOperand - secondOperand;
+  if (operator === '*') return firstOperand * secondOperand;
+  if (operator === '/') {
+    if (secondOperand === 0) return null;
+    return firstOperand / secondOperand;
+  }
+  return secondOperand;
+}
+
+function formatCalculatorNumber(value){
+  if (!Number.isFinite(value)) return 'Error';
+  const abs = Math.abs(value);
+  if (abs >= 1e12 || (abs > 0 && abs < 1e-6)) return value.toExponential(6).replace(/\.?0+e/, 'e');
+  const fixed = Number(value.toFixed(8));
+  return String(fixed);
+}
+
+function performEverydayCalculatorAction(type, payload = ''){
+  state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
+  const calc = state.everydayCalculator;
+
+  if (type === 'digit') {
+    const digit = String(payload || '').replace(/[^0-9]/g, '').slice(0, 1);
+    if (!digit) return;
+    if (calc.waitingForSecondOperand) {
+      calc.display = digit;
+      calc.waitingForSecondOperand = false;
+    } else {
+      calc.display = calc.display === '0' ? digit : `${calc.display}${digit}`.slice(0, 20);
+    }
+  } else if (type === 'decimal') {
+    if (calc.waitingForSecondOperand) {
+      calc.display = '0.';
+      calc.waitingForSecondOperand = false;
+    } else if (!calc.display.includes('.')) {
+      calc.display = `${calc.display}.`;
+    }
+  } else if (type === 'clear') {
+    calc.display = '0';
+    calc.firstOperand = null;
+    calc.operator = null;
+    calc.waitingForSecondOperand = false;
+    calc.lastOperator = null;
+    calc.lastOperand = null;
+  } else if (type === 'backspace') {
+    if (calc.waitingForSecondOperand) {
+      calc.display = '0';
+      calc.waitingForSecondOperand = false;
+    } else {
+      calc.display = calc.display.length <= 1 ? '0' : calc.display.slice(0, -1);
+      if (calc.display === '-' || calc.display === '-0') calc.display = '0';
+    }
+  } else if (type === 'operator') {
+    const nextOperator = ['+', '-', '*', '/'].includes(payload) ? payload : null;
+    if (!nextOperator) return;
+    const inputValue = Number(calc.display);
+    if (calc.operator && !calc.waitingForSecondOperand && Number.isFinite(inputValue)) {
+      const nextValue = applyCalculatorOperation(Number(calc.firstOperand), inputValue, calc.operator);
+      if (nextValue == null) {
+        calc.display = 'Error';
+        calc.firstOperand = null;
+        calc.operator = null;
+        calc.waitingForSecondOperand = true;
+      } else {
+        calc.display = formatCalculatorNumber(nextValue);
+        calc.firstOperand = nextValue;
+      }
+    } else if (Number.isFinite(inputValue)) {
+      calc.firstOperand = inputValue;
+    }
+    calc.operator = nextOperator;
+    calc.waitingForSecondOperand = true;
+  } else if (type === 'equals') {
+    const inputValue = Number(calc.display);
+    if (calc.operator && Number.isFinite(calc.firstOperand) && Number.isFinite(inputValue)) {
+      const operand = calc.waitingForSecondOperand ? Number(calc.lastOperand ?? inputValue) : inputValue;
+      const nextValue = applyCalculatorOperation(Number(calc.firstOperand), operand, calc.operator);
+      if (nextValue == null) {
+        calc.display = 'Error';
+        calc.firstOperand = null;
+      } else {
+        calc.display = formatCalculatorNumber(nextValue);
+        calc.firstOperand = nextValue;
+      }
+      calc.lastOperator = calc.operator;
+      calc.lastOperand = operand;
+      calc.operator = null;
+      calc.waitingForSecondOperand = true;
+    } else if (calc.lastOperator && Number.isFinite(inputValue) && Number.isFinite(calc.lastOperand)) {
+      const nextValue = applyCalculatorOperation(inputValue, Number(calc.lastOperand), calc.lastOperator);
+      if (nextValue != null) {
+        calc.display = formatCalculatorNumber(nextValue);
+        calc.firstOperand = nextValue;
+        calc.waitingForSecondOperand = true;
+      }
+    }
+  } else if (type === 'toggle-tip-tax') {
+    calc.tipPanelOpen = !calc.tipPanelOpen;
+  } else if (type === 'tip-percent') {
+    const val = Number(payload);
+    if (Number.isFinite(val)) calc.tipPercent = Math.min(1000, Math.max(0, val));
+  } else if (type === 'tax-percent') {
+    const val = Number(payload);
+    if (Number.isFinite(val)) calc.taxPercent = Math.min(1000, Math.max(0, val));
+  }
+
+  save('everyday_calculator_updated');
+  renderEverydayCalculatorPod();
+}
+
+function renderEverydayCalculatorPod(){
+  const el = document.getElementById('everydayCalculatorWidget');
+  if (!el) return;
+
+  state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
+  const calc = state.everydayCalculator;
+  const subtotal = Number(calc.display);
+  const safeSubtotal = Number.isFinite(subtotal) ? subtotal : 0;
+  const tipAmount = safeSubtotal * (Number(calc.tipPercent || 0) / 100);
+  const taxAmount = safeSubtotal * (Number(calc.taxPercent || 0) / 100);
+  const finalTotal = safeSubtotal + tipAmount + taxAmount;
+
+  el.innerHTML = `
+    <div class="everyday-calculator" data-pod="everyday-calculator" tabindex="0" aria-label="Everyday Calculator">
+      <div class="everyday-calculator-display" aria-live="polite">${escapeHtml(calc.display)}</div>
+      <div class="everyday-calculator-grid" role="group" aria-label="Calculator keypad">
+        <button class="btn ghost" data-calc-action="clear" type="button">C</button>
+        <button class="btn ghost" data-calc-action="backspace" type="button">⌫</button>
+        <button class="btn ghost" data-calc-action="operator" data-calc-value="/" type="button">÷</button>
+        <button class="btn ghost" data-calc-action="operator" data-calc-value="*" type="button">×</button>
+
+        <button class="btn" data-calc-action="digit" data-calc-value="7" type="button">7</button>
+        <button class="btn" data-calc-action="digit" data-calc-value="8" type="button">8</button>
+        <button class="btn" data-calc-action="digit" data-calc-value="9" type="button">9</button>
+        <button class="btn ghost" data-calc-action="operator" data-calc-value="-" type="button">−</button>
+
+        <button class="btn" data-calc-action="digit" data-calc-value="4" type="button">4</button>
+        <button class="btn" data-calc-action="digit" data-calc-value="5" type="button">5</button>
+        <button class="btn" data-calc-action="digit" data-calc-value="6" type="button">6</button>
+        <button class="btn ghost" data-calc-action="operator" data-calc-value="+" type="button">+</button>
+
+        <button class="btn" data-calc-action="digit" data-calc-value="1" type="button">1</button>
+        <button class="btn" data-calc-action="digit" data-calc-value="2" type="button">2</button>
+        <button class="btn" data-calc-action="digit" data-calc-value="3" type="button">3</button>
+        <button class="btn" data-calc-action="equals" type="button" style="grid-row: span 2;">=</button>
+
+        <button class="btn" data-calc-action="digit" data-calc-value="0" type="button" style="grid-column: span 2;">0</button>
+        <button class="btn" data-calc-action="decimal" type="button">.</button>
+      </div>
+      <button class="btn ghost mt8" data-calc-action="toggle-tip-tax" type="button">${calc.tipPanelOpen ? 'Hide' : 'Show'} Tip/Tax</button>
+      <div class="everyday-calc-tip-tax ${calc.tipPanelOpen ? '' : 'is-hidden'}">
+        <div class="row-wrap mt8 gap10">
+          <label>Tip % <input type="number" min="0" step="0.1" data-calc-input="tip-percent" value="${escapeHtml(calc.tipPercent)}" class="w-110" /></label>
+          <label>Tax % <input type="number" min="0" step="0.1" data-calc-input="tax-percent" value="${escapeHtml(calc.taxPercent)}" class="w-110" /></label>
+        </div>
+        <div class="note-meta mt6">Tip is applied to subtotal only (before tax).</div>
+        <div class="everyday-calc-summary mt8">
+          <div><span>Subtotal</span><strong>$${safeSubtotal.toFixed(2)}</strong></div>
+          <div><span>Tax</span><strong>$${taxAmount.toFixed(2)}</strong></div>
+          <div><span>Tip</span><strong>$${tipAmount.toFixed(2)}</strong></div>
+          <div class="is-total"><span>Final Total</span><strong>$${finalTotal.toFixed(2)}</strong></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const root = el.querySelector('[data-pod="everyday-calculator"]');
+  if (!root) return;
+
+  root.onclick = (event) => {
+    const button = getEventClosestTarget(event, '[data-calc-action]');
+    if (!button) return;
+    const action = String(button.dataset.calcAction || '').trim();
+    const value = String(button.dataset.calcValue || '').trim();
+    performEverydayCalculatorAction(action, value);
+  };
+
+  root.onchange = (event) => {
+    const input = getEventClosestTarget(event, '[data-calc-input]');
+    if (!input) return;
+    const action = String(input.dataset.calcInput || '').trim();
+    performEverydayCalculatorAction(action, input.value);
+  };
+
+  root.onkeydown = (event) => {
+    const target = event.target;
+    const isEditable = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+    if (isEditable) return;
+
+    const k = event.key;
+    if (/^[0-9]$/.test(k)) {
+      event.preventDefault();
+      performEverydayCalculatorAction('digit', k);
+      return;
+    }
+    if (k === '.') {
+      event.preventDefault();
+      performEverydayCalculatorAction('decimal');
+      return;
+    }
+    if (['+', '-', '*', '/'].includes(k)) {
+      event.preventDefault();
+      performEverydayCalculatorAction('operator', k);
+      return;
+    }
+    if (k === 'Enter' || k === '=') {
+      event.preventDefault();
+      performEverydayCalculatorAction('equals');
+      return;
+    }
+    if (k === 'Backspace') {
+      event.preventDefault();
+      performEverydayCalculatorAction('backspace');
+      return;
+    }
+    if (k === 'Escape' || k.toLowerCase() === 'c' || k === 'Delete') {
+      event.preventDefault();
+      performEverydayCalculatorAction('clear');
+    }
+  };
+
+  setPodStatusSignal('everyday-calculator', 'fresh', 'ready');
 }
 
 function estDateYmdCompact(){
@@ -5189,11 +5443,12 @@ function getUtilityPodLegacyRenderer(podId){
   if (podId === 'nba-scores') return () => renderNbaScores();
   if (podId === 'crypto-tracker') return () => renderCrypto();
   if (podId === 'rss-feed') return () => renderRss();
+  if (podId === 'everyday-calculator') return () => renderEverydayCalculatorPod();
   return null;
 }
 
 function syncUtilityPodLifecycle(){
-  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'rss-feed'];
+  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'rss-feed', 'everyday-calculator'];
   managed.forEach((podId) => {
     const visible = state.layout?.visibility?.[podId] !== false;
     const legacyRender = getUtilityPodLegacyRenderer(podId);
@@ -5375,6 +5630,7 @@ function renderAll(){
   renderPodWithFallback('date-time', renderDateTime);
   renderPodWithFallback('calendar', renderCalendar);
   renderGasPricesPod();
+  renderEverydayCalculatorPod();
   renderCalendarRemindersPanel();
   renderTodayReminders();
   renderSettings();

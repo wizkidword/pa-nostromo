@@ -406,6 +406,56 @@ body.theme-light .social-icon-link img {
   resize: vertical;
 }
 
+.everyday-calculator {
+  display: grid;
+  gap: 8px;
+}
+
+.everyday-calculator-display {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  text-align: right;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text);
+  min-height: 46px;
+  overflow: hidden;
+}
+
+.everyday-calculator-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.everyday-calculator-grid .btn {
+  padding: 8px 6px;
+}
+
+.everyday-calc-tip-tax.is-hidden {
+  display: none;
+}
+
+.everyday-calc-summary {
+  display: grid;
+  gap: 4px;
+}
+
+.everyday-calc-summary > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.everyday-calc-summary .is-total {
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  font-weight: 700;
+}
+
 .calendar-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
