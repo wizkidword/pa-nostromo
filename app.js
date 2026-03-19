@@ -1318,7 +1318,13 @@ function setActiveSettingsSection(sectionId, options = {}){
   activeSettingsSection = target;
   if (!options.preserveScroll) {
     const pane = document.getElementById('settingsContentPane');
-    if (pane) pane.scrollTop = 0;
+    if (pane) {
+      pane.scrollTop = 0;
+      const isNarrowLayout = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 980px)').matches;
+      if (isNarrowLayout && options.revealPane !== false) {
+        pane.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
   }
 }
 
