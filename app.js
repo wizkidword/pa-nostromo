@@ -1603,6 +1603,212 @@ function getDiaryEntriesForDate(date){
   return [...items].sort((a, b) => new Date(b.time || 0).getTime() - new Date(a.time || 0).getTime());
 }
 
+function toTitleCaseWords(input){
+  return String(input || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function formatDiaryEntryTitle(entry = {}){
+  const base = String(entry.title || '')
+    .replace(/\.md$/i, '')
+    .replace(/^\d{4}-\d{2}-\d{2}-/i, '')
+    .replace(/[-_]+/g, ' ')
+    .trim();
+  return base ? toTitleCaseWords(base) : 'Diary Entry';
+}
+
+function buildDiaryPreviewText(rawContent, fallback = ''){
+  const lines = String(rawContent || '')
+    .split('\n')
+    .map((l) => l.replace(/^#{1,6}\s+/, '').trim())
+    .filter(Boolean)
+    .filter((l) => !/^(date|owner)\s*:/i.test(l));
+
+  const candidate = lines.slice(0, 2).join(' ').trim() || String(fallback || '').trim();
+  return candidate.slice(0, 220);
+}
+
+function renderDiaryCleanHtml(rawContent){
+  const lines = String(rawContent || '').split('\n').map((line) => line.trimEnd());
+  const out = [];
+  let inUl = false;
+  let inOl = false;
+
+  const closeLists = () => {
+    if (inUl) { out.push('</ul>'); inUl = false; }
+    if (inOl) { out.push('</ol>'); inOl = false; }
+  };
+
+  let skipTailSection = false;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (/^##\s+suggested calendar-pod diary usage/i.test(line)) {
+      skipTailSection = true;
+      closeLists();
+      continue;
+    }
+    if (skipTailSection) continue;
+    if (!line) {
+      closeLists();
+      continue;
+    }
+
+    // Skip noisy metadata lines to reduce wall-of-text feel.
+    if (/^#\s+/.test(line)) continue;
+    if (/^(date|owner)\s*:/i.test(line)) continue;
+
+    const h2 = line.match(/^##\s+(.+)/);
+    if (h2) {
+      closeLists();
+      out.push(`<h4 class="diary-section-title">${escapeHtml(h2[1])}</h4>`);
+      continue;
+    }
+
+    const h3 = line.match(/^###\s+(.+)/);
+    if (h3) {
+      closeLists();
+      out.push(`<h5 class="diary-subsection-title">${escapeHtml(h3[1])}</h5>`);
+      continue;
+    }
+
+    const bullet = line.match(/^[-*]\s+(.+)/);
+    if (bullet) {
+      if (inOl) { out.push('</ol>'); inOl = false; }
+      if (!inUl) { out.push('<ul class="diary-list">'); inUl = true; }
+      out.push(`<li>${escapeHtml(bullet[1])}</li>`);
+      continue;
+    }
+
+    const numbered = line.match(/^\d+[\.)]\s+(.+)/);
+    if (numbered) {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      if (!inOl) { out.push('<ol class="diary-list">'); inOl = true; }
+      out.push(`<li>${escapeHtml(numbered[1])}</li>`);
+      continue;
+    }
+
+    closeLists();
+    out.push(`<p class="diary-paragraph">${escapeHtml(line)}</p>`);
+  }
+
+  closeLists();
+  return out.join('') || '<p class="diary-paragraph">No content.</p>';
+}
+
+function normalizeDiarySummaryLine(line){
+  return String(line || '')
+    .replace(/^#{1,6}\s+/, '')
+    .replace(/^[-*]\s+/, '')
+    .replace(/^\d+[\.)]\s+/, '')
+    .replace(/`+/g, '')
+    .replace(/\*\*/g, '')
+    .replace(/__+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractDiarySummaryBullets(rawContent, maxItems = 5){
+  const lines = String(rawContent || '').split('\n');
+  const bullets = [];
+  let skipTailSection = false;
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || '').trim();
+    if (!line) continue;
+    if (/^##\s+suggested calendar-pod diary usage/i.test(line)) {
+      skipTailSection = true;
+      continue;
+    }
+    if (skipTailSection) continue;
+    if (/^#\s+/.test(line)) continue;
+    if (/^(date|owner)\s*:/i.test(line)) continue;
+
+    let picked = '';
+    const heading = line.match(/^##+\s+(.+)/);
+    const bullet = line.match(/^[-*]\s+(.+)/);
+    const numbered = line.match(/^\d+[\.)]\s+(.+)/);
+    if (heading) picked = heading[1];
+    else if (bullet) picked = bullet[1];
+    else if (numbered) picked = numbered[1];
+    else picked = line;
+
+    const normalized = normalizeDiarySummaryLine(picked);
+    if (!normalized || normalized.length < 3) continue;
+    bullets.push(normalized);
+    if (bullets.length >= maxItems) break;
+  }
+
+  return bullets;
+}
+
+function buildDiaryExecutiveSummary(entry = {}, fallbackDate = ''){
+  const title = formatDiaryEntryTitle(entry);
+  const project = String(entry.project || 'project').trim() || 'project';
+  const dateValue = entry.time ? new Date(entry.time) : null;
+  const dateLabel = Number.isFinite(dateValue?.getTime()) ? dateValue.toLocaleDateString() : String(fallbackDate || '').trim();
+  const bullets = extractDiarySummaryBullets(entry.rawContent || entry.content || '', 5);
+  const bulletLines = bullets.length ? bullets : ['No key updates captured.'];
+
+  return [
+    title,
+    `${dateLabel} · ${project}`,
+    '',
+    ...bulletLines.map((line) => `- ${line}`),
+  ].join('\n').trim();
+}
+
+async function copyTextToClipboard(text){
+  const value = String(text || '');
+  if (!value) throw new Error('Nothing to copy.');
+
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', 'readonly');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-9999px';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } finally {
+    textarea.remove();
+  }
+  if (!ok) throw new Error('Clipboard unavailable.');
+}
+
+function setDiaryCopyFeedback(button, message, isError = false){
+  if (!button) return;
+  const statusEl = button.parentElement?.querySelector('[data-diary-copy-status]');
+  const original = button.dataset.originalLabel || 'Copy executive summary';
+  button.dataset.originalLabel = original;
+  button.textContent = message;
+  button.classList.toggle('is-error', !!isError);
+  if (statusEl) {
+    statusEl.textContent = message;
+    statusEl.classList.toggle('is-error', !!isError);
+  }
+  window.setTimeout(() => {
+    button.textContent = original;
+    button.classList.remove('is-error');
+    if (statusEl) {
+      statusEl.textContent = '';
+      statusEl.classList.remove('is-error');
+    }
+  }, 1400);
+}
+
 function renderDiaryDialog(date){
   const dialog = document.getElementById('calendarDiaryDialog');
   const titleEl = document.getElementById('calendarDiaryDialogDate');
@@ -1614,16 +1820,24 @@ function renderDiaryDialog(date){
   if (!entries.length) {
     listEl.innerHTML = '<div class="note-meta">No diary entries for this date.</div>';
   } else {
-    listEl.innerHTML = entries.map((entry) => {
+    listEl.innerHTML = entries.map((entry, idx) => {
       const stamp = entry.time ? new Date(entry.time).toLocaleString() : date;
-      const full = escapeHtml(entry.content || '');
-      const preview = escapeHtml(entry.preview || '').slice(0, 220);
+      const full = renderDiaryCleanHtml(entry.rawContent || entry.content || '');
+      const preview = escapeHtml(buildDiaryPreviewText(entry.rawContent || entry.content || '', entry.preview || ''));
+      const displayTitle = escapeHtml(formatDiaryEntryTitle(entry));
       return `<article class="diary-entry-card" data-diary-entry-card>
         <button type="button" class="diary-entry-toggle" data-diary-toggle>
           <span class="diary-entry-meta">${escapeHtml(stamp)} · <span class="diary-project-tag">${escapeHtml(entry.project || 'project')}</span></span>
+          <span class="diary-entry-title">${displayTitle}</span>
           <span class="diary-entry-preview">${preview}</span>
         </button>
-        <div class="diary-entry-full" hidden>${full.replaceAll('\n', '<br>')}</div>
+        <div class="diary-entry-full" hidden>
+          <div class="diary-copy-row">
+            <button type="button" class="btn ghost diary-copy-btn" data-diary-copy-index="${idx}">Copy executive summary</button>
+            <span class="diary-copy-status" data-diary-copy-status aria-live="polite"></span>
+          </div>
+          ${full.replaceAll('\n', '<br>')}
+        </div>
       </article>`;
     }).join('');
 
@@ -1636,6 +1850,20 @@ function renderDiaryDialog(date){
         const nextHidden = !body.hidden;
         body.hidden = nextHidden;
         card.classList.toggle('is-expanded', !nextHidden);
+      });
+    });
+
+    listEl.querySelectorAll('[data-diary-copy-index]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const index = Number(btn.getAttribute('data-diary-copy-index'));
+        if (!Number.isInteger(index) || index < 0 || index >= entries.length) return;
+        const summary = buildDiaryExecutiveSummary(entries[index], date);
+        try {
+          await copyTextToClipboard(summary);
+          setDiaryCopyFeedback(btn, 'Copied!');
+        } catch {
+          setDiaryCopyFeedback(btn, 'Copy failed', true);
+        }
       });
     });
   }
@@ -8025,8 +8253,29 @@ document.getElementById('calendarDiaryRefreshBtn')?.addEventListener('click', ()
   refreshDiaryIndex({ manual: true });
 });
 
+function closeDialogSmooth(dialog){
+  if (!dialog || !dialog.open) return;
+  if (dialog.classList.contains('closing')) return;
+  dialog.classList.add('closing');
+  setTimeout(() => {
+    dialog.close();
+    dialog.classList.remove('closing');
+  }, 140);
+}
+
 document.getElementById('calendarDiaryDialogCloseBtn')?.addEventListener('click', () => {
-  document.getElementById('calendarDiaryDialog')?.close();
+  closeDialogSmooth(document.getElementById('calendarDiaryDialog'));
+});
+
+document.getElementById('calendarDiaryDialog')?.addEventListener('click', (e) => {
+  if (e.target?.id === 'calendarDiaryDialog') {
+    closeDialogSmooth(e.currentTarget);
+  }
+});
+
+document.getElementById('calendarDiaryDialog')?.addEventListener('cancel', (e) => {
+  e.preventDefault();
+  closeDialogSmooth(e.currentTarget);
 });
 
 refreshDiaryIndex();
