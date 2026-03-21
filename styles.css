@@ -576,12 +576,24 @@ body.theme-light .social-icon-link img {
   content: '';
   position: absolute;
   bottom: 3px;
-  left: 50%;
+  left: 42%;
   transform: translateX(-50%);
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: #f59e0b;
+}
+
+.cal-cell.has-diary::before {
+  content: '';
+  position: absolute;
+  bottom: 3px;
+  left: 58%;
+  transform: translateX(-50%);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ef4444;
 }
 
 .cal-cell.selected {
@@ -743,6 +755,60 @@ dialog {
 }
 
 form { display: grid; gap: 8px; }
+
+.diary-dialog-form {
+  width: min(780px, 92vw);
+}
+
+.diary-dialog-list {
+  max-height: 62vh;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.diary-entry-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.diary-entry-toggle {
+  width: 100%;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  text-align: left;
+  padding: 10px;
+  display: grid;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.diary-entry-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.diary-project-tag {
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.diary-entry-preview {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.diary-entry-full {
+  border-top: 1px solid var(--border);
+  margin: 0 10px 10px;
+  padding-top: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: normal;
+}
 
 /* Utility classes to reduce inline styling clutter */
 .row-wrap {

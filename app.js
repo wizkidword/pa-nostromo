@@ -234,6 +234,8 @@ function normalizeHomeDeviceControlState(input){
     settingsOpen: !!input?.settingsOpen,
     pingByDevice: (input?.pingByDevice && typeof input.pingByDevice === 'object') ? input.pingByDevice : {},
     wakeModalDeviceId: String(input?.wakeModalDeviceId || ''),
+    scanRunning: !!input?.scanRunning,
+    lastScanAt: String(input?.lastScanAt || ''),
     toast: String(input?.toast || '').slice(0, 200),
     toastAt: String(input?.toastAt || ''),
   };
@@ -366,6 +368,8 @@ const seed = {
     settingsOpen: false,
     pingByDevice: {},
     wakeModalDeviceId: '',
+    scanRunning: false,
+    lastScanAt: '',
     toast: '',
     toastAt: '',
   },
@@ -1588,6 +1592,86 @@ function dateKey(d){
   return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
 }
 
+const diaryIndexState = {
+  datesWithEntries: new Set(),
+  entriesByDate: {},
+  generatedAt: '',
+};
+
+function getDiaryEntriesForDate(date){
+  const items = Array.isArray(diaryIndexState.entriesByDate?.[date]) ? diaryIndexState.entriesByDate[date] : [];
+  return [...items].sort((a, b) => new Date(b.time || 0).getTime() - new Date(a.time || 0).getTime());
+}
+
+function renderDiaryDialog(date){
+  const dialog = document.getElementById('calendarDiaryDialog');
+  const titleEl = document.getElementById('calendarDiaryDialogDate');
+  const listEl = document.getElementById('calendarDiaryDialogList');
+  if (!dialog || !titleEl || !listEl) return;
+
+  const entries = getDiaryEntriesForDate(date);
+  titleEl.textContent = `Diary entries for ${date}`;
+  if (!entries.length) {
+    listEl.innerHTML = '<div class="note-meta">No diary entries for this date.</div>';
+  } else {
+    listEl.innerHTML = entries.map((entry) => {
+      const stamp = entry.time ? new Date(entry.time).toLocaleString() : date;
+      const full = escapeHtml(entry.content || '');
+      const preview = escapeHtml(entry.preview || '').slice(0, 220);
+      return `<article class="diary-entry-card" data-diary-entry-card>
+        <button type="button" class="diary-entry-toggle" data-diary-toggle>
+          <span class="diary-entry-meta">${escapeHtml(stamp)} · <span class="diary-project-tag">${escapeHtml(entry.project || 'project')}</span></span>
+          <span class="diary-entry-preview">${preview}</span>
+        </button>
+        <div class="diary-entry-full" hidden>${full.replaceAll('\n', '<br>')}</div>
+      </article>`;
+    }).join('');
+
+    listEl.querySelectorAll('[data-diary-toggle]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const card = btn.closest('[data-diary-entry-card]');
+        if (!card) return;
+        const body = card.querySelector('.diary-entry-full');
+        if (!body) return;
+        const nextHidden = !body.hidden;
+        body.hidden = nextHidden;
+        card.classList.toggle('is-expanded', !nextHidden);
+      });
+    });
+  }
+
+  if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
+}
+
+async function refreshDiaryIndex(options = {}){
+  const manual = !!options.manual;
+  const endpoint = manual ? '/api/diary-index/refresh' : '/api/diary-index';
+  const method = manual ? 'POST' : 'GET';
+  const refreshBtn = document.getElementById('calendarDiaryRefreshBtn');
+
+  if (refreshBtn) {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = manual ? 'Refreshing…' : 'Loading…';
+  }
+
+  try {
+    const res = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' } });
+    if (!res.ok) throw new Error(`Diary index request failed (${res.status})`);
+    const payload = await res.json();
+    diaryIndexState.generatedAt = payload.generatedAt || '';
+    diaryIndexState.entriesByDate = payload.entriesByDate || {};
+    diaryIndexState.datesWithEntries = new Set(Array.isArray(payload.datesWithEntries) ? payload.datesWithEntries : []);
+    renderCalendar();
+  } catch (err) {
+    logChange(`Diary index unavailable: ${String(err?.message || err)}`);
+  } finally {
+    if (refreshBtn) {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = 'Refresh Diary Index';
+    }
+  }
+}
+
 function renderCalendar(){
   const el = document.getElementById('calendarWidget');
   if (!el) return;
@@ -1603,6 +1687,7 @@ function renderCalendar(){
   if (!selectedCalendarDate) selectedCalendarDate = todayKey;
 
   const reminderDates = new Set(state.reminders.map((r)=>r.date));
+  const diaryDates = diaryIndexState.datesWithEntries;
   const heads = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<div class="cal-cell cal-head">${d}</div>`).join('');
   let cells = '';
   for (let i=0;i<start;i++) cells += '<div class="cal-cell" style="opacity:.25">&nbsp;</div>';
@@ -1611,7 +1696,8 @@ function renderCalendar(){
     const isToday = key===todayKey;
     const isSel = key===selectedCalendarDate;
     const has = reminderDates.has(key);
-    cells += `<div class="cal-cell ${isToday?'cal-today':''} ${isSel?'selected':''} ${has?'has-reminder':''}" data-date="${key}">${d}</div>`;
+    const hasDiary = diaryDates.has(key);
+    cells += `<div class="cal-cell ${isToday?'cal-today':''} ${isSel?'selected':''} ${has?'has-reminder':''} ${hasDiary?'has-diary':''}" data-date="${key}">${d}</div>`;
   }
   el.innerHTML = `<div class="note-meta">${nowDt.toLocaleDateString(undefined,{month:'long',year:'numeric'})}</div><div class="calendar-grid">${heads}${cells}</div>`;
 
@@ -1620,6 +1706,9 @@ function renderCalendar(){
       selectedCalendarDate = cell.dataset.date;
       renderCalendar();
       renderCalendarRemindersPanel();
+      if (diaryIndexState.datesWithEntries.has(selectedCalendarDate)) {
+        renderDiaryDialog(selectedCalendarDate);
+      }
     });
   });
 }
@@ -6369,6 +6458,37 @@ async function pingHomeDevice(deviceId){
   renderHomeDeviceControlPod();
 }
 
+async function scanHomeDevicesReachability(){
+  if (state.homeDeviceControl.scanRunning) return;
+  const targetIds = (state.homeDeviceControl.devices || []).filter((d) => !!String(d?.host || '').trim()).map((d) => d.id);
+  if (!targetIds.length) {
+    state.homeDeviceControl.lastScanAt = now();
+    state.homeDeviceControl.toast = 'No devices with a host/IP to scan.';
+    state.homeDeviceControl.toastAt = now();
+    renderHomeDeviceControlPod();
+    return;
+  }
+
+  state.homeDeviceControl.scanRunning = true;
+  state.homeDeviceControl.toast = `Scanning ${targetIds.length} device${targetIds.length === 1 ? '' : 's'}…`;
+  state.homeDeviceControl.toastAt = now();
+  renderHomeDeviceControlPod();
+
+  try {
+    for (const deviceId of targetIds) {
+      // Keep this sequential to avoid hammering local network/tooling.
+      // eslint-disable-next-line no-await-in-loop
+      await pingHomeDevice(deviceId);
+    }
+  } finally {
+    state.homeDeviceControl.scanRunning = false;
+    state.homeDeviceControl.lastScanAt = now();
+    state.homeDeviceControl.toast = `Scan complete (${targetIds.length} checked).`;
+    state.homeDeviceControl.toastAt = now();
+    commitState('home_device_scan_completed');
+  }
+}
+
 async function wakeHomeDevice(deviceId){
   const device = state.homeDeviceControl.devices.find((d) => d.id === deviceId);
   if (!device?.macAddress) return;
@@ -6394,7 +6514,11 @@ function renderHomeDeviceControlPod(){
     return;
   }
 
-  wrap.innerHTML = `<div class="home-device-grid">${devices.map((device) => {
+  const scanRunning = !!state.homeDeviceControl.scanRunning;
+  const lastScanAt = state.homeDeviceControl.lastScanAt ? new Date(state.homeDeviceControl.lastScanAt).toLocaleString() : '';
+  const scanSummary = scanRunning ? 'Scan in progress…' : (lastScanAt ? `Last scan: ${lastScanAt}` : 'No scan run yet.');
+
+  wrap.innerHTML = `<div class="row-between-wrap gap8 mb8"><div class="note-meta">${escapeHtml(scanSummary)}</div><button class="btn ghost" data-home-device-action="scan" ${scanRunning ? 'disabled' : ''}>${scanRunning ? 'Scanning…' : 'Scan Reachability'}</button></div>${state.homeDeviceControl.toast ? `<div class="note-meta mb8">${escapeHtml(state.homeDeviceControl.toast)}</div>` : ''}<div class="home-device-grid">${devices.map((device) => {
     const status = state.homeDeviceControl.pingByDevice?.[device.id] || {};
     const av = homeDeviceActionAvailability(device);
     const wakeMeta = device.lastWakeAt ? `${new Date(device.lastWakeAt).toLocaleString()} · ${device.lastWakeStatus || 'wake attempted'}` : 'No wake attempts yet.';
@@ -6416,10 +6540,13 @@ function renderHomeDeviceControlPod(){
 
   wrap.querySelectorAll('[data-home-device-action]').forEach((btn) => {
     btn.addEventListener('click', async () => {
+      const action = String(btn.getAttribute('data-home-device-action') || '');
+      if (action === 'scan') { await scanHomeDevicesReachability(); return; }
+
       const deviceId = String(btn.getAttribute('data-device-id') || '');
       const device = state.homeDeviceControl.devices.find((d) => d.id === deviceId);
       if (!device) return;
-      const action = String(btn.getAttribute('data-home-device-action') || '');
+
       if (action === 'remote') { const target = resolveRemoteTarget(device); if (target?.value) window.open(target.value, '_blank', 'noopener,noreferrer'); }
       if (action === 'ui' && device.uiUrl) window.open(device.uiUrl, '_blank', 'noopener,noreferrer');
       if (action === 'ping') await pingHomeDevice(device.id);
@@ -7376,6 +7503,10 @@ document.getElementById('addHomeDeviceBtn')?.addEventListener('click', () => {
   commitState('home_device_added');
 });
 
+document.getElementById('scanHomeDevicesBtn')?.addEventListener('click', async () => {
+  await scanHomeDevicesReachability();
+});
+
 document.getElementById('settingFullscreen')?.addEventListener('change', async (e)=> {
   if (e.target.checked) {
     if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
@@ -7889,6 +8020,16 @@ document.getElementById('rssShowReadToggle')?.addEventListener('change', (e) => 
   renderRssPod({ skipFetch: true });
 });
 updateCryptoRefreshButton();
+
+document.getElementById('calendarDiaryRefreshBtn')?.addEventListener('click', () => {
+  refreshDiaryIndex({ manual: true });
+});
+
+document.getElementById('calendarDiaryDialogCloseBtn')?.addEventListener('click', () => {
+  document.getElementById('calendarDiaryDialog')?.close();
+});
+
+refreshDiaryIndex();
 
 document.getElementById('addCalendarReminderBtn')?.addEventListener('click', () => {
   if (!selectedCalendarDate) selectedCalendarDate = dateKey(new Date());

@@ -86,6 +86,19 @@ const SPEED_TEST_TIMEOUT_MS = Math.max(3000, parsePositiveInt(process.env.SPEED_
 const HOME_DEVICE_ALLOW_REMOTE = parseBool(process.env.HOME_DEVICE_ALLOW_REMOTE);
 const HOME_DEVICE_TIMEOUT_MS = Math.max(1000, parsePositiveInt(process.env.HOME_DEVICE_TIMEOUT_MS, 2500));
 
+const DIARY_INDEX_ROOTS = [
+  path.resolve(ROOT, '../taverncollectibles-v2/artifacts/reports'),
+];
+const DIARY_INDEX_ALLOWED_EXT = new Set(['.md', '.markdown']);
+const DIARY_INDEX_MAX_PREVIEW_LEN = 220;
+let diaryIndexCache = {
+  ok: true,
+  generatedAt: null,
+  datesWithEntries: [],
+  entriesByDate: {},
+  sourceStats: { scannedRoots: 0, scannedFiles: 0, includedEntries: 0, skippedEntries: 0 },
+};
+
 function parseAllowlistInput(value) {
   return [...new Set(String(value || '')
     .split(',')
@@ -674,6 +687,172 @@ async function relayRowanMessage(text) {
   } catch (err) {
     const msg = String(err?.name === 'AbortError' ? 'relay request timed out' : (err?.message || err));
     return { ok: false, code: 'relay_request_failed', message: msg };
+  }
+}
+
+function normalizeDiaryText(raw) {
+  return String(raw || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[[^\]]+\]\([^)]*\)/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+\.\s+/gm, '')
+    .replace(/\r/g, '')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+}
+
+function isTemplateOnlyDiary(content) {
+  const lc = String(content || '').toLowerCase();
+  if (!lc) return true;
+  const normalized = lc.replace(/\s+/g, ' ').trim();
+  if (!normalized) return true;
+  if (normalized.length < 30) return true;
+  return (
+    normalized === 'template'
+    || normalized.includes('placeholder')
+    || normalized.includes('todo')
+    || normalized.includes('tbd')
+    || normalized.includes('[insert')
+  ) && normalized.length < 120;
+}
+
+function guessDiaryProject(absPath) {
+  const clean = String(absPath || '').replace(/\\/g, '/');
+  const parts = clean.split('/').filter(Boolean);
+  const idx = parts.indexOf('workspace');
+  if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
+  if (parts.length >= 3) return parts[parts.length - 3];
+  return 'project';
+}
+
+function guessDiaryDate(absPath, rawContent = '') {
+  const fromPath = String(absPath || '').match(/(\d{4}-\d{2}-\d{2})/);
+  if (fromPath) return fromPath[1];
+  const fromContent = String(rawContent || '').match(/(\d{4}-\d{2}-\d{2})/);
+  return fromContent ? fromContent[1] : null;
+}
+
+async function walkDiaryMarkdownFiles(rootAbs) {
+  const files = [];
+  async function walk(dir) {
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+        continue;
+      }
+      const ext = path.extname(entry.name).toLowerCase();
+      if (DIARY_INDEX_ALLOWED_EXT.has(ext)) files.push(full);
+    }
+  }
+  await walk(rootAbs);
+  return files;
+}
+
+async function rebuildDiaryIndex() {
+  const entriesByDate = {};
+  let scannedFiles = 0;
+  let includedEntries = 0;
+  let skippedEntries = 0;
+
+  for (const rootAbs of DIARY_INDEX_ROOTS) {
+    let stats;
+    try {
+      stats = await fsp.stat(rootAbs);
+    } catch {
+      continue;
+    }
+    if (!stats.isDirectory()) continue;
+
+    const files = await walkDiaryMarkdownFiles(rootAbs);
+    for (const file of files) {
+      scannedFiles += 1;
+      const raw = await fsp.readFile(file, 'utf8');
+      const normalized = normalizeDiaryText(raw);
+      if (isTemplateOnlyDiary(normalized)) {
+        skippedEntries += 1;
+        continue;
+      }
+
+      const date = guessDiaryDate(file, raw);
+      if (!date) {
+        skippedEntries += 1;
+        continue;
+      }
+
+      const stat = await fsp.stat(file);
+      const project = guessDiaryProject(file);
+      const lines = normalized.split('\n').map((line) => line.trim()).filter(Boolean);
+      const preview = lines.join(' ').slice(0, DIARY_INDEX_MAX_PREVIEW_LEN);
+      const entry = {
+        id: crypto.createHash('sha1').update(file).digest('hex').slice(0, 16),
+        date,
+        time: new Date(stat.mtimeMs).toISOString(),
+        project,
+        title: path.basename(file),
+        preview,
+        content: normalized,
+      };
+
+      if (!entriesByDate[date]) entriesByDate[date] = [];
+      entriesByDate[date].push(entry);
+      includedEntries += 1;
+    }
+  }
+
+  for (const date of Object.keys(entriesByDate)) {
+    entriesByDate[date].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+  }
+
+  const payload = {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    datesWithEntries: Object.keys(entriesByDate).sort(),
+    entriesByDate,
+    sourceStats: {
+      scannedRoots: DIARY_INDEX_ROOTS.length,
+      scannedFiles,
+      includedEntries,
+      skippedEntries,
+    },
+  };
+  diaryIndexCache = payload;
+  return payload;
+}
+
+async function handleApiDiaryIndex(req, res) {
+  const pathname = new URL(req.url || '/api/diary-index', `http://localhost:${PORT}`).pathname;
+
+  if (pathname === '/api/diary-index/refresh') {
+    if (req.method !== 'POST') {
+      return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/diary-index/refresh.' });
+    }
+    try {
+      const payload = await rebuildDiaryIndex();
+      return sendJson(res, 200, payload);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, error: 'diary_index_refresh_failed', message: String(err?.message || err) });
+    }
+  }
+
+  if (pathname !== '/api/diary-index') return sendJson(res, 404, { ok: false, error: 'not_found' });
+  if (req.method !== 'GET') {
+    return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/diary-index.' });
+  }
+
+  if (diaryIndexCache.generatedAt) {
+    return sendJson(res, 200, diaryIndexCache);
+  }
+
+  try {
+    const payload = await rebuildDiaryIndex();
+    return sendJson(res, 200, payload);
+  } catch (err) {
+    return sendJson(res, 500, { ok: false, error: 'diary_index_unavailable', message: String(err?.message || err), fallback: diaryIndexCache });
   }
 }
 
@@ -1548,6 +1727,7 @@ const server = http.createServer(async (req, res) => {
   if ((req.url || '').startsWith('/api/speed-test')) return handleApiSpeedTest(req, res);
   if ((req.url || '').startsWith('/api/home-devices/ping')) return handleApiHomeDevicePing(req, res);
   if ((req.url || '').startsWith('/api/home-devices/wake')) return handleApiHomeDeviceWake(req, res);
+  if ((req.url || '').startsWith('/api/diary-index')) return handleApiDiaryIndex(req, res);
   return handleStatic(req, res);
 });
 

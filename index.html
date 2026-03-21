@@ -103,6 +103,7 @@
             <h4 class="mt10 mb8">Home Device Inventory</h4>
             <div class="row-wrap">
               <button id="addHomeDeviceBtn" class="btn">+ Add Device</button>
+              <button id="scanHomeDevicesBtn" class="btn ghost">Scan Reachability</button>
             </div>
             <div id="settingsHomeDevicesList" class="change-log-list"></div>
           </section>
@@ -176,6 +177,7 @@
       <div class="card utility-card" data-pod-id="calendar">
         <div class="pod-header">
           <h2>🗓️ Calendar <span id="calendarStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
+          <button id="calendarDiaryRefreshBtn" class="btn ghost">Refresh Diary Index</button>
         </div>
         <div id="calendarWidget" class="widget-block"></div>
         <div id="calendarSelectedDate" class="note-meta mt8"></div>
@@ -338,6 +340,16 @@
   <section class="stats" id="stats"></section>
 
   <section class="board" id="board"></section>
+
+  <dialog id="calendarDiaryDialog">
+    <form method="dialog" class="diary-dialog-form">
+      <div class="row-between-wrap">
+        <h3 id="calendarDiaryDialogDate" class="m0">Diary entries</h3>
+        <button id="calendarDiaryDialogCloseBtn" class="btn ghost" type="button">Close</button>
+      </div>
+      <div id="calendarDiaryDialogList" class="diary-dialog-list"></div>
+    </form>
+  </dialog>
 
   <dialog id="projectDialog">
     <form method="dialog" id="projectForm">
