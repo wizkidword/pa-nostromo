@@ -97,6 +97,7 @@ const META_GRAPH_BACKOFF_MAX_MS = Math.max(META_GRAPH_BACKOFF_BASE_MS, parsePosi
 const META_GRAPH_STALE_AFTER_MS = Math.max(60_000, parsePositiveInt(process.env.META_GRAPH_STALE_AFTER_MS, 180000));
 const META_GRAPH_CRITICAL_STALE_AFTER_MS = Math.max(META_GRAPH_STALE_AFTER_MS, parsePositiveInt(process.env.META_GRAPH_CRITICAL_STALE_AFTER_MS, 900000));
 const META_GRAPH_ALLOW_REMOTE = parseBool(process.env.META_GRAPH_ALLOW_REMOTE);
+const FACEBOOK_PAGE_URL = String(process.env.FACEBOOK_PAGE_URL || 'https://www.facebook.com/blastfromtheads').trim() || 'https://www.facebook.com/blastfromtheads';
 const FACEBOOK_FOLLOWERS_PATH = path.join(DATA_DIR, 'facebook-followers.json');
 const FACEBOOK_FOLLOWERS_LOG_PATH = path.join(ROOT, 'logs', 'facebook-followers-poller.log');
 const FACEBOOK_FOLLOWERS_HISTORY_LIMIT = 1440;
@@ -127,7 +128,7 @@ function ensureFacebookFollowersShape(input){
     followersCount: Number.isFinite(Number(base.latest.followersCount)) ? Number(base.latest.followersCount) : null,
     fanCount: Number.isFinite(Number(base.latest.fanCount)) ? Number(base.latest.fanCount) : null,
     fetchedAt: String(base.latest.fetchedAt || ''),
-    source: String(base.latest.source || 'meta_graph'),
+    source: String(base.latest.source || 'graph_api'),
     requestId: String(base.latest.requestId || ''),
     latencyMs: Number.isFinite(Number(base.latest.latencyMs)) ? Math.max(0, Number(base.latest.latencyMs)) : null,
     stale: !!base.latest.stale,
@@ -183,6 +184,43 @@ function getFacebookReasonCode(status, errorMessage){
   return 'meta_fetch_failed';
 }
 
+function parseCompactCount(value){
+  const raw = String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+  if (!raw) return null;
+  const m = raw.match(/^(\d+(?:\.\d+)?)([kmb])?$/i);
+  if (!m) return null;
+  const base = Number(m[1]);
+  if (!Number.isFinite(base)) return null;
+  const suffix = String(m[2] || '').toLowerCase();
+  const mult = suffix === 'k' ? 1_000 : suffix === 'm' ? 1_000_000 : suffix === 'b' ? 1_000_000_000 : 1;
+  return Math.round(base * mult);
+}
+
+function extractFacebookPublicFollowerEstimate(html){
+  const text = String(html || '');
+  if (!text) return { count: null, signal: '' };
+  const candidates = [];
+  const push = (raw, signal) => {
+    const compact = parseCompactCount(String(raw || '').replace(/,/g, ''));
+    if (!Number.isFinite(compact) || compact <= 0) return;
+    candidates.push({ count: compact, signal });
+  };
+  const patterns = [
+    { signal: 'followers_count_json', rx: /"followers_count"\s*[:=]\s*"?([0-9][0-9,.]*\s*[kKmMbB]?)"?/g },
+    { signal: 'fan_count_json', rx: /"fan_count"\s*[:=]\s*"?([0-9][0-9,.]*\s*[kKmMbB]?)"?/g },
+    { signal: 'followers_text', rx: /([0-9][0-9,.]*\s*[kKmMbB]?)\s*(?:followers|people\s+follow\s+this)/gi },
+    { signal: 'likes_text', rx: /([0-9][0-9,.]*\s*[kKmMbB]?)\s*likes?/gi },
+    { signal: 'followers_text_reverse', rx: /(?:followers|people\s+follow\s+this)\D{0,24}([0-9][0-9,.]*\s*[kKmMbB]?)/gi },
+  ];
+  for (const p of patterns) {
+    let m;
+    while ((m = p.rx.exec(text)) !== null) push(m[1], p.signal);
+  }
+  if (!candidates.length) return { count: null, signal: '' };
+  candidates.sort((a, b) => b.count - a.count);
+  return candidates[0];
+}
+
 async function delay(ms){ return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 function facebookFollowerResponsePayload(opts = {}){
@@ -195,6 +233,7 @@ function facebookFollowerResponsePayload(opts = {}){
       followersCount: facebookFollowersState.latest.followersCount,
       fanCount: facebookFollowersState.latest.fanCount,
       fetchedAt: facebookFollowersState.latest.fetchedAt,
+      source: facebookFollowersState.latest.source || 'meta_graph',
     } : null,
     status: {
       stale: freshness.stale,
@@ -211,73 +250,116 @@ function facebookFollowerResponsePayload(opts = {}){
 
 async function pollFacebookFollowers({ source = 'interval' } = {}){
   if (facebookFollowersPollInFlight) return facebookFollowersPollInFlight;
-  const disabled = !META_GRAPH_PAGE_ID || !META_GRAPH_PAGE_ACCESS_TOKEN;
-  if (disabled) {
-    facebookFollowersState.status.ok = false;
-    facebookFollowersState.status.lastError = 'facebook_followers_disabled_missing_meta_graph_config';
-    facebookFollowersState.updatedAt = new Date().toISOString();
-    return facebookFollowerResponsePayload();
-  }
 
   const run = (async () => {
     const requestId = 'fbf_' + Date.now().toString(36) + '_' + crypto.randomBytes(2).toString('hex');
     const startedAt = Date.now();
     const attempts = Math.max(1, META_GRAPH_MAX_RETRIES);
+    const graphEnabled = !!(META_GRAPH_PAGE_ID && META_GRAPH_PAGE_ACCESS_TOKEN);
+
     let httpStatus = 0;
     let lastErr = '';
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      facebookFollowersState.status.lastAttemptAt = new Date().toISOString();
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), META_GRAPH_TIMEOUT_MS);
-      try {
-        const endpoint = 'https://graph.facebook.com/' + encodeURIComponent(META_GRAPH_API_VERSION) + '/' + encodeURIComponent(META_GRAPH_PAGE_ID) + '?fields=followers_count,fan_count,name&access_token=' + encodeURIComponent(META_GRAPH_PAGE_ACCESS_TOKEN);
-        const res = await fetch(endpoint, { method: 'GET', signal: controller.signal, headers: { 'Accept': 'application/json' } });
-        httpStatus = Number(res.status || 0);
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          const detail = body?.error?.message || ('HTTP ' + res.status);
-          throw Object.assign(new Error(detail), { httpStatus: res.status, retryAfter: res.headers.get('retry-after') || '' });
+    let graphErrorReason = graphEnabled ? '' : 'facebook_followers_graph_disabled_missing_meta_graph_config';
+
+    if (graphEnabled) {
+      for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        facebookFollowersState.status.lastAttemptAt = new Date().toISOString();
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), META_GRAPH_TIMEOUT_MS);
+        try {
+          const endpoint = 'https://graph.facebook.com/' + encodeURIComponent(META_GRAPH_API_VERSION) + '/' + encodeURIComponent(META_GRAPH_PAGE_ID) + '?fields=followers_count,fan_count,name&access_token=' + encodeURIComponent(META_GRAPH_PAGE_ACCESS_TOKEN);
+          const res = await fetch(endpoint, { method: 'GET', signal: controller.signal, headers: { 'Accept': 'application/json' } });
+          httpStatus = Number(res.status || 0);
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const detail = body?.error?.message || ('HTTP ' + res.status);
+            throw Object.assign(new Error(detail), { httpStatus: res.status, retryAfter: res.headers.get('retry-after') || '' });
+          }
+          const followersCount = Number.isFinite(Number(body?.followers_count)) ? Number(body.followers_count) : null;
+          const fanCount = Number.isFinite(Number(body?.fan_count)) ? Number(body.fan_count) : null;
+          const resolvedCount = Number.isFinite(followersCount) ? followersCount : fanCount;
+          if (!Number.isFinite(resolvedCount)) throw Object.assign(new Error('followers_count_missing'), { httpStatus: 502 });
+          const fetchedAt = new Date().toISOString();
+          const stale = classifyFacebookFollowerStaleLevel(fetchedAt).stale;
+          const latencyMs = Math.max(0, Date.now() - startedAt);
+          facebookFollowersState.page = { id: META_GRAPH_PAGE_ID, name: String(body?.name || facebookFollowersState.page?.name || '').trim() };
+          facebookFollowersState.latest = { followersCount: resolvedCount, fanCount, fetchedAt, source: 'graph_api', requestId, latencyMs, stale };
+          facebookFollowersState.status = { ok: true, lastSuccessAt: fetchedAt, lastAttemptAt: fetchedAt, consecutiveFailures: 0, lastError: '' };
+          facebookFollowersState.history.push({ followersCount: resolvedCount, fetchedAt });
+          if (facebookFollowersState.history.length > FACEBOOK_FOLLOWERS_HISTORY_LIMIT) facebookFollowersState.history = facebookFollowersState.history.slice(-FACEBOOK_FOLLOWERS_HISTORY_LIMIT);
+          facebookFollowersState.updatedAt = new Date().toISOString();
+          await persistFacebookFollowersState();
+          await appendFacebookFollowersLog({ ts: new Date().toISOString(), event: 'facebook_followers_poll', ok: true, source, requestId, attempt, retries: attempt - 1, httpStatus, latencyMs, followersCount: resolvedCount, provider: 'graph_api', ageMs: 0, error: '' });
+          return facebookFollowerResponsePayload();
+        } catch (err) {
+          const message = String(err?.message || err || 'poll_failed').slice(0, 220);
+          const status = Number(err?.httpStatus || 0);
+          httpStatus = status || httpStatus;
+          lastErr = message;
+          graphErrorReason = (getFacebookReasonCode(httpStatus, lastErr) + ': ' + lastErr).slice(0, 280);
+          const transient = [408, 425, 429, 500, 502, 503, 504].includes(status) || /abort|timeout/i.test(message);
+          if (attempt >= attempts || !transient) break;
+          let delayMs = Math.min(META_GRAPH_BACKOFF_BASE_MS * (2 ** (attempt - 1)), META_GRAPH_BACKOFF_MAX_MS);
+          const retryAfter = Number(err?.retryAfter || 0);
+          if (Number.isFinite(retryAfter) && retryAfter > 0) delayMs = Math.max(delayMs, retryAfter * 1000);
+          await delay(delayMs);
+        } finally {
+          clearTimeout(timeout);
         }
-        const followersCount = Number.isFinite(Number(body?.followers_count)) ? Number(body.followers_count) : null;
-        const fanCount = Number.isFinite(Number(body?.fan_count)) ? Number(body.fan_count) : null;
-        const resolvedCount = Number.isFinite(followersCount) ? followersCount : fanCount;
-        if (!Number.isFinite(resolvedCount)) throw Object.assign(new Error('followers_count_missing'), { httpStatus: 502 });
-        const fetchedAt = new Date().toISOString();
-        const stale = classifyFacebookFollowerStaleLevel(fetchedAt).stale;
-        const latencyMs = Math.max(0, Date.now() - startedAt);
-        facebookFollowersState.page = { id: META_GRAPH_PAGE_ID, name: String(body?.name || facebookFollowersState.page?.name || '').trim() };
-        facebookFollowersState.latest = { followersCount: resolvedCount, fanCount, fetchedAt, source: 'meta_graph', requestId, latencyMs, stale };
-        facebookFollowersState.status = { ok: true, lastSuccessAt: fetchedAt, lastAttemptAt: fetchedAt, consecutiveFailures: 0, lastError: '' };
-        facebookFollowersState.history.push({ followersCount: resolvedCount, fetchedAt });
-        if (facebookFollowersState.history.length > FACEBOOK_FOLLOWERS_HISTORY_LIMIT) facebookFollowersState.history = facebookFollowersState.history.slice(-FACEBOOK_FOLLOWERS_HISTORY_LIMIT);
-        facebookFollowersState.updatedAt = new Date().toISOString();
-        await persistFacebookFollowersState();
-        await appendFacebookFollowersLog({ ts: new Date().toISOString(), event: 'facebook_followers_poll', ok: true, source, requestId, attempt, retries: attempt - 1, httpStatus, latencyMs, followersCount: resolvedCount, ageMs: 0, error: '' });
-        return facebookFollowerResponsePayload();
-      } catch (err) {
-        const message = String(err?.message || err || 'poll_failed').slice(0, 220);
-        const status = Number(err?.httpStatus || 0);
-        httpStatus = status || httpStatus;
-        lastErr = message;
-        const transient = [408, 425, 429, 500, 502, 503, 504].includes(status) || /abort|timeout/i.test(message);
-        if (attempt >= attempts || !transient) break;
-        let delayMs = Math.min(META_GRAPH_BACKOFF_BASE_MS * (2 ** (attempt - 1)), META_GRAPH_BACKOFF_MAX_MS);
-        const retryAfter = Number(err?.retryAfter || 0);
-        if (Number.isFinite(retryAfter) && retryAfter > 0) delayMs = Math.max(delayMs, retryAfter * 1000);
-        await delay(delayMs);
-      } finally {
-        clearTimeout(timeout);
       }
     }
 
-    facebookFollowersState.status.ok = false;
-    facebookFollowersState.status.consecutiveFailures = (facebookFollowersState.status.consecutiveFailures || 0) + 1;
-    facebookFollowersState.status.lastError = (getFacebookReasonCode(httpStatus, lastErr) + ': ' + lastErr).slice(0, 280);
-    facebookFollowersState.updatedAt = new Date().toISOString();
-    await persistFacebookFollowersState();
-    const freshness = classifyFacebookFollowerStaleLevel(facebookFollowersState.status.lastSuccessAt || '');
-    await appendFacebookFollowersLog({ ts: new Date().toISOString(), event: 'facebook_followers_poll', ok: false, source, requestId, attempt: attempts, retries: attempts - 1, httpStatus, latencyMs: Math.max(0, Date.now() - startedAt), followersCount: facebookFollowersState.latest?.followersCount ?? null, ageMs: freshness.ageMs, error: facebookFollowersState.status.lastError });
-    return facebookFollowerResponsePayload();
+    facebookFollowersState.status.lastAttemptAt = new Date().toISOString();
+    const scrapeController = new AbortController();
+    const scrapeTimeout = setTimeout(() => scrapeController.abort(), META_GRAPH_TIMEOUT_MS);
+    try {
+      const res = await fetch(FACEBOOK_PAGE_URL, {
+        method: 'GET',
+        signal: scrapeController.signal,
+        headers: {
+          'Accept': 'text/html,application/xhtml+xml',
+          'User-Agent': 'Mozilla/5.0 MissionControlLite/1.0 (+facebook-followers-fallback)'
+        }
+      });
+      httpStatus = Number(res.status || 0);
+      const html = await res.text();
+      if (!res.ok) throw Object.assign(new Error('public_page_http_' + res.status), { httpStatus: res.status });
+      const parsed = extractFacebookPublicFollowerEstimate(html);
+      if (!Number.isFinite(parsed.count)) throw Object.assign(new Error('public_follower_signal_not_found'), { httpStatus: 502 });
+      const fetchedAt = new Date().toISOString();
+      const stale = classifyFacebookFollowerStaleLevel(fetchedAt).stale;
+      const latencyMs = Math.max(0, Date.now() - startedAt);
+      const titleMatch = html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i) || html.match(/<title>([^<]+)<\/title>/i);
+      const derivedName = String(titleMatch?.[1] || '').trim();
+      facebookFollowersState.page = {
+        id: facebookFollowersState.page?.id || META_GRAPH_PAGE_ID || FACEBOOK_PAGE_URL,
+        name: derivedName || facebookFollowersState.page?.name || ''
+      };
+      facebookFollowersState.latest = { followersCount: parsed.count, fanCount: null, fetchedAt, source: 'public_scrape_estimate', requestId, latencyMs, stale };
+      facebookFollowersState.status = { ok: true, lastSuccessAt: fetchedAt, lastAttemptAt: fetchedAt, consecutiveFailures: 0, lastError: graphErrorReason ? ('graph_unavailable_using_fallback: ' + graphErrorReason).slice(0, 280) : '' };
+      facebookFollowersState.history.push({ followersCount: parsed.count, fetchedAt });
+      if (facebookFollowersState.history.length > FACEBOOK_FOLLOWERS_HISTORY_LIMIT) facebookFollowersState.history = facebookFollowersState.history.slice(-FACEBOOK_FOLLOWERS_HISTORY_LIMIT);
+      facebookFollowersState.updatedAt = new Date().toISOString();
+      await persistFacebookFollowersState();
+      await appendFacebookFollowersLog({ ts: new Date().toISOString(), event: 'facebook_followers_poll', ok: true, source, requestId, httpStatus, latencyMs, followersCount: parsed.count, provider: 'public_scrape_estimate', ageMs: 0, error: graphErrorReason || '', signal: parsed.signal || '' });
+      return facebookFollowerResponsePayload();
+    } catch (err) {
+      const message = String(err?.message || err || 'public_scrape_failed').slice(0, 220);
+      const status = Number(err?.httpStatus || 0);
+      httpStatus = status || httpStatus;
+      const publicReason = ((status === 401 || status === 403) ? 'public_scrape_blocked' : /not_found/i.test(message) ? 'public_signal_not_found' : /abort|timeout/i.test(message) ? 'public_scrape_timeout' : 'public_scrape_failed') + ': ' + message;
+      facebookFollowersState.status.ok = false;
+      facebookFollowersState.status.consecutiveFailures = (facebookFollowersState.status.consecutiveFailures || 0) + 1;
+      facebookFollowersState.status.lastError = (graphErrorReason ? (graphErrorReason + ' | ') : '') + publicReason;
+      facebookFollowersState.status.lastError = facebookFollowersState.status.lastError.slice(0, 280);
+      facebookFollowersState.updatedAt = new Date().toISOString();
+      await persistFacebookFollowersState();
+      const freshness = classifyFacebookFollowerStaleLevel(facebookFollowersState.status.lastSuccessAt || '');
+      await appendFacebookFollowersLog({ ts: new Date().toISOString(), event: 'facebook_followers_poll', ok: false, source, requestId, httpStatus, latencyMs: Math.max(0, Date.now() - startedAt), followersCount: facebookFollowersState.latest?.followersCount ?? null, ageMs: freshness.ageMs, provider: 'public_scrape_estimate', error: facebookFollowersState.status.lastError });
+      return facebookFollowerResponsePayload();
+    } finally {
+      clearTimeout(scrapeTimeout);
+    }
   })();
 
   facebookFollowersPollInFlight = run;
@@ -2010,4 +2092,6 @@ module.exports = {
   classifyFacebookFollowerStaleLevel,
   ensureFacebookFollowersShape,
   facebookFollowerResponsePayload,
+  extractFacebookPublicFollowerEstimate,
+  parseCompactCount,
 };

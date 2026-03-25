@@ -84,16 +84,17 @@ Open: `http://localhost:4187`
 - `RSS_FETCH_MAX_BYTES`
 - `RSS_FETCH_MAX_FEEDS`
 
-### Facebook follower pod (Meta Graph)
+### Facebook follower pod (Graph API + fallback)
 
-Required:
+Primary (recommended):
 
 - `META_GRAPH_API_VERSION` (default `v22.0`)
 - `META_GRAPH_PAGE_ID`
 - `META_GRAPH_PAGE_ACCESS_TOKEN`
 
-Optional:
+Fallback / optional:
 
+- `FACEBOOK_PAGE_URL` (default `https://www.facebook.com/blastfromtheads`)
 - `META_GRAPH_POLL_INTERVAL_MS` (default `60000`, min enforced to 60s)
 - `META_GRAPH_TIMEOUT_MS` (default `8000`)
 - `META_GRAPH_MAX_RETRIES` (default `3`)
@@ -103,7 +104,9 @@ Optional:
 - `META_GRAPH_CRITICAL_STALE_AFTER_MS` (default `900000`)
 - `META_GRAPH_ALLOW_REMOTE` (default `0`)
 
-The backend polls Graph API every minute and persists snapshots to `data/facebook-followers.json` with append-only poll logs in `logs/facebook-followers-poller.log`.
+The backend polls every minute and persists snapshots to `data/facebook-followers.json` with append-only poll logs in `logs/facebook-followers-poller.log`.
+
+If Graph credentials are missing/invalid (or Graph fetch fails), the service fetches `FACEBOOK_PAGE_URL` and tries to estimate followers from public HTML/embedded JSON signals. This is best-effort and can drift or fail when Facebook changes markup.
 
 Optional watchdog cron (defense-in-depth):
 

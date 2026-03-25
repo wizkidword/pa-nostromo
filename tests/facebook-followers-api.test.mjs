@@ -31,7 +31,7 @@ async function main(){
       followersCount: 12345,
       fanCount: 12000,
       fetchedAt: staleFetchedAt,
-      source: 'meta_graph',
+      source: 'graph_api',
       requestId: 'qa_seed',
       latencyMs: 10,
       stale: true
@@ -68,13 +68,14 @@ async function main(){
     const getPayload = await getRes.json();
     assert.equal(getPayload.ok, true);
     assert.equal(getPayload.latest.followersCount, 12345);
+    assert.equal(getPayload.latest.source, 'graph_api');
     assert.equal(getPayload.status.staleLevel, 'stale');
 
     const refreshRes = await fetch(`http://127.0.0.1:${port}/api/facebook-followers/refresh?source=qa`, { method: 'POST' });
     assert.equal(refreshRes.status, 200);
     const refreshPayload = await refreshRes.json();
     assert.equal(refreshPayload.ok, true);
-    assert.match(String(refreshPayload.status.lastError || ''), /facebook_followers_disabled_missing_meta_graph_config/);
+    assert.match(String(refreshPayload.status.lastError || ''), /graph_disabled|graph_unavailable_using_fallback|public_scrape/i);
 
     const healthRes = await fetch(`http://127.0.0.1:${port}/api/facebook-followers/health`);
     assert.equal(healthRes.status, 200);

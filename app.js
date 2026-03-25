@@ -321,6 +321,7 @@ const seed = {
     pageName: '',
     pageId: '',
     fetchedAt: '',
+    source: '',
     staleLevel: 'fresh',
     ageMs: null,
     lastError: '',
@@ -3546,7 +3547,7 @@ function mountRssSettingsFeeds(){
 }
 
 async function fetchFacebookFollowers(options = {}){
-  state.facebookFollowers = state.facebookFollowers && typeof state.facebookFollowers === 'object' ? state.facebookFollowers : { followersCount: null, fanCount: null, pageName: '', pageId: '', fetchedAt: '', staleLevel: 'fresh', ageMs: null, lastError: '', loading: false };
+  state.facebookFollowers = state.facebookFollowers && typeof state.facebookFollowers === 'object' ? state.facebookFollowers : { followersCount: null, fanCount: null, pageName: '', pageId: '', fetchedAt: '', source: '', staleLevel: 'fresh', ageMs: null, lastError: '', loading: false };
   const manual = !!options.manual;
   const endpoint = manual ? '/api/facebook-followers/refresh?source=manual' : '/api/facebook-followers';
   const method = manual ? 'POST' : 'GET';
@@ -3562,6 +3563,7 @@ async function fetchFacebookFollowers(options = {}){
     state.facebookFollowers.pageName = String(payload?.page?.name || '');
     state.facebookFollowers.pageId = String(payload?.page?.id || '');
     state.facebookFollowers.fetchedAt = String(payload?.latest?.fetchedAt || payload?.status?.lastSuccessAt || '');
+    state.facebookFollowers.source = String(payload?.latest?.source || '');
     state.facebookFollowers.staleLevel = String(payload?.status?.staleLevel || 'critical');
     state.facebookFollowers.ageMs = Number.isFinite(Number(payload?.status?.ageMs)) ? Number(payload.status.ageMs) : null;
     state.facebookFollowers.lastError = String(payload?.status?.lastError || '').slice(0, 300);
@@ -3592,13 +3594,15 @@ function renderFacebookFollowersPod(options = {}){
     else setPodStatusSignal('facebook-followers', 'error', 'critical stale');
 
     if (displayCount == null) {
-      el.innerHTML = '<div class="note-meta">No Facebook follower data yet. Configure META_GRAPH_PAGE_ID + META_GRAPH_PAGE_ACCESS_TOKEN, then refresh.</div>';
+      el.innerHTML = '<div class="note-meta">No Facebook follower data yet. Configure Meta Graph credentials or set FACEBOOK_PAGE_URL for fallback scrape mode, then refresh.</div>';
       meta.textContent = ff.lastError ? ('Error: ' + ff.lastError) : 'Waiting for first successful fetch.';
       return;
     }
 
+    const source = String(ff.source || '').toLowerCase();
+    const sourceLabel = source === 'public_scrape_estimate' ? 'public_scrape_estimate' : 'graph_api';
     el.innerHTML = '<div class="facebook-followers-count">' + new Intl.NumberFormat().format(displayCount) + '</div>' +
-      '<div class="note-meta">Page: ' + escapeHtml(ff.pageName || ff.pageId || 'Unknown') + (count == null && fallback != null ? ' · source fan_count fallback' : '') + '</div>' +
+      '<div class="note-meta">Page: ' + escapeHtml(ff.pageName || ff.pageId || 'Unknown') + ' <span class="badge">' + escapeHtml(sourceLabel) + '</span>' + (count == null && fallback != null ? ' · source fan_count fallback' : '') + '</div>' +
       (ff.lastError ? ('<div class="note-meta">Last error: ' + escapeHtml(ff.lastError) + '</div>') : '');
 
     const ageLabel = Number.isFinite(Number(ff.ageMs)) ? Math.floor(Number(ff.ageMs) / 60000) + 'm ago' : 'unknown';
