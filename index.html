@@ -225,6 +225,14 @@
         <div id="cryptoWidget" class="widget-block">Loading crypto market data...</div>
         <div id="cryptoUpdatedAt" class="note-meta mt6"></div>
       </div>
+      <div class="card utility-card" data-pod-id="facebook-followers">
+        <div class="pod-header">
+          <h2>📘 Facebook Followers <span id="facebook-followersStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
+          <button id="facebookFollowersRefreshBtn" class="btn ghost">Refresh</button>
+        </div>
+        <div id="facebookFollowersWidget" class="widget-block">Loading Facebook follower data...</div>
+        <div id="facebookFollowersUpdatedAt" class="note-meta mt6"></div>
+      </div>
       <div class="card utility-card" data-pod-id="speed-test">
         <div class="pod-header">
           <h2>🚀 Speed Test <span id="speed-testStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
@@ -344,8 +352,8 @@
   <dialog id="calendarDiaryDialog">
     <form method="dialog" class="diary-dialog-form">
       <div class="row-between-wrap">
-        <h3 id="calendarDiaryDialogDate" class="m0">Diary entries</h3>
         <button id="calendarDiaryDialogCloseBtn" class="btn ghost" type="button">Close</button>
+        <h3 id="calendarDiaryDialogDate" class="m0">Diary entries</h3>
       </div>
       <div id="calendarDiaryDialogList" class="diary-dialog-list"></div>
     </form>

@@ -1720,3 +1720,11 @@ menu {
 .home-device-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:1500;}
 .home-device-modal{background:var(--panel,#1f232a);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:12px;max-width:320px;width:90%;}
 .home-device-settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px;}
+
+.facebook-followers-count {
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+  margin-bottom: 6px;
+}

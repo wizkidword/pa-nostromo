@@ -38,7 +38,7 @@ const DEFAULT_SETTINGS = {
 const DEFAULT_UTILITY_LAYOUT_ROWS = [
   ['shortcuts'],
   ['date-time', 'calendar', 'gas-prices'],
-  ['nba-scores', 'crypto-tracker', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'],
+  ['nba-scores', 'crypto-tracker', 'facebook-followers', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'],
   ['camera-feed', 'live-streams'],
   ['voice-note', 'voice-to-rowan', 'music-player'],
 ];
@@ -315,6 +315,17 @@ const seed = {
     lastUpdatedAt: '',
     lastError: '',
   },
+  facebookFollowers: {
+    followersCount: null,
+    fanCount: null,
+    pageName: '',
+    pageId: '',
+    fetchedAt: '',
+    staleLevel: 'fresh',
+    ageMs: null,
+    lastError: '',
+    loading: false,
+  },
   gasPrices: {
     location: LOCAL_ZIP,
     resolvedLocation: '',
@@ -416,6 +427,7 @@ const pollingFailureState = {
   'nba-scores': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'rss-feed': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'crypto-tracker': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
+  'facebook-followers': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'system-resource-monitor': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'speed-test': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
 };
@@ -1760,6 +1772,53 @@ function buildDiaryExecutiveSummary(entry = {}, fallbackDate = ''){
   ].join('\n').trim();
 }
 
+function buildDiaryFullCleanEntry(entry = {}, fallbackDate = ''){
+  const title = formatDiaryEntryTitle(entry);
+  const project = String(entry.project || 'project').trim() || 'project';
+  const dateValue = entry.time ? new Date(entry.time) : null;
+  const dateLabel = Number.isFinite(dateValue?.getTime()) ? dateValue.toLocaleDateString() : String(fallbackDate || '').trim();
+  const lines = String(entry.rawContent || entry.content || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const out = [title, `${dateLabel} · ${project}`, ''];
+  let skipTailSection = false;
+
+  for (const line of lines) {
+    if (/^##\s+suggested calendar-pod diary usage/i.test(line)) {
+      skipTailSection = true;
+      continue;
+    }
+    if (skipTailSection) continue;
+    if (/^#\s+/.test(line)) continue;
+    if (/^(date|owner)\s*:/i.test(line)) continue;
+
+    const heading = line.match(/^##+\s+(.+)/);
+    if (heading) {
+      out.push('');
+      out.push(heading[1].trim());
+      continue;
+    }
+
+    const bullet = line.match(/^[-*]\s+(.+)/);
+    if (bullet) {
+      out.push(`- ${bullet[1].trim()}`);
+      continue;
+    }
+
+    const numbered = line.match(/^(\d+[\.)])\s+(.+)/);
+    if (numbered) {
+      out.push(`${numbered[1]} ${numbered[2].trim()}`);
+      continue;
+    }
+
+    out.push(line);
+  }
+
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 async function copyTextToClipboard(text){
   const value = String(text || '');
   if (!value) throw new Error('Nothing to copy.');
@@ -1791,7 +1850,7 @@ async function copyTextToClipboard(text){
 function setDiaryCopyFeedback(button, message, isError = false){
   if (!button) return;
   const statusEl = button.parentElement?.querySelector('[data-diary-copy-status]');
-  const original = button.dataset.originalLabel || 'Copy executive summary';
+  const original = button.dataset.originalLabel || 'Copy entry';
   button.dataset.originalLabel = original;
   button.textContent = message;
   button.classList.toggle('is-error', !!isError);
@@ -1833,7 +1892,7 @@ function renderDiaryDialog(date){
         </button>
         <div class="diary-entry-full" hidden>
           <div class="diary-copy-row">
-            <button type="button" class="btn ghost diary-copy-btn" data-diary-copy-index="${idx}">Copy executive summary</button>
+            <button type="button" class="btn ghost diary-copy-btn" data-diary-copy-index="${idx}">Copy entry</button>
             <span class="diary-copy-status" data-diary-copy-status aria-live="polite"></span>
           </div>
           ${full.replaceAll('\n', '<br>')}
@@ -1857,9 +1916,9 @@ function renderDiaryDialog(date){
       btn.addEventListener('click', async () => {
         const index = Number(btn.getAttribute('data-diary-copy-index'));
         if (!Number.isInteger(index) || index < 0 || index >= entries.length) return;
-        const summary = buildDiaryExecutiveSummary(entries[index], date);
+        const cleanEntry = buildDiaryFullCleanEntry(entries[index], date);
         try {
-          await copyTextToClipboard(summary);
+          await copyTextToClipboard(cleanEntry);
           setDiaryCopyFeedback(btn, 'Copied!');
         } catch {
           setDiaryCopyFeedback(btn, 'Copy failed', true);
@@ -3483,6 +3542,67 @@ function mountRssSettingsFeeds(){
       mountRssSettingsFeeds();
       renderRssPod({ skipFetch: true });
     });
+  });
+}
+
+async function fetchFacebookFollowers(options = {}){
+  state.facebookFollowers = state.facebookFollowers && typeof state.facebookFollowers === 'object' ? state.facebookFollowers : { followersCount: null, fanCount: null, pageName: '', pageId: '', fetchedAt: '', staleLevel: 'fresh', ageMs: null, lastError: '', loading: false };
+  const manual = !!options.manual;
+  const endpoint = manual ? '/api/facebook-followers/refresh?source=manual' : '/api/facebook-followers';
+  const method = manual ? 'POST' : 'GET';
+  const backoffMs = pollingBackoffState('facebook-followers').backoffUntil - Date.now();
+  if (!manual && backoffMs > 0) return null;
+  state.facebookFollowers.loading = true;
+  try {
+    const res = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' } });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok && !payload?.status) throw new Error(payload?.error || payload?.message || 'facebook followers fetch failed');
+    state.facebookFollowers.followersCount = Number.isFinite(Number(payload?.latest?.followersCount)) ? Number(payload.latest.followersCount) : null;
+    state.facebookFollowers.fanCount = Number.isFinite(Number(payload?.latest?.fanCount)) ? Number(payload.latest.fanCount) : null;
+    state.facebookFollowers.pageName = String(payload?.page?.name || '');
+    state.facebookFollowers.pageId = String(payload?.page?.id || '');
+    state.facebookFollowers.fetchedAt = String(payload?.latest?.fetchedAt || payload?.status?.lastSuccessAt || '');
+    state.facebookFollowers.staleLevel = String(payload?.status?.staleLevel || 'critical');
+    state.facebookFollowers.ageMs = Number.isFinite(Number(payload?.status?.ageMs)) ? Number(payload.status.ageMs) : null;
+    state.facebookFollowers.lastError = String(payload?.status?.lastError || '').slice(0, 300);
+    clearPollingBackoff('facebook-followers');
+  } catch (error) {
+    const backoff = registerPollingFailure('facebook-followers', error, 'Facebook followers unavailable');
+    state.facebookFollowers.lastError = String(error?.message || error || 'fetch_failed').slice(0, 300);
+    if (!state.facebookFollowers.staleLevel) state.facebookFollowers.staleLevel = 'critical';
+    setPodStatusSignal('facebook-followers', 'stale', 'retry ' + Math.ceil(backoff / 1000) + 's');
+  } finally {
+    state.facebookFollowers.loading = false;
+  }
+  return state.facebookFollowers;
+}
+
+function renderFacebookFollowersPod(options = {}){
+  const el = document.getElementById('facebookFollowersWidget');
+  const meta = document.getElementById('facebookFollowersUpdatedAt');
+  if (!el || !meta) return;
+  fetchFacebookFollowers(options).then(() => {
+    const ff = state.facebookFollowers || {};
+    const count = Number.isFinite(Number(ff.followersCount)) ? Number(ff.followersCount) : null;
+    const fallback = Number.isFinite(Number(ff.fanCount)) ? Number(ff.fanCount) : null;
+    const displayCount = Number.isFinite(count) ? count : fallback;
+    const stale = String(ff.staleLevel || 'critical');
+    if (stale === 'fresh') setPodStatusSignal('facebook-followers', 'fresh', 'live');
+    else if (stale === 'stale') setPodStatusSignal('facebook-followers', 'stale', 'stale');
+    else setPodStatusSignal('facebook-followers', 'error', 'critical stale');
+
+    if (displayCount == null) {
+      el.innerHTML = '<div class="note-meta">No Facebook follower data yet. Configure META_GRAPH_PAGE_ID + META_GRAPH_PAGE_ACCESS_TOKEN, then refresh.</div>';
+      meta.textContent = ff.lastError ? ('Error: ' + ff.lastError) : 'Waiting for first successful fetch.';
+      return;
+    }
+
+    el.innerHTML = '<div class="facebook-followers-count">' + new Intl.NumberFormat().format(displayCount) + '</div>' +
+      '<div class="note-meta">Page: ' + escapeHtml(ff.pageName || ff.pageId || 'Unknown') + (count == null && fallback != null ? ' · source fan_count fallback' : '') + '</div>' +
+      (ff.lastError ? ('<div class="note-meta">Last error: ' + escapeHtml(ff.lastError) + '</div>') : '');
+
+    const ageLabel = Number.isFinite(Number(ff.ageMs)) ? Math.floor(Number(ff.ageMs) / 60000) + 'm ago' : 'unknown';
+    meta.textContent = 'Updated: ' + (ff.fetchedAt ? new Date(ff.fetchedAt).toLocaleTimeString() : 'n/a') + ' · ' + stale + ' · ' + ageLabel;
   });
 }
 
@@ -6457,6 +6577,7 @@ function getUtilityPodLegacyRenderer(podId){
   if (podId === 'gas-prices') return () => renderGasPricesView();
   if (podId === 'nba-scores') return () => renderNbaScores();
   if (podId === 'crypto-tracker') return () => renderCrypto();
+  if (podId === 'facebook-followers') return () => renderFacebookFollowersPod();
   if (podId === 'rss-feed') return () => renderRss();
   if (podId === 'everyday-calculator') return () => renderEverydayCalculatorPod();
   if (podId === 'system-resource-monitor') return () => renderSystemResourceMonitorPod();
@@ -6466,7 +6587,7 @@ function getUtilityPodLegacyRenderer(podId){
 }
 
 function syncUtilityPodLifecycle(){
-  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'];
+  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'facebook-followers', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'];
   managed.forEach((podId) => {
     const visible = state.layout?.visibility?.[podId] !== false;
     const legacyRender = getUtilityPodLegacyRenderer(podId);
@@ -8214,6 +8335,11 @@ if (!state.changelog.some((c) => c.message === speedTestPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: speedTestPatch });
 }
 
+const facebookFollowersPatch = 'New utility pod: Facebook Followers (Meta Graph) with 1-minute backend polling, stale-status badges, and manual refresh support.';
+if (!state.changelog.some((c) => c.message === facebookFollowersPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: facebookFollowersPatch });
+}
+
 save('startup_patch_seed', { pushShared: false });
 setupSettingsSectionNav();
 setupSettingsPaneDragScroll();
@@ -8222,6 +8348,7 @@ startSystemMonitorPolling();
 startSpeedTestAutoRun();
 fetchSystemMonitorSnapshot();
 setInterval(renderDateTime, 1000);
+setInterval(() => renderFacebookFollowersPod(), 60 * 1000);
 document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => renderWeatherPod({ manual: true }));
 document.getElementById('nbaRefreshBtn')?.addEventListener('click', () => renderNbaPod({ manual: true }));
 document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
@@ -8233,6 +8360,7 @@ document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
   renderCryptoPod({ manual: true });
 });
 document.getElementById('rssRefreshBtn')?.addEventListener('click', () => renderRssPod({ manual: true }));
+document.getElementById('facebookFollowersRefreshBtn')?.addEventListener('click', () => renderFacebookFollowersPod({ manual: true }));
 document.getElementById('gasFetchBtn')?.addEventListener('click', async () => {
   const input = String(document.getElementById('gasLocationInput')?.value || '').trim();
   await fetchGasPricesAuto(input);

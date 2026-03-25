@@ -14,7 +14,9 @@
     "qa:smoke:1e1:repeat": "node scripts/qa-repeat-1e1.mjs",
     "qa:smoke:1f": "node scripts/qa-smoke-phase-1f-release.mjs",
     "test:crypto": "node tests/crypto-failover.test.mjs",
-    "test:crypto-proxy": "node tests/crypto-proxy-curl-fallback.test.mjs"
+    "test:crypto-proxy": "node tests/crypto-proxy-curl-fallback.test.mjs",
+    "test:facebook-followers": "node tests/facebook-followers-api.test.mjs",
+    "qa:facebook-followers": "node scripts/qa-facebook-followers-smoke.mjs"
   },
   "license": "MIT"
 }

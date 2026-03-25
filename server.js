@@ -86,10 +86,247 @@ const SPEED_TEST_TIMEOUT_MS = Math.max(3000, parsePositiveInt(process.env.SPEED_
 const HOME_DEVICE_ALLOW_REMOTE = parseBool(process.env.HOME_DEVICE_ALLOW_REMOTE);
 const HOME_DEVICE_TIMEOUT_MS = Math.max(1000, parsePositiveInt(process.env.HOME_DEVICE_TIMEOUT_MS, 2500));
 
+const META_GRAPH_API_VERSION = String(process.env.META_GRAPH_API_VERSION || 'v22.0').trim() || 'v22.0';
+const META_GRAPH_PAGE_ID = String(process.env.META_GRAPH_PAGE_ID || '').trim();
+const META_GRAPH_PAGE_ACCESS_TOKEN = String(process.env.META_GRAPH_PAGE_ACCESS_TOKEN || '').trim();
+const META_GRAPH_POLL_INTERVAL_MS = Math.max(60_000, parsePositiveInt(process.env.META_GRAPH_POLL_INTERVAL_MS, 60_000));
+const META_GRAPH_TIMEOUT_MS = Math.max(1000, parsePositiveInt(process.env.META_GRAPH_TIMEOUT_MS, 8000));
+const META_GRAPH_MAX_RETRIES = Math.max(1, parsePositiveInt(process.env.META_GRAPH_MAX_RETRIES, 3));
+const META_GRAPH_BACKOFF_BASE_MS = Math.max(200, parsePositiveInt(process.env.META_GRAPH_BACKOFF_BASE_MS, 1000));
+const META_GRAPH_BACKOFF_MAX_MS = Math.max(META_GRAPH_BACKOFF_BASE_MS, parsePositiveInt(process.env.META_GRAPH_BACKOFF_MAX_MS, 15000));
+const META_GRAPH_STALE_AFTER_MS = Math.max(60_000, parsePositiveInt(process.env.META_GRAPH_STALE_AFTER_MS, 180000));
+const META_GRAPH_CRITICAL_STALE_AFTER_MS = Math.max(META_GRAPH_STALE_AFTER_MS, parsePositiveInt(process.env.META_GRAPH_CRITICAL_STALE_AFTER_MS, 900000));
+const META_GRAPH_ALLOW_REMOTE = parseBool(process.env.META_GRAPH_ALLOW_REMOTE);
+const FACEBOOK_FOLLOWERS_PATH = path.join(DATA_DIR, 'facebook-followers.json');
+const FACEBOOK_FOLLOWERS_LOG_PATH = path.join(ROOT, 'logs', 'facebook-followers-poller.log');
+const FACEBOOK_FOLLOWERS_HISTORY_LIMIT = 1440;
+
+let facebookFollowersState = {
+  schemaVersion: 1,
+  page: { id: META_GRAPH_PAGE_ID || '', name: '' },
+  latest: null,
+  status: { ok: false, lastSuccessAt: '', lastAttemptAt: '', consecutiveFailures: 0, lastError: '' },
+  history: [],
+  updatedAt: '',
+};
+let facebookFollowersPollTimer = null;
+let facebookFollowersPollInFlight = null;
+
+function classifyFacebookFollowerStaleLevel(lastSuccessAt){
+  const ts = lastSuccessAt ? Date.parse(lastSuccessAt) : NaN;
+  if (!Number.isFinite(ts)) return { stale: true, staleLevel: 'critical', ageMs: null };
+  const ageMs = Math.max(0, Date.now() - ts);
+  if (ageMs < META_GRAPH_STALE_AFTER_MS) return { stale: false, staleLevel: 'fresh', ageMs };
+  if (ageMs < META_GRAPH_CRITICAL_STALE_AFTER_MS) return { stale: true, staleLevel: 'stale', ageMs };
+  return { stale: true, staleLevel: 'critical', ageMs };
+}
+
+function ensureFacebookFollowersShape(input){
+  const base = input && typeof input === 'object' ? input : {};
+  const latest = base.latest && typeof base.latest === 'object' ? {
+    followersCount: Number.isFinite(Number(base.latest.followersCount)) ? Number(base.latest.followersCount) : null,
+    fanCount: Number.isFinite(Number(base.latest.fanCount)) ? Number(base.latest.fanCount) : null,
+    fetchedAt: String(base.latest.fetchedAt || ''),
+    source: String(base.latest.source || 'meta_graph'),
+    requestId: String(base.latest.requestId || ''),
+    latencyMs: Number.isFinite(Number(base.latest.latencyMs)) ? Math.max(0, Number(base.latest.latencyMs)) : null,
+    stale: !!base.latest.stale,
+  } : null;
+  const historyRaw = Array.isArray(base.history) ? base.history : [];
+  return {
+    schemaVersion: 1,
+    page: { id: String(base?.page?.id || META_GRAPH_PAGE_ID || '').trim(), name: String(base?.page?.name || '').trim() },
+    latest,
+    status: {
+      ok: !!base?.status?.ok,
+      lastSuccessAt: String(base?.status?.lastSuccessAt || ''),
+      lastAttemptAt: String(base?.status?.lastAttemptAt || ''),
+      consecutiveFailures: Number.isFinite(Number(base?.status?.consecutiveFailures)) ? Math.max(0, Math.floor(Number(base.status.consecutiveFailures))) : 0,
+      lastError: String(base?.status?.lastError || '').slice(0, 280),
+    },
+    history: historyRaw.map((h) => ({ followersCount: Number.isFinite(Number(h?.followersCount)) ? Number(h.followersCount) : null, fetchedAt: String(h?.fetchedAt || '') }))
+      .filter((h) => Number.isFinite(h.followersCount) && h.fetchedAt)
+      .slice(-FACEBOOK_FOLLOWERS_HISTORY_LIMIT),
+    updatedAt: String(base.updatedAt || ''),
+  };
+}
+
+async function persistFacebookFollowersState(){
+  await ensureDataDir();
+  const body = JSON.stringify(ensureFacebookFollowersShape(facebookFollowersState), null, 2);
+  const tmpPath = FACEBOOK_FOLLOWERS_PATH + '.tmp';
+  await fsp.writeFile(tmpPath, body, 'utf8');
+  await fsp.rename(tmpPath, FACEBOOK_FOLLOWERS_PATH);
+}
+
+async function loadFacebookFollowersState(){
+  try {
+    const raw = await fsp.readFile(FACEBOOK_FOLLOWERS_PATH, 'utf8');
+    const parsed = parseJsonSafely(raw, 'facebook_followers_state');
+    if (!parsed.ok) return;
+    facebookFollowersState = ensureFacebookFollowersShape(parsed.value);
+  } catch {}
+}
+
+async function appendFacebookFollowersLog(event){
+  try {
+    await fsp.mkdir(path.dirname(FACEBOOK_FOLLOWERS_LOG_PATH), { recursive: true });
+    await fsp.appendFile(FACEBOOK_FOLLOWERS_LOG_PATH, JSON.stringify(event) + '\n', 'utf8');
+  } catch {}
+}
+
+function getFacebookReasonCode(status, errorMessage){
+  if (status === 401 || status === 403) return 'meta_auth_failed';
+  if (status === 429) return 'meta_rate_limited';
+  if ([500, 502, 503, 504].includes(status)) return 'meta_upstream_unavailable';
+  if (errorMessage && /timeout|abort/i.test(errorMessage)) return 'meta_timeout';
+  return 'meta_fetch_failed';
+}
+
+async function delay(ms){ return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+function facebookFollowerResponsePayload(opts = {}){
+  const successTs = facebookFollowersState.status.lastSuccessAt || facebookFollowersState.latest?.fetchedAt || '';
+  const freshness = classifyFacebookFollowerStaleLevel(successTs);
+  return {
+    ok: !!facebookFollowersState.latest,
+    page: { ...facebookFollowersState.page },
+    latest: facebookFollowersState.latest ? {
+      followersCount: facebookFollowersState.latest.followersCount,
+      fanCount: facebookFollowersState.latest.fanCount,
+      fetchedAt: facebookFollowersState.latest.fetchedAt,
+    } : null,
+    status: {
+      stale: freshness.stale,
+      staleLevel: freshness.staleLevel,
+      ageMs: freshness.ageMs,
+      lastSuccessAt: facebookFollowersState.status.lastSuccessAt || '',
+      lastAttemptAt: facebookFollowersState.status.lastAttemptAt || '',
+      consecutiveFailures: facebookFollowersState.status.consecutiveFailures || 0,
+      lastError: facebookFollowersState.status.lastError || '',
+    },
+    history: opts.includeHistory === false ? [] : facebookFollowersState.history,
+  };
+}
+
+async function pollFacebookFollowers({ source = 'interval' } = {}){
+  if (facebookFollowersPollInFlight) return facebookFollowersPollInFlight;
+  const disabled = !META_GRAPH_PAGE_ID || !META_GRAPH_PAGE_ACCESS_TOKEN;
+  if (disabled) {
+    facebookFollowersState.status.ok = false;
+    facebookFollowersState.status.lastError = 'facebook_followers_disabled_missing_meta_graph_config';
+    facebookFollowersState.updatedAt = new Date().toISOString();
+    return facebookFollowerResponsePayload();
+  }
+
+  const run = (async () => {
+    const requestId = 'fbf_' + Date.now().toString(36) + '_' + crypto.randomBytes(2).toString('hex');
+    const startedAt = Date.now();
+    const attempts = Math.max(1, META_GRAPH_MAX_RETRIES);
+    let httpStatus = 0;
+    let lastErr = '';
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      facebookFollowersState.status.lastAttemptAt = new Date().toISOString();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), META_GRAPH_TIMEOUT_MS);
+      try {
+        const endpoint = 'https://graph.facebook.com/' + encodeURIComponent(META_GRAPH_API_VERSION) + '/' + encodeURIComponent(META_GRAPH_PAGE_ID) + '?fields=followers_count,fan_count,name&access_token=' + encodeURIComponent(META_GRAPH_PAGE_ACCESS_TOKEN);
+        const res = await fetch(endpoint, { method: 'GET', signal: controller.signal, headers: { 'Accept': 'application/json' } });
+        httpStatus = Number(res.status || 0);
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const detail = body?.error?.message || ('HTTP ' + res.status);
+          throw Object.assign(new Error(detail), { httpStatus: res.status, retryAfter: res.headers.get('retry-after') || '' });
+        }
+        const followersCount = Number.isFinite(Number(body?.followers_count)) ? Number(body.followers_count) : null;
+        const fanCount = Number.isFinite(Number(body?.fan_count)) ? Number(body.fan_count) : null;
+        const resolvedCount = Number.isFinite(followersCount) ? followersCount : fanCount;
+        if (!Number.isFinite(resolvedCount)) throw Object.assign(new Error('followers_count_missing'), { httpStatus: 502 });
+        const fetchedAt = new Date().toISOString();
+        const stale = classifyFacebookFollowerStaleLevel(fetchedAt).stale;
+        const latencyMs = Math.max(0, Date.now() - startedAt);
+        facebookFollowersState.page = { id: META_GRAPH_PAGE_ID, name: String(body?.name || facebookFollowersState.page?.name || '').trim() };
+        facebookFollowersState.latest = { followersCount: resolvedCount, fanCount, fetchedAt, source: 'meta_graph', requestId, latencyMs, stale };
+        facebookFollowersState.status = { ok: true, lastSuccessAt: fetchedAt, lastAttemptAt: fetchedAt, consecutiveFailures: 0, lastError: '' };
+        facebookFollowersState.history.push({ followersCount: resolvedCount, fetchedAt });
+        if (facebookFollowersState.history.length > FACEBOOK_FOLLOWERS_HISTORY_LIMIT) facebookFollowersState.history = facebookFollowersState.history.slice(-FACEBOOK_FOLLOWERS_HISTORY_LIMIT);
+        facebookFollowersState.updatedAt = new Date().toISOString();
+        await persistFacebookFollowersState();
+        await appendFacebookFollowersLog({ ts: new Date().toISOString(), event: 'facebook_followers_poll', ok: true, source, requestId, attempt, retries: attempt - 1, httpStatus, latencyMs, followersCount: resolvedCount, ageMs: 0, error: '' });
+        return facebookFollowerResponsePayload();
+      } catch (err) {
+        const message = String(err?.message || err || 'poll_failed').slice(0, 220);
+        const status = Number(err?.httpStatus || 0);
+        httpStatus = status || httpStatus;
+        lastErr = message;
+        const transient = [408, 425, 429, 500, 502, 503, 504].includes(status) || /abort|timeout/i.test(message);
+        if (attempt >= attempts || !transient) break;
+        let delayMs = Math.min(META_GRAPH_BACKOFF_BASE_MS * (2 ** (attempt - 1)), META_GRAPH_BACKOFF_MAX_MS);
+        const retryAfter = Number(err?.retryAfter || 0);
+        if (Number.isFinite(retryAfter) && retryAfter > 0) delayMs = Math.max(delayMs, retryAfter * 1000);
+        await delay(delayMs);
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    facebookFollowersState.status.ok = false;
+    facebookFollowersState.status.consecutiveFailures = (facebookFollowersState.status.consecutiveFailures || 0) + 1;
+    facebookFollowersState.status.lastError = (getFacebookReasonCode(httpStatus, lastErr) + ': ' + lastErr).slice(0, 280);
+    facebookFollowersState.updatedAt = new Date().toISOString();
+    await persistFacebookFollowersState();
+    const freshness = classifyFacebookFollowerStaleLevel(facebookFollowersState.status.lastSuccessAt || '');
+    await appendFacebookFollowersLog({ ts: new Date().toISOString(), event: 'facebook_followers_poll', ok: false, source, requestId, attempt: attempts, retries: attempts - 1, httpStatus, latencyMs: Math.max(0, Date.now() - startedAt), followersCount: facebookFollowersState.latest?.followersCount ?? null, ageMs: freshness.ageMs, error: facebookFollowersState.status.lastError });
+    return facebookFollowerResponsePayload();
+  })();
+
+  facebookFollowersPollInFlight = run;
+  try { return await run; } finally { facebookFollowersPollInFlight = null; }
+}
+
+async function initFacebookFollowersService(){
+  await loadFacebookFollowersState();
+  await pollFacebookFollowers({ source: 'startup_bootstrap' });
+  if (facebookFollowersPollTimer) clearInterval(facebookFollowersPollTimer);
+  facebookFollowersPollTimer = setInterval(() => {
+    pollFacebookFollowers({ source: 'interval' }).catch(() => {});
+  }, META_GRAPH_POLL_INTERVAL_MS);
+}
+
+async function handleApiFacebookFollowers(req, res) {
+  const pathname = new URL(req.url || '/api/facebook-followers', 'http://localhost:' + PORT).pathname;
+  if (!META_GRAPH_ALLOW_REMOTE && !isLocalRequest(req)) {
+    return sendJson(res, 403, { ok: false, error: 'local_only', message: 'Facebook followers endpoint is local-only by default. Set META_GRAPH_ALLOW_REMOTE=1 to allow remote requests.' });
+  }
+  if (pathname === '/api/facebook-followers/refresh') {
+    if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/facebook-followers/refresh.' });
+    let source = 'manual';
+    try {
+      const reqUrl = new URL(req.url || '/api/facebook-followers/refresh', 'http://localhost:' + PORT);
+      source = String(reqUrl.searchParams.get('source') || '').trim() || source;
+      const bodyRaw = await readBody(req);
+      if (bodyRaw) {
+        const parsed = parseJsonSafely(bodyRaw, 'facebook_followers_refresh_body');
+        if (parsed.ok && parsed.value && typeof parsed.value === 'object' && parsed.value.source) source = String(parsed.value.source).trim();
+      }
+    } catch {}
+    const payload = await pollFacebookFollowers({ source: source || 'manual' });
+    return sendJson(res, payload.ok ? 200 : 503, payload);
+  }
+  if (pathname === '/api/facebook-followers/health') {
+    if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/facebook-followers/health.' });
+    return sendJson(res, 200, { ok: true, status: facebookFollowerResponsePayload({ includeHistory: false }).status, page: facebookFollowersState.page });
+  }
+  if (pathname !== '/api/facebook-followers') return sendJson(res, 404, { ok: false, error: 'not_found' });
+  if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/facebook-followers.' });
+  return sendJson(res, 200, facebookFollowerResponsePayload());
+}
+
 const DIARY_INDEX_ROOTS = [
   path.resolve(ROOT, '../taverncollectibles-v2/artifacts/reports'),
 ];
 const DIARY_INDEX_ALLOWED_EXT = new Set(['.md', '.markdown']);
+const DIARY_INDEX_FILE_PATTERN = /project-diary-entry/i;
 const DIARY_INDEX_MAX_PREVIEW_LEN = 220;
 let diaryIndexCache = {
   ok: true,
@@ -735,6 +972,14 @@ function guessDiaryDate(absPath, rawContent = '') {
   return fromContent ? fromContent[1] : null;
 }
 
+function formatDateYYYYMMDDLocal(tsMs) {
+  const d = new Date(tsMs);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 async function walkDiaryMarkdownFiles(rootAbs) {
   const files = [];
   async function walk(dir) {
@@ -771,6 +1016,10 @@ async function rebuildDiaryIndex() {
     const files = await walkDiaryMarkdownFiles(rootAbs);
     for (const file of files) {
       scannedFiles += 1;
+      if (!DIARY_INDEX_FILE_PATTERN.test(path.basename(file))) {
+        skippedEntries += 1;
+        continue;
+      }
       const raw = await fsp.readFile(file, 'utf8');
       const normalized = normalizeDiaryText(raw);
       if (isTemplateOnlyDiary(normalized)) {
@@ -778,28 +1027,34 @@ async function rebuildDiaryIndex() {
         continue;
       }
 
-      const date = guessDiaryDate(file, raw);
-      if (!date) {
+      const guessedDate = guessDiaryDate(file, raw);
+      const stat = await fsp.stat(file);
+      const mtimeLocalDate = formatDateYYYYMMDDLocal(stat.mtimeMs);
+      const bucketDates = [...new Set([guessedDate, mtimeLocalDate].filter(Boolean))];
+      if (!bucketDates.length) {
         skippedEntries += 1;
         continue;
       }
 
-      const stat = await fsp.stat(file);
+      const primaryDate = guessedDate || mtimeLocalDate;
       const project = guessDiaryProject(file);
       const lines = normalized.split('\n').map((line) => line.trim()).filter(Boolean);
       const preview = lines.join(' ').slice(0, DIARY_INDEX_MAX_PREVIEW_LEN);
       const entry = {
         id: crypto.createHash('sha1').update(file).digest('hex').slice(0, 16),
-        date,
+        date: primaryDate,
         time: new Date(stat.mtimeMs).toISOString(),
         project,
         title: path.basename(file),
         preview,
         content: normalized,
+        rawContent: String(raw || ''),
       };
 
-      if (!entriesByDate[date]) entriesByDate[date] = [];
-      entriesByDate[date].push(entry);
+      for (const bucketDate of bucketDates) {
+        if (!entriesByDate[bucketDate]) entriesByDate[bucketDate] = [];
+        entriesByDate[bucketDate].push(entry);
+      }
       includedEntries += 1;
     }
   }
@@ -1728,10 +1983,14 @@ const server = http.createServer(async (req, res) => {
   if ((req.url || '').startsWith('/api/home-devices/ping')) return handleApiHomeDevicePing(req, res);
   if ((req.url || '').startsWith('/api/home-devices/wake')) return handleApiHomeDeviceWake(req, res);
   if ((req.url || '').startsWith('/api/diary-index')) return handleApiDiaryIndex(req, res);
+  if ((req.url || '').startsWith('/api/facebook-followers')) return handleApiFacebookFollowers(req, res);
   return handleStatic(req, res);
 });
 
 if (require.main === module) {
+  initFacebookFollowersService().catch((err) => {
+    console.error('Facebook followers service init failed:', err?.message || err);
+  });
   server.listen(PORT, () => {
     console.log(`Mission Control running on http://localhost:${PORT}`);
     console.log(`Shared state file: ${STATE_PATH}`);
@@ -1741,10 +2000,14 @@ if (require.main === module) {
     console.log(`RSS fetch API: enabled (${RSS_FETCH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; max feeds/request: ${RSS_FETCH_MAX_FEEDS})`);
     console.log(`Gas price proxy API: enabled (${GAS_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
     console.log(`Speed test API: enabled (${SPEED_TEST_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; timeout ${SPEED_TEST_TIMEOUT_MS}ms)`);
+    console.log(`Facebook followers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${META_GRAPH_POLL_INTERVAL_MS}ms)`);
   });
 }
 
 module.exports = {
   parseJsonSafely,
   fetchJsonViaCurl,
+  classifyFacebookFollowerStaleLevel,
+  ensureFacebookFollowersShape,
+  facebookFollowerResponsePayload,
 };
