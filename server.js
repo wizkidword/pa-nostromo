@@ -223,6 +223,20 @@ function extractFacebookPublicFollowerEstimate(html){
 
 async function delay(ms){ return new Promise((resolve) => setTimeout(resolve, ms)); }
 
+async function fetchTextViaCurl(url, timeoutMs = 12000){
+  return await new Promise((resolve, reject) => {
+    const seconds = Math.max(3, Math.ceil(Number(timeoutMs || 12000) / 1000));
+    const args = ['-L', '-sS', '--max-time', String(seconds), '--compressed', '-A', 'Mozilla/5.0 MissionControlLite/1.0 (+facebook-followers-fallback)', url];
+    execFile('curl', args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        const message = String((stderr || err.message || 'curl_fetch_failed')).trim();
+        return reject(Object.assign(new Error(message), { httpStatus: 502 }));
+      }
+      resolve(String(stdout || ''));
+    });
+  });
+}
+
 function facebookFollowerResponsePayload(opts = {}){
   const successTs = facebookFollowersState.status.lastSuccessAt || facebookFollowersState.latest?.fetchedAt || '';
   const freshness = classifyFacebookFollowerStaleLevel(successTs);
@@ -313,17 +327,26 @@ async function pollFacebookFollowers({ source = 'interval' } = {}){
     const scrapeController = new AbortController();
     const scrapeTimeout = setTimeout(() => scrapeController.abort(), META_GRAPH_TIMEOUT_MS);
     try {
-      const res = await fetch(FACEBOOK_PAGE_URL, {
-        method: 'GET',
-        signal: scrapeController.signal,
-        headers: {
-          'Accept': 'text/html,application/xhtml+xml',
-          'User-Agent': 'Mozilla/5.0 MissionControlLite/1.0 (+facebook-followers-fallback)'
+      const pageUrl = FACEBOOK_PAGE_URL;
+      const pluginUrl = 'https://www.facebook.com/plugins/page.php?href=' + encodeURIComponent(pageUrl) + '&tabs=timeline&width=340&height=130&small_header=false&adapt_container_width=true&hide_cover=false&show_facepile=true&appId';
+      const candidates = [pluginUrl, pageUrl];
+      let html = '';
+      for (const url of candidates) {
+        let body = '';
+        try {
+          body = await fetchTextViaCurl(url, META_GRAPH_TIMEOUT_MS);
+          httpStatus = 200;
+        } catch (err) {
+          httpStatus = Number(err?.httpStatus || 0) || 502;
+          continue;
         }
-      });
-      httpStatus = Number(res.status || 0);
-      const html = await res.text();
-      if (!res.ok) throw Object.assign(new Error('public_page_http_' + res.status), { httpStatus: res.status });
+        const parsedTry = extractFacebookPublicFollowerEstimate(body);
+        if (Number.isFinite(parsedTry.count)) {
+          html = body;
+          break;
+        }
+      }
+      if (!html) throw Object.assign(new Error('public_follower_signal_not_found'), { httpStatus: httpStatus || 502 });
       const parsed = extractFacebookPublicFollowerEstimate(html);
       if (!Number.isFinite(parsed.count)) throw Object.assign(new Error('public_follower_signal_not_found'), { httpStatus: 502 });
       const fetchedAt = new Date().toISOString();
