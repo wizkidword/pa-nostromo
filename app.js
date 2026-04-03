@@ -38,7 +38,7 @@ const DEFAULT_SETTINGS = {
 const DEFAULT_UTILITY_LAYOUT_ROWS = [
   ['shortcuts'],
   ['date-time', 'calendar', 'gas-prices'],
-  ['nba-scores', 'crypto-tracker', 'facebook-followers', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'],
+  ['nba-scores', 'crypto-tracker', 'facebook-followers', 'instagram-followers', 'tiktok-followers', 'youtube-subscribers', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'],
   ['camera-feed', 'live-streams'],
   ['voice-note', 'voice-to-rowan', 'music-player'],
 ];
@@ -318,8 +318,25 @@ const seed = {
   facebookFollowers: {
     followersCount: null,
     fanCount: null,
+    delta: null,
+    rollingDelta1h: null,
+    rollingDelta24h: null,
     pageName: '',
     pageId: '',
+    fetchedAt: '',
+    source: '',
+    staleLevel: 'fresh',
+    ageMs: null,
+    lastError: '',
+    loading: false,
+  },
+  instagramFollowers: {
+    followersCount: null,
+    delta: null,
+    rollingDelta1h: null,
+    rollingDelta24h: null,
+    profileName: '',
+    profileHandle: '',
     fetchedAt: '',
     source: '',
     staleLevel: 'fresh',
@@ -429,6 +446,9 @@ const pollingFailureState = {
   'rss-feed': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'crypto-tracker': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'facebook-followers': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
+  'instagram-followers': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
+  'tiktok-followers': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
+  'youtube-subscribers': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'system-resource-monitor': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'speed-test': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
 };
@@ -3547,7 +3567,7 @@ function mountRssSettingsFeeds(){
 }
 
 async function fetchFacebookFollowers(options = {}){
-  state.facebookFollowers = state.facebookFollowers && typeof state.facebookFollowers === 'object' ? state.facebookFollowers : { followersCount: null, fanCount: null, pageName: '', pageId: '', fetchedAt: '', source: '', staleLevel: 'fresh', ageMs: null, lastError: '', loading: false };
+  state.facebookFollowers = state.facebookFollowers && typeof state.facebookFollowers === 'object' ? state.facebookFollowers : { followersCount: null, fanCount: null, delta: null, rollingDelta1h: null, rollingDelta24h: null, pageName: '', pageId: '', fetchedAt: '', source: '', staleLevel: 'fresh', ageMs: null, lastError: '', loading: false };
   const manual = !!options.manual;
   const endpoint = manual ? '/api/facebook-followers/refresh?source=manual' : '/api/facebook-followers';
   const method = manual ? 'POST' : 'GET';
@@ -3560,6 +3580,9 @@ async function fetchFacebookFollowers(options = {}){
     if (!res.ok && !payload?.status) throw new Error(payload?.error || payload?.message || 'facebook followers fetch failed');
     state.facebookFollowers.followersCount = Number.isFinite(Number(payload?.latest?.followersCount)) ? Number(payload.latest.followersCount) : null;
     state.facebookFollowers.fanCount = Number.isFinite(Number(payload?.latest?.fanCount)) ? Number(payload.latest.fanCount) : null;
+    state.facebookFollowers.delta = Number.isFinite(Number(payload?.latest?.delta)) ? Number(payload.latest.delta) : null;
+    state.facebookFollowers.rollingDelta1h = Number.isFinite(Number(payload?.latest?.rollingDelta1h)) ? Number(payload.latest.rollingDelta1h) : null;
+    state.facebookFollowers.rollingDelta24h = Number.isFinite(Number(payload?.latest?.rollingDelta24h)) ? Number(payload.latest.rollingDelta24h) : null;
     state.facebookFollowers.pageName = String(payload?.page?.name || '');
     state.facebookFollowers.pageId = String(payload?.page?.id || '');
     state.facebookFollowers.fetchedAt = String(payload?.latest?.fetchedAt || payload?.status?.lastSuccessAt || '');
@@ -3601,12 +3624,251 @@ function renderFacebookFollowersPod(options = {}){
 
     const source = String(ff.source || '').toLowerCase();
     const sourceLabel = source === 'public_scrape_estimate' ? 'public_scrape_estimate' : 'graph_api';
-    el.innerHTML = '<div class="facebook-followers-count">' + new Intl.NumberFormat().format(displayCount) + '</div>' +
-      '<div class="note-meta">Page: ' + escapeHtml(ff.pageName || ff.pageId || 'Unknown') + ' <span class="badge">' + escapeHtml(sourceLabel) + '</span>' + (count == null && fallback != null ? ' · source fan_count fallback' : '') + '</div>' +
-      (ff.lastError ? ('<div class="note-meta">Last error: ' + escapeHtml(ff.lastError) + '</div>') : '');
+    const deltaVal = Number.isFinite(Number(ff.delta)) ? Number(ff.delta) : null;
+    const deltaClass = deltaVal == null ? 'followers-delta--neutral' : (deltaVal > 0 ? 'followers-delta--up' : (deltaVal < 0 ? 'followers-delta--down' : 'followers-delta--neutral'));
+    const deltaPrefix = deltaVal != null && deltaVal > 0 ? '+' : '';
+    const deltaText = deltaVal == null ? 'Δ n/a' : ('Δ ' + deltaPrefix + new Intl.NumberFormat().format(deltaVal));
+    const rolling1h = Number.isFinite(Number(ff.rollingDelta1h)) ? Number(ff.rollingDelta1h) : null;
+    const rolling24h = Number.isFinite(Number(ff.rollingDelta24h)) ? Number(ff.rollingDelta24h) : null;
+    const rolling1hPrefix = rolling1h != null && rolling1h > 0 ? '+' : '';
+    const rolling24hPrefix = rolling24h != null && rolling24h > 0 ? '+' : '';
+    const formatRolling = (value, prefix) => value == null ? 'n/a' : (prefix + new Intl.NumberFormat().format(value));
+
+    el.innerHTML = '<div class="followers-count">' + new Intl.NumberFormat().format(displayCount) + '</div>' +
+      '<div class="followers-delta ' + deltaClass + '">' + deltaText + '</div>' +
+      '<div class="followers-metrics-grid">' +
+        '<div class="followers-metric"><div class="followers-metric-label">New followers · 1h</div><div class="followers-metric-value">' + formatRolling(rolling1h, rolling1hPrefix) + '</div></div>' +
+        '<div class="followers-metric"><div class="followers-metric-label">New followers · 24h</div><div class="followers-metric-value">' + formatRolling(rolling24h, rolling24hPrefix) + '</div></div>' +
+      '</div>' +
+      '<div class="note-meta">Page: ' + escapeHtml(ff.pageName || ff.pageId || 'Unknown') + ' <span class="badge">' + escapeHtml(sourceLabel) + '</span>' + (count == null && fallback != null ? ' · source fan_count fallback' : '') + '</div>';
 
     const ageLabel = Number.isFinite(Number(ff.ageMs)) ? Math.floor(Number(ff.ageMs) / 60000) + 'm ago' : 'unknown';
     meta.textContent = 'Updated: ' + (ff.fetchedAt ? new Date(ff.fetchedAt).toLocaleTimeString() : 'n/a') + ' · ' + stale + ' · ' + ageLabel;
+  });
+}
+
+
+
+async function fetchInstagramFollowers(options = {}){
+  state.instagramFollowers = state.instagramFollowers && typeof state.instagramFollowers === 'object' ? state.instagramFollowers : { followersCount: null, delta: null, rollingDelta1h: null, rollingDelta24h: null, profileName: '', profileHandle: '', fetchedAt: '', source: '', staleLevel: 'fresh', ageMs: null, lastError: '', loading: false };
+  const manual = !!options.manual;
+  const endpoint = manual ? '/api/instagram-followers/refresh?source=manual' : '/api/instagram-followers';
+  const method = manual ? 'POST' : 'GET';
+  const backoffMs = pollingBackoffState('instagram-followers').backoffUntil - Date.now();
+  if (!manual && backoffMs > 0) return null;
+  state.instagramFollowers.loading = true;
+  try {
+    const res = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' } });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok && !payload?.status) throw new Error(payload?.error || payload?.message || 'instagram followers fetch failed');
+    state.instagramFollowers.followersCount = Number.isFinite(Number(payload?.latest?.followersCount)) ? Number(payload.latest.followersCount) : null;
+    state.instagramFollowers.delta = Number.isFinite(Number(payload?.latest?.delta)) ? Number(payload.latest.delta) : null;
+    state.instagramFollowers.rollingDelta1h = Number.isFinite(Number(payload?.latest?.rollingDelta1h)) ? Number(payload.latest.rollingDelta1h) : null;
+    state.instagramFollowers.rollingDelta24h = Number.isFinite(Number(payload?.latest?.rollingDelta24h)) ? Number(payload.latest.rollingDelta24h) : null;
+    state.instagramFollowers.profileName = String(payload?.profile?.name || '');
+    state.instagramFollowers.profileHandle = String(payload?.profile?.handle || '');
+    state.instagramFollowers.fetchedAt = String(payload?.latest?.fetchedAt || payload?.status?.lastSuccessAt || '');
+    state.instagramFollowers.source = String(payload?.latest?.source || '');
+    state.instagramFollowers.staleLevel = String(payload?.status?.staleLevel || 'critical');
+    state.instagramFollowers.ageMs = Number.isFinite(Number(payload?.status?.ageMs)) ? Number(payload.status.ageMs) : null;
+    state.instagramFollowers.lastError = String(payload?.status?.lastError || '').slice(0, 300);
+    clearPollingBackoff('instagram-followers');
+  } catch (error) {
+    const backoff = registerPollingFailure('instagram-followers', error, 'Instagram followers unavailable');
+    state.instagramFollowers.lastError = String(error?.message || error || 'fetch_failed').slice(0, 300);
+    if (!state.instagramFollowers.staleLevel) state.instagramFollowers.staleLevel = 'critical';
+    setPodStatusSignal('instagram-followers', 'stale', 'retry ' + Math.ceil(backoff / 1000) + 's');
+  } finally {
+    state.instagramFollowers.loading = false;
+  }
+  return state.instagramFollowers;
+}
+
+function renderInstagramFollowersPod(options = {}){
+  const el = document.getElementById('instagramFollowersWidget');
+  const meta = document.getElementById('instagramFollowersUpdatedAt');
+  if (!el || !meta) return;
+  fetchInstagramFollowers(options).then(() => {
+    const ig = state.instagramFollowers || {};
+    const count = Number.isFinite(Number(ig.followersCount)) ? Number(ig.followersCount) : null;
+    const stale = String(ig.staleLevel || 'critical');
+    if (stale === 'fresh') setPodStatusSignal('instagram-followers', 'fresh', 'live');
+    else if (stale === 'stale') setPodStatusSignal('instagram-followers', 'stale', 'stale');
+    else setPodStatusSignal('instagram-followers', 'error', 'critical stale');
+
+    if (count == null) {
+      el.innerHTML = '<div class="note-meta">No Instagram follower data yet. Run one-time Meta Suite login: <code>node scripts/instagram-meta-suite-login.mjs --storage ./data/.auth/meta-suite-instagram-storage.json</code>, then refresh.</div>';
+      meta.textContent = 'Waiting for first successful fetch.';
+      return;
+    }
+
+    const deltaVal = Number.isFinite(Number(ig.delta)) ? Number(ig.delta) : null;
+    const deltaClass = deltaVal == null ? 'followers-delta--neutral' : (deltaVal > 0 ? 'followers-delta--up' : (deltaVal < 0 ? 'followers-delta--down' : 'followers-delta--neutral'));
+    const deltaPrefix = deltaVal != null && deltaVal > 0 ? '+' : '';
+    const deltaText = deltaVal == null ? 'Δ n/a' : ('Δ ' + deltaPrefix + new Intl.NumberFormat().format(deltaVal));
+    const rolling1h = Number.isFinite(Number(ig.rollingDelta1h)) ? Number(ig.rollingDelta1h) : null;
+    const rolling24h = Number.isFinite(Number(ig.rollingDelta24h)) ? Number(ig.rollingDelta24h) : null;
+    const rolling1hPrefix = rolling1h != null && rolling1h > 0 ? '+' : '';
+    const rolling24hPrefix = rolling24h != null && rolling24h > 0 ? '+' : '';
+    const formatRolling = (value, prefix) => value == null ? 'n/a' : (prefix + new Intl.NumberFormat().format(value));
+    const profileLabel = ig.profileName || (ig.profileHandle ? ('@' + ig.profileHandle) : 'Unknown');
+    el.innerHTML = '<div class="followers-count">' + new Intl.NumberFormat().format(count) + '</div>' +
+      '<div class="followers-delta ' + deltaClass + '">' + deltaText + '</div>' +
+      '<div class="followers-metrics-grid">' +
+        '<div class="followers-metric"><div class="followers-metric-label">New followers · 1h</div><div class="followers-metric-value">' + formatRolling(rolling1h, rolling1hPrefix) + '</div></div>' +
+        '<div class="followers-metric"><div class="followers-metric-label">New followers · 24h</div><div class="followers-metric-value">' + formatRolling(rolling24h, rolling24hPrefix) + '</div></div>' +
+      '</div>' +
+      '<div class="note-meta">Profile: ' + escapeHtml(profileLabel) + ' <span class="badge">' + escapeHtml(ig.source || 'placeholder_env') + '</span></div>';
+
+    const ageLabel = Number.isFinite(Number(ig.ageMs)) ? Math.floor(Number(ig.ageMs) / 60000) + 'm ago' : 'unknown';
+    meta.textContent = 'Updated: ' + (ig.fetchedAt ? new Date(ig.fetchedAt).toLocaleTimeString() : 'n/a') + ' · ' + stale + ' · ' + ageLabel;
+  });
+}
+
+async function fetchTikTokFollowers(options = {}){
+  state.tiktokFollowers = state.tiktokFollowers && typeof state.tiktokFollowers === 'object' ? state.tiktokFollowers : { followersCount: null, delta: null, profileName: '', profileHandle: '', profileUrl: '', fetchedAt: '', source: '', staleLevel: 'fresh', ageMs: null, setupRequired: false, lastError: '', loading: false };
+  const manual = !!options.manual;
+  const endpoint = manual ? '/api/tiktok-followers/refresh?source=manual' : '/api/tiktok-followers';
+  const method = manual ? 'POST' : 'GET';
+  const backoffMs = pollingBackoffState('tiktok-followers').backoffUntil - Date.now();
+  if (!manual && backoffMs > 0) return null;
+  state.tiktokFollowers.loading = true;
+  try {
+    const res = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' } });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok && !payload?.status) throw new Error(payload?.error || payload?.message || 'tiktok followers fetch failed');
+    state.tiktokFollowers.followersCount = Number.isFinite(Number(payload?.latest?.followersCount)) ? Number(payload.latest.followersCount) : null;
+    state.tiktokFollowers.delta = Number.isFinite(Number(payload?.latest?.delta)) ? Number(payload.latest.delta) : null;
+    state.tiktokFollowers.profileName = String(payload?.profile?.name || 'TikTok');
+    state.tiktokFollowers.profileHandle = String(payload?.profile?.handle || '');
+    state.tiktokFollowers.profileUrl = String(payload?.profile?.url || '');
+    state.tiktokFollowers.fetchedAt = String(payload?.latest?.fetchedAt || payload?.status?.lastSuccessAt || '');
+    state.tiktokFollowers.source = String(payload?.latest?.source || '');
+    state.tiktokFollowers.staleLevel = String(payload?.status?.staleLevel || 'critical');
+    state.tiktokFollowers.ageMs = Number.isFinite(Number(payload?.status?.ageMs)) ? Number(payload.status.ageMs) : null;
+    state.tiktokFollowers.setupRequired = !!payload?.status?.setupRequired;
+    state.tiktokFollowers.lastError = String(payload?.status?.lastError || '').slice(0, 300);
+    clearPollingBackoff('tiktok-followers');
+  } catch (error) {
+    const backoff = registerPollingFailure('tiktok-followers', error, 'TikTok followers unavailable');
+    state.tiktokFollowers.lastError = String(error?.message || error || 'fetch_failed').slice(0, 300);
+    if (!state.tiktokFollowers.staleLevel) state.tiktokFollowers.staleLevel = 'critical';
+    setPodStatusSignal('tiktok-followers', 'stale', 'retry ' + Math.ceil(backoff / 1000) + 's');
+  } finally {
+    state.tiktokFollowers.loading = false;
+  }
+  return state.tiktokFollowers;
+}
+
+function renderTikTokFollowersPod(options = {}){
+  const el = document.getElementById('tiktokFollowersWidget');
+  const meta = document.getElementById('tiktokFollowersUpdatedAt');
+  if (!el || !meta) return;
+  fetchTikTokFollowers(options).then(() => {
+    const tt = state.tiktokFollowers || {};
+    const count = Number.isFinite(Number(tt.followersCount)) ? Number(tt.followersCount) : null;
+    const stale = String(tt.staleLevel || 'critical');
+    if (stale === 'fresh') setPodStatusSignal('tiktok-followers', 'fresh', 'live');
+    else if (stale === 'stale') setPodStatusSignal('tiktok-followers', 'stale', 'stale');
+    else setPodStatusSignal('tiktok-followers', 'error', 'critical stale');
+
+    if (tt.setupRequired) {
+      el.innerHTML = '<div class="note-meta">Setup required: set <code>TIKTOK_PROFILE_HANDLE</code> (without @) or <code>TIKTOK_PROFILE_URL</code>, then refresh.</div>';
+      meta.textContent = tt.lastError ? ('Error: ' + tt.lastError) : 'Waiting for TikTok profile setup.';
+      return;
+    }
+
+    if (count == null) {
+      el.innerHTML = '<div class="note-meta">No TikTok follower data yet. Add your profile handle/url and refresh.</div>';
+      meta.textContent = tt.lastError ? ('Error: ' + tt.lastError) : 'Waiting for first successful fetch.';
+      return;
+    }
+
+    const deltaVal = Number.isFinite(Number(tt.delta)) ? Number(tt.delta) : null;
+    const deltaClass = deltaVal == null ? 'followers-delta--neutral' : (deltaVal > 0 ? 'followers-delta--up' : (deltaVal < 0 ? 'followers-delta--down' : 'followers-delta--neutral'));
+    const deltaPrefix = deltaVal != null && deltaVal > 0 ? '+' : '';
+    const deltaText = deltaVal == null ? 'Δ n/a' : ('Δ ' + deltaPrefix + new Intl.NumberFormat().format(deltaVal));
+    const profileLabel = tt.profileName || (tt.profileHandle ? ('@' + tt.profileHandle) : 'Unknown');
+    el.innerHTML = '<div class="followers-count">' + new Intl.NumberFormat().format(count) + '</div>' +
+      '<div class="followers-delta ' + deltaClass + '">' + deltaText + '</div>' +
+      '<div class="note-meta">Profile: ' + escapeHtml(profileLabel) + ' <span class="badge">' + escapeHtml(tt.source || 'tiktok_public_scrape_estimate') + '</span></div>' +
+      (tt.lastError ? ('<div class="note-meta">Last error: ' + escapeHtml(tt.lastError) + '</div>') : '');
+
+    const ageLabel = Number.isFinite(Number(tt.ageMs)) ? Math.floor(Number(tt.ageMs) / 60000) + 'm ago' : 'unknown';
+    meta.textContent = 'Updated: ' + (tt.fetchedAt ? new Date(tt.fetchedAt).toLocaleTimeString() : 'n/a') + ' · ' + stale + ' · ' + ageLabel;
+  });
+}
+
+async function fetchYouTubeSubscribers(options = {}){
+  state.youtubeSubscribers = state.youtubeSubscribers && typeof state.youtubeSubscribers === 'object' ? state.youtubeSubscribers : { subscribersCount: null, delta: null, channelName: '', channelUrl: '', fetchedAt: '', source: '', staleLevel: 'fresh', ageMs: null, setupRequired: false, lastError: '', loading: false };
+  const manual = !!options.manual;
+  const endpoint = manual ? '/api/youtube-subscribers/refresh?source=manual' : '/api/youtube-subscribers';
+  const method = manual ? 'POST' : 'GET';
+  const backoffMs = pollingBackoffState('youtube-subscribers').backoffUntil - Date.now();
+  if (!manual && backoffMs > 0) return null;
+  state.youtubeSubscribers.loading = true;
+  try {
+    const res = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' } });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok && !payload?.status) throw new Error(payload?.error || payload?.message || 'youtube subscribers fetch failed');
+    state.youtubeSubscribers.subscribersCount = Number.isFinite(Number(payload?.latest?.subscribersCount)) ? Number(payload.latest.subscribersCount) : null;
+    state.youtubeSubscribers.delta = Number.isFinite(Number(payload?.latest?.delta)) ? Number(payload.latest.delta) : null;
+    state.youtubeSubscribers.channelName = String(payload?.channel?.name || 'YouTube');
+    state.youtubeSubscribers.channelUrl = String(payload?.channel?.url || '');
+    state.youtubeSubscribers.fetchedAt = String(payload?.latest?.fetchedAt || payload?.status?.lastSuccessAt || '');
+    state.youtubeSubscribers.source = String(payload?.latest?.source || '');
+    state.youtubeSubscribers.staleLevel = String(payload?.status?.staleLevel || 'critical');
+    state.youtubeSubscribers.ageMs = Number.isFinite(Number(payload?.status?.ageMs)) ? Number(payload.status.ageMs) : null;
+    state.youtubeSubscribers.setupRequired = !!payload?.status?.setupRequired;
+    state.youtubeSubscribers.lastError = String(payload?.status?.lastError || '').slice(0, 300);
+    clearPollingBackoff('youtube-subscribers');
+  } catch (error) {
+    const backoff = registerPollingFailure('youtube-subscribers', error, 'YouTube subscribers unavailable');
+    state.youtubeSubscribers.lastError = String(error?.message || error || 'fetch_failed').slice(0, 300);
+    if (!state.youtubeSubscribers.staleLevel) state.youtubeSubscribers.staleLevel = 'critical';
+    setPodStatusSignal('youtube-subscribers', 'stale', 'retry ' + Math.ceil(backoff / 1000) + 's');
+  } finally {
+    state.youtubeSubscribers.loading = false;
+  }
+  return state.youtubeSubscribers;
+}
+
+function renderYouTubeSubscribersPod(options = {}){
+  const el = document.getElementById('youtubeSubscribersWidget');
+  const meta = document.getElementById('youtubeSubscribersUpdatedAt');
+  if (!el || !meta) return;
+  fetchYouTubeSubscribers(options).then(() => {
+    const yt = state.youtubeSubscribers || {};
+    const count = Number.isFinite(Number(yt.subscribersCount)) ? Number(yt.subscribersCount) : null;
+    const stale = String(yt.staleLevel || 'critical');
+    if (stale === 'fresh') setPodStatusSignal('youtube-subscribers', 'fresh', 'live');
+    else if (stale === 'stale') setPodStatusSignal('youtube-subscribers', 'stale', 'stale');
+    else setPodStatusSignal('youtube-subscribers', 'error', 'critical stale');
+
+    if (yt.setupRequired) {
+      el.innerHTML = '<div class="note-meta">Setup required: set <code>YOUTUBE_CHANNEL_URL</code>, then refresh.</div>';
+      meta.textContent = yt.lastError ? ('Error: ' + yt.lastError) : 'Waiting for YouTube channel setup.';
+      return;
+    }
+
+    if (count == null) {
+      el.innerHTML = '<div class="note-meta">No YouTube subscriber data yet. Add your channel URL and refresh.</div>';
+      meta.textContent = yt.lastError ? ('Error: ' + yt.lastError) : 'Waiting for first successful fetch.';
+      return;
+    }
+
+    const deltaVal = Number.isFinite(Number(yt.delta)) ? Number(yt.delta) : null;
+    const deltaClass = deltaVal == null ? 'followers-delta--neutral' : (deltaVal > 0 ? 'followers-delta--up' : (deltaVal < 0 ? 'followers-delta--down' : 'followers-delta--neutral'));
+    const deltaPrefix = deltaVal != null && deltaVal > 0 ? '+' : '';
+    const deltaText = deltaVal == null ? 'Δ n/a' : ('Δ ' + deltaPrefix + new Intl.NumberFormat().format(deltaVal));
+    const channelLabel = yt.channelName || yt.channelUrl || 'Unknown';
+    el.innerHTML = '<div class="followers-count">' + new Intl.NumberFormat().format(count) + '</div>' +
+      '<div class="followers-delta ' + deltaClass + '">' + deltaText + '</div>' +
+      '<div class="note-meta">Channel: ' + escapeHtml(channelLabel) + ' <span class="badge">' + escapeHtml(yt.source || 'youtube_public_scrape_estimate') + '</span></div>' +
+      (yt.lastError ? ('<div class="note-meta">Last error: ' + escapeHtml(yt.lastError) + '</div>') : '');
+
+    const ageLabel = Number.isFinite(Number(yt.ageMs)) ? Math.floor(Number(yt.ageMs) / 60000) + 'm ago' : 'unknown';
+    meta.textContent = 'Updated: ' + (yt.fetchedAt ? new Date(yt.fetchedAt).toLocaleTimeString() : 'n/a') + ' · ' + stale + ' · ' + ageLabel;
   });
 }
 
@@ -6582,6 +6844,9 @@ function getUtilityPodLegacyRenderer(podId){
   if (podId === 'nba-scores') return () => renderNbaScores();
   if (podId === 'crypto-tracker') return () => renderCrypto();
   if (podId === 'facebook-followers') return () => renderFacebookFollowersPod();
+  if (podId === 'instagram-followers') return () => renderInstagramFollowersPod();
+  if (podId === 'tiktok-followers') return () => renderTikTokFollowersPod();
+  if (podId === 'youtube-subscribers') return () => renderYouTubeSubscribersPod();
   if (podId === 'rss-feed') return () => renderRss();
   if (podId === 'everyday-calculator') return () => renderEverydayCalculatorPod();
   if (podId === 'system-resource-monitor') return () => renderSystemResourceMonitorPod();
@@ -6591,7 +6856,7 @@ function getUtilityPodLegacyRenderer(podId){
 }
 
 function syncUtilityPodLifecycle(){
-  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'facebook-followers', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'];
+  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'facebook-followers', 'instagram-followers', 'tiktok-followers', 'youtube-subscribers', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'];
   managed.forEach((podId) => {
     const visible = state.layout?.visibility?.[podId] !== false;
     const legacyRender = getUtilityPodLegacyRenderer(podId);
@@ -8353,6 +8618,9 @@ startSpeedTestAutoRun();
 fetchSystemMonitorSnapshot();
 setInterval(renderDateTime, 1000);
 setInterval(() => renderFacebookFollowersPod(), 60 * 1000);
+setInterval(() => renderInstagramFollowersPod(), 60 * 1000);
+setInterval(() => renderTikTokFollowersPod(), 60 * 1000);
+setInterval(() => renderYouTubeSubscribersPod(), 60 * 1000);
 document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => renderWeatherPod({ manual: true }));
 document.getElementById('nbaRefreshBtn')?.addEventListener('click', () => renderNbaPod({ manual: true }));
 document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
@@ -8365,6 +8633,9 @@ document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
 });
 document.getElementById('rssRefreshBtn')?.addEventListener('click', () => renderRssPod({ manual: true }));
 document.getElementById('facebookFollowersRefreshBtn')?.addEventListener('click', () => renderFacebookFollowersPod({ manual: true }));
+document.getElementById('instagramFollowersRefreshBtn')?.addEventListener('click', () => renderInstagramFollowersPod({ manual: true }));
+document.getElementById('tiktokFollowersRefreshBtn')?.addEventListener('click', () => renderTikTokFollowersPod({ manual: true }));
+document.getElementById('youtubeSubscribersRefreshBtn')?.addEventListener('click', () => renderYouTubeSubscribersPod({ manual: true }));
 document.getElementById('gasFetchBtn')?.addEventListener('click', async () => {
   const input = String(document.getElementById('gasLocationInput')?.value || '').trim();
   await fetchGasPricesAuto(input);

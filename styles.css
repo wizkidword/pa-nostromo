@@ -1721,10 +1721,72 @@ menu {
 .home-device-modal{background:var(--panel,#1f232a);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:12px;max-width:320px;width:90%;}
 .home-device-settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px;}
 
-.facebook-followers-count {
+.followers-count {
   font-size: 2rem;
   font-weight: 700;
   line-height: 1.1;
   letter-spacing: 0.01em;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
+}
+
+.followers-delta {
+  display: inline-block;
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin-bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.followers-delta--up {
+  color: #58d68d;
+  background: rgba(88, 214, 141, 0.15);
+}
+
+.followers-delta--down {
+  color: #ff8a8a;
+  background: rgba(255, 138, 138, 0.16);
+}
+
+.followers-delta--neutral {
+  color: #bfc6d1;
+  background: rgba(191, 198, 209, 0.16);
+}
+
+.followers-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 2px 0 10px;
+}
+
+.followers-metric {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.followers-metric-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.followers-metric-value {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.utility-card-facebook-followers,
+.utility-card-instagram-followers {
+  grid-column: span 2;
+}
+
+@media (max-width: 1200px) {
+  .utility-card-facebook-followers,
+  .utility-card-instagram-followers {
+    grid-column: span 1;
+  }
 }

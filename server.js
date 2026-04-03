@@ -101,6 +101,35 @@ const FACEBOOK_PAGE_URL = String(process.env.FACEBOOK_PAGE_URL || 'https://www.f
 const FACEBOOK_FOLLOWERS_PATH = path.join(DATA_DIR, 'facebook-followers.json');
 const FACEBOOK_FOLLOWERS_LOG_PATH = path.join(ROOT, 'logs', 'facebook-followers-poller.log');
 const FACEBOOK_FOLLOWERS_HISTORY_LIMIT = 1440;
+const INSTAGRAM_PROFILE_HANDLE = String(process.env.INSTAGRAM_PROFILE_HANDLE || 'ablastfromtheads').trim().replace(/^@+/, '');
+const INSTAGRAM_PROFILE_NAME = String(process.env.INSTAGRAM_PROFILE_NAME || 'Blast From The Ads').trim() || 'Blast From The Ads';
+const INSTAGRAM_PROFILE_URL = String(process.env.INSTAGRAM_PROFILE_URL || ('https://www.instagram.com/' + INSTAGRAM_PROFILE_HANDLE + '/')).trim() || ('https://www.instagram.com/' + INSTAGRAM_PROFILE_HANDLE + '/');
+const INSTAGRAM_FOLLOWERS_COUNT = parsePositiveInt(process.env.INSTAGRAM_FOLLOWERS_COUNT, NaN);
+const INSTAGRAM_FOLLOWERS_PATH = path.join(DATA_DIR, 'instagram-followers.json');
+const INSTAGRAM_FOLLOWERS_LOG_PATH = path.join(ROOT, 'logs', 'instagram-followers-poller.log');
+const INSTAGRAM_FOLLOWERS_HISTORY_LIMIT = 1440;
+const INSTAGRAM_POLL_INTERVAL_MS = Math.max(60_000, parsePositiveInt(process.env.INSTAGRAM_POLL_INTERVAL_MS, 180_000));
+const INSTAGRAM_PROVIDER = String(process.env.INSTAGRAM_PROVIDER || 'auto').trim().toLowerCase() || 'auto';
+const INSTAGRAM_META_SUITE_SCRIPT_PATH = path.resolve(ROOT, String(process.env.INSTAGRAM_META_SUITE_SCRIPT_PATH || path.join('scripts', 'instagram-meta-suite-scraper.mjs')).trim() || path.join('scripts', 'instagram-meta-suite-scraper.mjs'));
+const INSTAGRAM_META_SUITE_STORAGE_PATH = path.resolve(ROOT, String(process.env.INSTAGRAM_META_SUITE_STORAGE_PATH || path.join('data', '.auth', 'meta-suite-instagram-storage.json')).trim() || path.join('data', '.auth', 'meta-suite-instagram-storage.json'));
+const INSTAGRAM_META_SUITE_URL = String(process.env.INSTAGRAM_META_SUITE_URL || 'https://business.facebook.com/latest/insights').trim() || 'https://business.facebook.com/latest/insights';
+const INSTAGRAM_META_SUITE_TIMEOUT_MS = Math.max(5_000, parsePositiveInt(process.env.INSTAGRAM_META_SUITE_TIMEOUT_MS, 45_000));
+const INSTAGRAM_META_SUITE_HEADLESS = !parseBool(process.env.INSTAGRAM_META_SUITE_HEADFUL);
+const TIKTOK_PROFILE_HANDLE = String(process.env.TIKTOK_PROFILE_HANDLE || 'ablastfromtheads').trim().replace(/^@+/, '');
+const TIKTOK_PROFILE_NAME = String(process.env.TIKTOK_PROFILE_NAME || 'Blast From The Ads').trim() || 'Blast From The Ads';
+const TIKTOK_PROFILE_URL = String(process.env.TIKTOK_PROFILE_URL || ('https://www.tiktok.com/@' + TIKTOK_PROFILE_HANDLE)).trim() || ('https://www.tiktok.com/@' + TIKTOK_PROFILE_HANDLE);
+const TIKTOK_FOLLOWERS_COUNT = parsePositiveInt(process.env.TIKTOK_FOLLOWERS_COUNT, NaN);
+const TIKTOK_FOLLOWERS_PATH = path.join(DATA_DIR, 'tiktok-followers.json');
+const TIKTOK_FOLLOWERS_LOG_PATH = path.join(ROOT, 'logs', 'tiktok-followers-poller.log');
+const TIKTOK_FOLLOWERS_HISTORY_LIMIT = 1440;
+const TIKTOK_POLL_INTERVAL_MS = Math.max(60_000, parsePositiveInt(process.env.TIKTOK_POLL_INTERVAL_MS, 180_000));
+const YOUTUBE_CHANNEL_URL = String(process.env.YOUTUBE_CHANNEL_URL || 'https://www.youtube.com/@Blastfromtheads').trim() || 'https://www.youtube.com/@Blastfromtheads';
+const YOUTUBE_CHANNEL_NAME = String(process.env.YOUTUBE_CHANNEL_NAME || 'Blast From The Ads').trim() || 'Blast From The Ads';
+const YOUTUBE_SUBSCRIBERS_COUNT = parsePositiveInt(process.env.YOUTUBE_SUBSCRIBERS_COUNT, NaN);
+const YOUTUBE_SUBSCRIBERS_PATH = path.join(DATA_DIR, 'youtube-subscribers.json');
+const YOUTUBE_SUBSCRIBERS_LOG_PATH = path.join(ROOT, 'logs', 'youtube-subscribers-poller.log');
+const YOUTUBE_SUBSCRIBERS_HISTORY_LIMIT = 1440;
+const YOUTUBE_POLL_INTERVAL_MS = Math.max(60_000, parsePositiveInt(process.env.YOUTUBE_POLL_INTERVAL_MS, 180_000));
 
 let facebookFollowersState = {
   schemaVersion: 1,
@@ -112,6 +141,39 @@ let facebookFollowersState = {
 };
 let facebookFollowersPollTimer = null;
 let facebookFollowersPollInFlight = null;
+
+let instagramFollowersState = {
+  schemaVersion: 1,
+  profile: { handle: INSTAGRAM_PROFILE_HANDLE, name: INSTAGRAM_PROFILE_NAME },
+  latest: null,
+  status: { ok: false, lastSuccessAt: '', lastAttemptAt: '', consecutiveFailures: 0, lastError: '' },
+  history: [],
+  updatedAt: '',
+};
+let instagramFollowersPollTimer = null;
+let instagramFollowersPollInFlight = null;
+
+let tiktokFollowersState = {
+  schemaVersion: 1,
+  profile: { handle: TIKTOK_PROFILE_HANDLE, name: TIKTOK_PROFILE_NAME, url: TIKTOK_PROFILE_URL },
+  latest: null,
+  status: { ok: false, setupRequired: !TIKTOK_PROFILE_URL, lastSuccessAt: '', lastAttemptAt: '', consecutiveFailures: 0, lastError: '' },
+  history: [],
+  updatedAt: '',
+};
+let tiktokFollowersPollTimer = null;
+let tiktokFollowersPollInFlight = null;
+
+let youtubeSubscribersState = {
+  schemaVersion: 1,
+  channel: { name: YOUTUBE_CHANNEL_NAME, url: YOUTUBE_CHANNEL_URL },
+  latest: null,
+  status: { ok: false, setupRequired: !YOUTUBE_CHANNEL_URL, lastSuccessAt: '', lastAttemptAt: '', consecutiveFailures: 0, lastError: '' },
+  history: [],
+  updatedAt: '',
+};
+let youtubeSubscribersPollTimer = null;
+let youtubeSubscribersPollInFlight = null;
 
 function classifyFacebookFollowerStaleLevel(lastSuccessAt){
   const ts = lastSuccessAt ? Date.parse(lastSuccessAt) : NaN;
@@ -196,6 +258,44 @@ function parseCompactCount(value){
   return Math.round(base * mult);
 }
 
+function calculateFollowerDelta(history = [], latestCount = null){
+  const latest = Number.isFinite(Number(latestCount)) ? Number(latestCount) : null;
+  if (!Number.isFinite(latest)) return null;
+  const records = (Array.isArray(history) ? history : []).filter((h) => Number.isFinite(Number(h?.followersCount)));
+  if (!records.length) return 0;
+  const prev = Number(records.length > 1 ? records[records.length - 2].followersCount : records[records.length - 1].followersCount);
+  if (!Number.isFinite(prev)) return null;
+  return latest - prev;
+}
+
+function calculateFollowerRollingDelta(history = [], latestCount = null, latestFetchedAt = '', windowMs = 0){
+  const latest = Number.isFinite(Number(latestCount)) ? Number(latestCount) : null;
+  const window = Number.isFinite(Number(windowMs)) ? Number(windowMs) : 0;
+  if (!Number.isFinite(latest) || window <= 0) return null;
+
+  const records = (Array.isArray(history) ? history : [])
+    .map((h) => ({ followersCount: Number(h?.followersCount), ts: Date.parse(String(h?.fetchedAt || '')) }))
+    .filter((h) => Number.isFinite(h.followersCount) && Number.isFinite(h.ts))
+    .sort((a, b) => a.ts - b.ts);
+
+  if (!records.length) return null;
+
+  const latestTsParsed = Date.parse(String(latestFetchedAt || ''));
+  const latestTs = Number.isFinite(latestTsParsed) ? latestTsParsed : records[records.length - 1].ts;
+  if (!Number.isFinite(latestTs)) return null;
+
+  const windowStart = latestTs - window;
+  let baseline = null;
+  for (let i = records.length - 1; i >= 0; i -= 1) {
+    if (records[i].ts <= windowStart) {
+      baseline = records[i];
+      break;
+    }
+  }
+  if (!baseline || !Number.isFinite(baseline.followersCount)) return null;
+  return latest - baseline.followersCount;
+}
+
 function extractFacebookPublicFollowerEstimate(html){
   const text = String(html || '');
   if (!text) return { count: null, signal: '' };
@@ -221,6 +321,168 @@ function extractFacebookPublicFollowerEstimate(html){
   return candidates[0];
 }
 
+function extractInstagramPublicFollowerEstimate(html){
+  const text = String(html || '');
+  if (!text) return { count: null, signal: '' };
+  const candidates = [];
+  const push = (raw, signal) => {
+    const compact = parseCompactCount(String(raw || '').replace(/,/g, ''));
+    if (!Number.isFinite(compact) || compact <= 0) return;
+    candidates.push({ count: compact, signal });
+  };
+
+  let m;
+  const jsonLdRx = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  while ((m = jsonLdRx.exec(text)) !== null) {
+    const parsed = parseJsonSafely(m[1], 'instagram_ld_json');
+    if (!parsed.ok) continue;
+    const items = Array.isArray(parsed.value) ? parsed.value : [parsed.value];
+    for (const item of items) {
+      const count = item?.mainEntityofPage?.interactionStatistic?.userInteractionCount
+        ?? item?.mainEntityofPage?.interactionStatistic?.[0]?.userInteractionCount
+        ?? item?.interactionStatistic?.userInteractionCount
+        ?? item?.interactionStatistic?.[0]?.userInteractionCount;
+      if (Number.isFinite(Number(count))) push(String(count), 'ld_json_interactionStatistic');
+    }
+  }
+
+  const patterns = [
+    { signal: 'og_description_followers', rx: /<meta\s+property=["']og:description["']\s+content=["'][^"']*?([0-9][0-9,.]*\s*[kKmMbB]?)\s+Followers\b/i },
+    { signal: 'followers_count_json', rx: /"edge_followed_by"\s*:\s*\{[^}]*"count"\s*:\s*([0-9][0-9,.]*)/g },
+    { signal: 'followers_count_alt_json', rx: /"followers_count"\s*[:=]\s*"?([0-9][0-9,.]*\s*[kKmMbB]?)"?/g },
+    { signal: 'followers_text', rx: /([0-9][0-9,.]*\s*[kKmMbB]?)\s*followers\b/gi },
+    { signal: 'followers_text_reverse', rx: /followers\D{0,20}([0-9][0-9,.]*\s*[kKmMbB]?)/gi },
+  ];
+  for (const p of patterns) {
+    if (!p.rx.global) {
+      const single = text.match(p.rx);
+      if (single && single[1]) push(single[1], p.signal);
+      continue;
+    }
+    while ((m = p.rx.exec(text)) !== null) push(m[1], p.signal);
+  }
+
+  if (!candidates.length) return { count: null, signal: '' };
+  candidates.sort((a, b) => b.count - a.count);
+  return candidates[0];
+}
+
+function extractTikTokPublicFollowerEstimate(html){
+  const text = String(html || '');
+  if (!text) return { count: null, signal: '' };
+  const candidates = [];
+  const push = (raw, signal) => {
+    const compact = parseCompactCount(String(raw || '').replace(/,/g, ''));
+    if (!Number.isFinite(compact) || compact <= 0) return;
+    candidates.push({ count: compact, signal });
+  };
+
+  let m;
+  const sigiRx = /<script[^>]+id=["']__UNIVERSAL_DATA_FOR_REHYDRATION__["'][^>]*>([\s\S]*?)<\/script>/i;
+  const sigiMatch = text.match(sigiRx);
+  if (sigiMatch && sigiMatch[1]) {
+    const parsed = parseJsonSafely(sigiMatch[1], 'tiktok_universal_data');
+    const users = parsed.ok ? parsed.value?.__DEFAULT_SCOPE__?.['webapp.user-detail']?.userInfo : null;
+    const count = users?.stats?.followerCount;
+    if (Number.isFinite(Number(count))) push(String(count), 'universal_data_userInfo_stats');
+  }
+
+  const jsonLdRx = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  while ((m = jsonLdRx.exec(text)) !== null) {
+    const parsed = parseJsonSafely(m[1], 'tiktok_ld_json');
+    if (!parsed.ok) continue;
+    const item = parsed.value;
+    const count = item?.interactionStatistic?.userInteractionCount ?? item?.interactionStatistic?.[0]?.userInteractionCount;
+    if (Number.isFinite(Number(count))) push(String(count), 'ld_json_interactionStatistic');
+  }
+
+  const patterns = [
+    { signal: 'meta_description_followers', rx: /<meta\s+name=["']description["']\s+content=["'][^"']*?([0-9][0-9,.]*\s*[kKmMbB]?)\s+Followers\b/i },
+    { signal: 'followers_count_json', rx: /"followerCount"\s*[:=]\s*"?([0-9][0-9,.]*\s*[kKmMbB]?)"?/g },
+    { signal: 'followers_text', rx: /([0-9][0-9,.]*\s*[kKmMbB]?)\s*followers\b/gi },
+    { signal: 'followers_reverse_text', rx: /followers\D{0,24}([0-9][0-9,.]*\s*[kKmMbB]?)/gi },
+  ];
+  for (const p of patterns) {
+    if (!p.rx.global) {
+      const single = text.match(p.rx);
+      if (single && single[1]) push(single[1], p.signal);
+      continue;
+    }
+    while ((m = p.rx.exec(text)) !== null) push(m[1], p.signal);
+  }
+
+  if (!candidates.length) return { count: null, signal: '' };
+  candidates.sort((a, b) => b.count - a.count);
+  return candidates[0];
+}
+
+function extractYouTubePublicSubscriberEstimate(html){
+  const text = String(html || '');
+  if (!text) return { count: null, signal: '' };
+  const candidates = [];
+  const push = (raw, signal) => {
+    const compact = parseCompactCount(String(raw || '').replace(/,/g, ''));
+    if (!Number.isFinite(compact) || compact <= 0) return;
+    candidates.push({ count: compact, signal });
+  };
+
+  let m;
+  const ytInitialDataRx = /(?:var\s+ytInitialData\s*=\s*|window\[["']ytInitialData["']\]\s*=\s*)(\{[\s\S]*?\});<\/script>/i;
+  const ytInitialMatch = text.match(ytInitialDataRx);
+  if (ytInitialMatch && ytInitialMatch[1]) {
+    const parsed = parseJsonSafely(ytInitialMatch[1], 'youtube_initial_data');
+    if (parsed.ok) {
+      const blob = JSON.stringify(parsed.value);
+      const rx = /"subscriberCountText"\s*:\s*\{[\s\S]*?"simpleText"\s*:\s*"([^"]+)"/gi;
+      while ((m = rx.exec(blob)) !== null) push(String(m[1]).replace(/\s*subscribers?\b/i, ''), 'yt_initial_data_subscriberCountText');
+    }
+  }
+
+  const ytInitialPlayerResponseRx = /(?:var\s+ytInitialPlayerResponse\s*=\s*)(\{[\s\S]*?\});<\/script>/i;
+  const playerMatch = text.match(ytInitialPlayerResponseRx);
+  if (playerMatch && playerMatch[1]) {
+    const parsed = parseJsonSafely(playerMatch[1], 'youtube_initial_player_response');
+    if (parsed.ok) {
+      const blob = JSON.stringify(parsed.value);
+      const rx = /"subscriberCountText"\s*:\s*\{[\s\S]*?"simpleText"\s*:\s*"([^"]+)"/gi;
+      while ((m = rx.exec(blob)) !== null) push(String(m[1]).replace(/\s*subscribers?\b/i, ''), 'yt_initial_player_subscriberCountText');
+    }
+  }
+
+  const patterns = [
+    { signal: 'meta_og_description_subscribers', rx: /<meta\s+property=["']og:description["']\s+content=["'][^"']*?([0-9][0-9,.]*\s*[kKmMbB]?)\s+subscribers?\b/i },
+    { signal: 'subscriber_count_json', rx: /"subscriberCountText"\s*:\s*\{[\s\S]*?"simpleText"\s*:\s*"([^"]+?)"/gi },
+    { signal: 'subscriber_count_label_json', rx: /"subscriberCountText"\s*:\s*\{[\s\S]*?"label"\s*:\s*"([^"]+?)"/gi },
+    { signal: 'subscribers_text', rx: /([0-9][0-9,.]*\s*[kKmMbB]?)\s*subscribers?\b/gi }
+  ];
+
+  for (const p of patterns) {
+    if (!p.rx.global) {
+      const single = text.match(p.rx);
+      if (single && single[1]) push(single[1], p.signal);
+      continue;
+    }
+    while ((m = p.rx.exec(text)) !== null) push(String(m[1]).replace(/\s*subscribers?\b/i, ''), p.signal);
+  }
+
+  if (!candidates.length) return { count: null, signal: '' };
+  const priority = {
+    yt_initial_data_subscriberCountText: 1,
+    yt_initial_player_subscriberCountText: 1,
+    subscriber_count_json: 2,
+    subscriber_count_label_json: 3,
+    meta_og_description_subscribers: 4,
+    subscribers_text: 5,
+  };
+  candidates.sort((a, b) => {
+    const pa = priority[a.signal] ?? 99;
+    const pb = priority[b.signal] ?? 99;
+    if (pa !== pb) return pa - pb;
+    return b.count - a.count;
+  });
+  return candidates[0];
+}
+
 async function delay(ms){ return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 async function fetchTextViaCurl(url, timeoutMs = 12000){
@@ -237,6 +499,111 @@ async function fetchTextViaCurl(url, timeoutMs = 12000){
   });
 }
 
+async function fetchInstagramWebProfileInfo(handle, timeoutMs = META_GRAPH_TIMEOUT_MS){
+  const cleanHandle = String(handle || INSTAGRAM_PROFILE_HANDLE || '').trim().replace(/^@+/, '');
+  if (!cleanHandle) throw Object.assign(new Error('instagram_handle_missing'), { httpStatus: 400 });
+
+  const endpoint = 'https://i.instagram.com/api/v1/users/web_profile_info/?username=' + encodeURIComponent(cleanHandle);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs || META_GRAPH_TIMEOUT_MS)));
+
+  try {
+    const res = await fetch(endpoint, {
+      headers: {
+        'accept': '*/*',
+        'accept-language': 'en-US,en;q=0.9',
+        'origin': 'https://www.instagram.com',
+        'referer': 'https://www.instagram.com/' + cleanHandle + '/',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'x-ig-app-id': '936619743392459',
+        'x-requested-with': 'XMLHttpRequest',
+      },
+      signal: controller.signal,
+    });
+
+    const text = await res.text();
+    if (!res.ok) {
+      const err = new Error('instagram_web_profile_info_http_' + res.status);
+      err.httpStatus = Number(res.status || 502);
+      err.responseBody = String(text || '').slice(0, 240);
+      throw err;
+    }
+
+    const parsed = parseJsonSafely(text, 'instagram_web_profile_info');
+    if (!parsed.ok) throw Object.assign(new Error('instagram_web_profile_info_invalid_json'), { httpStatus: 502 });
+
+    const user = parsed.value?.data?.user;
+    const countRaw = user?.edge_followed_by?.count ?? user?.follower_count ?? user?.followers_count;
+    const count = Number.isFinite(Number(countRaw)) ? Number(countRaw) : null;
+    if (!Number.isFinite(count) || count <= 0) throw Object.assign(new Error('instagram_web_profile_info_followers_missing'), { httpStatus: 502 });
+
+    return {
+      count,
+      profileName: String(user?.full_name || user?.username || '').trim(),
+      signal: user?.edge_followed_by?.count != null ? 'edge_followed_by_count' : (user?.follower_count != null ? 'follower_count' : 'followers_count'),
+      endpoint,
+    };
+  } catch (err) {
+    if (String(err?.name || '').toLowerCase() === 'aborterror') {
+      throw Object.assign(new Error('instagram_web_profile_info_timeout'), { httpStatus: 504 });
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchInstagramFollowersViaMetaSuite({ handle, timeoutMs = INSTAGRAM_META_SUITE_TIMEOUT_MS } = {}) {
+  const scriptArgs = [
+    INSTAGRAM_META_SUITE_SCRIPT_PATH,
+    '--handle', String(handle || '').trim().replace(/^@+/, ''),
+    '--url', INSTAGRAM_META_SUITE_URL,
+    '--storage', INSTAGRAM_META_SUITE_STORAGE_PATH,
+    '--timeout-ms', String(Math.max(5000, Number(timeoutMs) || INSTAGRAM_META_SUITE_TIMEOUT_MS)),
+    '--headless', INSTAGRAM_META_SUITE_HEADLESS ? '1' : '0',
+  ];
+
+  const result = await execFileSafe('node', scriptArgs, {
+    timeout: Math.max(10_000, Number(timeoutMs) + 5_000),
+    maxBuffer: 1024 * 1024,
+  });
+
+  if (!result.ok) {
+    const stderrSnippet = String(result.stderr || '').trim().slice(0, 280);
+    const stdoutSnippet = String(result.stdout || '').trim().slice(0, 280);
+    const msg = stderrSnippet || stdoutSnippet || String(result.error?.message || 'meta_suite_script_exec_failed');
+    const err = new Error('meta_suite_exec_failed: ' + msg);
+    err.httpStatus = /timed out/i.test(msg) ? 504 : 502;
+    throw err;
+  }
+
+  const parsed = parseJsonSafely(result.stdout, 'instagram_meta_suite_scraper');
+  if (!parsed.ok || !parsed.value || typeof parsed.value !== 'object') {
+    throw Object.assign(new Error('meta_suite_invalid_json_output'), { httpStatus: 502 });
+  }
+
+  if (!parsed.value.ok) {
+    const reason = String(parsed.value.reason || parsed.value.error || 'meta_suite_failed');
+    const err = new Error(reason);
+    err.httpStatus = reason === 'meta_suite_setup_required' ? 428 : 502;
+    err.setupRequired = reason === 'meta_suite_setup_required';
+    err.details = parsed.value;
+    throw err;
+  }
+
+  const count = Number(parsed.value.followersCount);
+  if (!Number.isFinite(count) || count <= 0) {
+    throw Object.assign(new Error('meta_suite_followers_missing'), { httpStatus: 502 });
+  }
+
+  return {
+    count,
+    profileName: String(parsed.value.profileName || '').trim(),
+    signal: String(parsed.value.signal || ''),
+    provider: String(parsed.value.provider || 'meta_suite_playwright').trim() || 'meta_suite_playwright',
+  };
+}
+
 function facebookFollowerResponsePayload(opts = {}){
   const successTs = facebookFollowersState.status.lastSuccessAt || facebookFollowersState.latest?.fetchedAt || '';
   const freshness = classifyFacebookFollowerStaleLevel(successTs);
@@ -248,6 +615,9 @@ function facebookFollowerResponsePayload(opts = {}){
       fanCount: facebookFollowersState.latest.fanCount,
       fetchedAt: facebookFollowersState.latest.fetchedAt,
       source: facebookFollowersState.latest.source || 'meta_graph',
+      delta: calculateFollowerDelta(facebookFollowersState.history, facebookFollowersState.latest.followersCount),
+      rollingDelta1h: calculateFollowerRollingDelta(facebookFollowersState.history, facebookFollowersState.latest.followersCount, facebookFollowersState.latest.fetchedAt, 60 * 60 * 1000),
+      rollingDelta24h: calculateFollowerRollingDelta(facebookFollowersState.history, facebookFollowersState.latest.followersCount, facebookFollowersState.latest.fetchedAt, 24 * 60 * 60 * 1000),
     } : null,
     status: {
       stale: freshness.stale,
@@ -425,6 +795,687 @@ async function handleApiFacebookFollowers(req, res) {
   if (pathname !== '/api/facebook-followers') return sendJson(res, 404, { ok: false, error: 'not_found' });
   if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/facebook-followers.' });
   return sendJson(res, 200, facebookFollowerResponsePayload());
+}
+
+
+
+function ensureInstagramFollowersShape(input){
+  const base = input && typeof input === 'object' ? input : {};
+  const latest = base.latest && typeof base.latest === 'object' ? {
+    followersCount: Number.isFinite(Number(base.latest.followersCount)) ? Number(base.latest.followersCount) : null,
+    fetchedAt: String(base.latest.fetchedAt || ''),
+    source: String(base.latest.source || 'placeholder_env'),
+    requestId: String(base.latest.requestId || ''),
+    latencyMs: Number.isFinite(Number(base.latest.latencyMs)) ? Math.max(0, Number(base.latest.latencyMs)) : null,
+    stale: !!base.latest.stale,
+  } : null;
+  const historyRaw = Array.isArray(base.history) ? base.history : [];
+  return {
+    schemaVersion: 1,
+    profile: {
+      handle: String(base?.profile?.handle || INSTAGRAM_PROFILE_HANDLE || '').trim().replace(/^@+/, ''),
+      name: String(base?.profile?.name || INSTAGRAM_PROFILE_NAME || '').trim(),
+    },
+    latest,
+    status: {
+      ok: !!base?.status?.ok,
+      lastSuccessAt: String(base?.status?.lastSuccessAt || ''),
+      lastAttemptAt: String(base?.status?.lastAttemptAt || ''),
+      consecutiveFailures: Number.isFinite(Number(base?.status?.consecutiveFailures)) ? Math.max(0, Math.floor(Number(base.status.consecutiveFailures))) : 0,
+      lastError: String(base?.status?.lastError || '').slice(0, 280),
+    },
+    history: historyRaw.map((h) => ({ followersCount: Number.isFinite(Number(h?.followersCount)) ? Number(h.followersCount) : null, fetchedAt: String(h?.fetchedAt || '') }))
+      .filter((h) => Number.isFinite(h.followersCount) && h.fetchedAt)
+      .slice(-INSTAGRAM_FOLLOWERS_HISTORY_LIMIT),
+    updatedAt: String(base.updatedAt || ''),
+  };
+}
+
+async function persistInstagramFollowersState(){
+  await ensureDataDir();
+  const body = JSON.stringify(ensureInstagramFollowersShape(instagramFollowersState), null, 2);
+  const tmpPath = INSTAGRAM_FOLLOWERS_PATH + '.tmp';
+  await fsp.writeFile(tmpPath, body, 'utf8');
+  await fsp.rename(tmpPath, INSTAGRAM_FOLLOWERS_PATH);
+}
+
+async function loadInstagramFollowersState(){
+  try {
+    const raw = await fsp.readFile(INSTAGRAM_FOLLOWERS_PATH, 'utf8');
+    const parsed = parseJsonSafely(raw, 'instagram_followers_state');
+    if (!parsed.ok) return;
+    instagramFollowersState = ensureInstagramFollowersShape(parsed.value);
+  } catch {}
+}
+
+async function appendInstagramFollowersLog(event){
+  try {
+    await fsp.mkdir(path.dirname(INSTAGRAM_FOLLOWERS_LOG_PATH), { recursive: true });
+    await fsp.appendFile(INSTAGRAM_FOLLOWERS_LOG_PATH, JSON.stringify(event) + '\n', 'utf8');
+  } catch {}
+}
+
+function instagramFollowerResponsePayload(opts = {}){
+  const successTs = instagramFollowersState.status.lastSuccessAt || instagramFollowersState.latest?.fetchedAt || '';
+  const freshness = classifyFacebookFollowerStaleLevel(successTs);
+  return {
+    ok: !!instagramFollowersState.latest,
+    profile: { ...instagramFollowersState.profile },
+    latest: instagramFollowersState.latest ? {
+      followersCount: instagramFollowersState.latest.followersCount,
+      fetchedAt: instagramFollowersState.latest.fetchedAt,
+      source: instagramFollowersState.latest.source || 'placeholder_env',
+      delta: calculateFollowerDelta(instagramFollowersState.history, instagramFollowersState.latest.followersCount),
+      rollingDelta1h: calculateFollowerRollingDelta(instagramFollowersState.history, instagramFollowersState.latest.followersCount, instagramFollowersState.latest.fetchedAt, 60 * 60 * 1000),
+      rollingDelta24h: calculateFollowerRollingDelta(instagramFollowersState.history, instagramFollowersState.latest.followersCount, instagramFollowersState.latest.fetchedAt, 24 * 60 * 60 * 1000),
+    } : null,
+    status: {
+      stale: freshness.stale,
+      staleLevel: freshness.staleLevel,
+      ageMs: freshness.ageMs,
+      lastSuccessAt: instagramFollowersState.status.lastSuccessAt || '',
+      lastAttemptAt: instagramFollowersState.status.lastAttemptAt || '',
+      consecutiveFailures: instagramFollowersState.status.consecutiveFailures || 0,
+      lastError: instagramFollowersState.status.lastError || '',
+    },
+    history: opts.includeHistory === false ? [] : instagramFollowersState.history,
+  };
+}
+
+async function pollInstagramFollowers({ source = 'interval', followersCount } = {}){
+  if (instagramFollowersPollInFlight) return instagramFollowersPollInFlight;
+  const run = (async () => {
+    const requestId = 'igf_' + Date.now().toString(36) + '_' + crypto.randomBytes(2).toString('hex');
+    const startedAt = Date.now();
+    instagramFollowersState.status.lastAttemptAt = new Date().toISOString();
+
+    const providedRaw = Number.isFinite(Number(followersCount)) ? Number(followersCount) : null;
+    const providedCount = Number.isFinite(providedRaw) && providedRaw > 0 ? providedRaw : null;
+    if (Number.isFinite(providedCount)) {
+      const fetchedAt = new Date().toISOString();
+      instagramFollowersState.latest = { followersCount: providedCount, fetchedAt, source: 'manual_refresh', requestId, latencyMs: 0, stale: false };
+      instagramFollowersState.status = { ok: true, lastSuccessAt: fetchedAt, lastAttemptAt: fetchedAt, consecutiveFailures: 0, lastError: '' };
+      instagramFollowersState.history.push({ followersCount: providedCount, fetchedAt });
+      if (instagramFollowersState.history.length > INSTAGRAM_FOLLOWERS_HISTORY_LIMIT) instagramFollowersState.history = instagramFollowersState.history.slice(-INSTAGRAM_FOLLOWERS_HISTORY_LIMIT);
+      instagramFollowersState.updatedAt = new Date().toISOString();
+      await persistInstagramFollowersState();
+      await appendInstagramFollowersLog({ ts: new Date().toISOString(), event: 'instagram_followers_poll', ok: true, source, requestId, followersCount: providedCount, delta: calculateFollowerDelta(instagramFollowersState.history, providedCount), provider: 'manual_refresh' });
+      return instagramFollowerResponsePayload();
+    }
+
+    const profileUrl = INSTAGRAM_PROFILE_URL;
+    const handle = (instagramFollowersState.profile.handle || INSTAGRAM_PROFILE_HANDLE || '').replace(/^@+/, '');
+    let parsed = { count: null, signal: '' };
+    let primaryReason = '';
+    let secondaryReason = '';
+    const mode = INSTAGRAM_PROVIDER;
+
+    if (mode === 'meta_suite' || mode === 'auto') {
+      try {
+        const meta = await fetchInstagramFollowersViaMetaSuite({ handle, timeoutMs: INSTAGRAM_META_SUITE_TIMEOUT_MS });
+        const previousKnown = Number.isFinite(Number(instagramFollowersState.latest?.followersCount)) ? Number(instagramFollowersState.latest.followersCount) : null;
+        const envKnown = Number.isFinite(Number(INSTAGRAM_FOLLOWERS_COUNT)) ? Number(INSTAGRAM_FOLLOWERS_COUNT) : null;
+        const recentReference = instagramFollowersState.history
+          .slice(-24)
+          .map((h) => (Number.isFinite(Number(h?.followersCount)) ? Number(h.followersCount) : null))
+          .filter((v) => Number.isFinite(v) && v > 0)
+          .sort((a, b) => b - a)[0] ?? null;
+        const referenceCount = [previousKnown, envKnown, recentReference]
+          .filter((v) => Number.isFinite(v) && v > 0)
+          .sort((a, b) => b - a)[0] ?? null;
+        if (Number.isFinite(referenceCount) && referenceCount > 0) {
+          const minAllowed = Math.floor(referenceCount * 0.75);
+          const maxAllowed = Math.ceil(referenceCount * 1.5);
+          if (meta.count < minAllowed || meta.count > maxAllowed) {
+            throw Object.assign(new Error('instagram_meta_count_outlier_' + meta.count + '_expected_near_' + referenceCount), { httpStatus: 502 });
+          }
+        }
+
+        const fetchedAt = new Date().toISOString();
+        const stale = classifyFacebookFollowerStaleLevel(fetchedAt).stale;
+        const latencyMs = Math.max(0, Date.now() - startedAt);
+
+        if (meta.profileName) instagramFollowersState.profile.name = meta.profileName;
+        instagramFollowersState.profile.handle = handle;
+        instagramFollowersState.latest = { followersCount: meta.count, fetchedAt, source: meta.provider, requestId, latencyMs, stale };
+        instagramFollowersState.status = { ok: true, lastSuccessAt: fetchedAt, lastAttemptAt: fetchedAt, consecutiveFailures: 0, lastError: '' };
+        instagramFollowersState.history.push({ followersCount: meta.count, fetchedAt });
+        if (instagramFollowersState.history.length > INSTAGRAM_FOLLOWERS_HISTORY_LIMIT) instagramFollowersState.history = instagramFollowersState.history.slice(-INSTAGRAM_FOLLOWERS_HISTORY_LIMIT);
+        instagramFollowersState.updatedAt = new Date().toISOString();
+        await persistInstagramFollowersState();
+        await appendInstagramFollowersLog({ ts: new Date().toISOString(), event: 'instagram_followers_poll', ok: true, source, requestId, followersCount: meta.count, delta: calculateFollowerDelta(instagramFollowersState.history, meta.count), provider: meta.provider, signal: meta.signal || '', latencyMs, mode });
+        return instagramFollowerResponsePayload();
+      } catch (err) {
+        const status = Number(err?.httpStatus || 0);
+        const message = String(err?.message || err || 'meta_suite_failed').slice(0, 220);
+        primaryReason = ((status === 428 || err?.setupRequired) ? 'meta_suite_setup_required' : /abort|timeout|timed out/i.test(message) ? 'meta_suite_timeout' : 'meta_suite_failed') + ': ' + message;
+        if (mode === 'meta_suite') secondaryReason = 'mode_meta_suite_no_secondary_provider';
+      }
+    }
+
+    if (!secondaryReason && (mode === 'public' || mode === 'auto' || mode === 'meta_suite')) {
+      try {
+        const html = await fetchTextViaCurl(profileUrl, META_GRAPH_TIMEOUT_MS);
+        parsed = extractInstagramPublicFollowerEstimate(html);
+        if (!Number.isFinite(parsed.count)) throw Object.assign(new Error('instagram_public_follower_signal_not_found'), { httpStatus: 502 });
+        const previousKnown = Number.isFinite(Number(instagramFollowersState.latest?.followersCount)) ? Number(instagramFollowersState.latest.followersCount) : null;
+        const envKnown = Number.isFinite(Number(INSTAGRAM_FOLLOWERS_COUNT)) ? Number(INSTAGRAM_FOLLOWERS_COUNT) : null;
+        const recentReference = instagramFollowersState.history
+          .slice(-24)
+          .map((h) => (Number.isFinite(Number(h?.followersCount)) ? Number(h.followersCount) : null))
+          .filter((v) => Number.isFinite(v) && v > 0)
+          .sort((a, b) => b - a)[0] ?? null;
+        const referenceCount = [previousKnown, envKnown, recentReference]
+          .filter((v) => Number.isFinite(v) && v > 0)
+          .sort((a, b) => b - a)[0] ?? null;
+        if (Number.isFinite(referenceCount) && referenceCount > 0) {
+          const minAllowed = Math.floor(referenceCount * 0.75);
+          const maxAllowed = Math.ceil(referenceCount * 1.5);
+          if (parsed.count < minAllowed || parsed.count > maxAllowed) {
+            throw Object.assign(new Error('instagram_public_count_outlier_' + parsed.count + '_expected_near_' + referenceCount), { httpStatus: 502 });
+          }
+        }
+
+        const fetchedAt = new Date().toISOString();
+        const stale = classifyFacebookFollowerStaleLevel(fetchedAt).stale;
+        const latencyMs = Math.max(0, Date.now() - startedAt);
+        const titleMatch = html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i) || html.match(/<title>([^<]+)<\/title>/i);
+        const derivedName = String(titleMatch?.[1] || '').replace(/\s*\(@[^)]+\)\s*$/, '').trim();
+        if (derivedName) instagramFollowersState.profile.name = derivedName;
+        instagramFollowersState.profile.handle = handle;
+        instagramFollowersState.latest = { followersCount: parsed.count, fetchedAt, source: 'instagram_public_scrape_estimate', requestId, latencyMs, stale };
+        instagramFollowersState.status = { ok: true, lastSuccessAt: fetchedAt, lastAttemptAt: fetchedAt, consecutiveFailures: 0, lastError: primaryReason.slice(0, 280) };
+        instagramFollowersState.history.push({ followersCount: parsed.count, fetchedAt });
+        if (instagramFollowersState.history.length > INSTAGRAM_FOLLOWERS_HISTORY_LIMIT) instagramFollowersState.history = instagramFollowersState.history.slice(-INSTAGRAM_FOLLOWERS_HISTORY_LIMIT);
+        instagramFollowersState.updatedAt = new Date().toISOString();
+        await persistInstagramFollowersState();
+        await appendInstagramFollowersLog({ ts: new Date().toISOString(), event: 'instagram_followers_poll', ok: true, source, requestId, followersCount: parsed.count, delta: calculateFollowerDelta(instagramFollowersState.history, parsed.count), provider: 'instagram_public_scrape_estimate', signal: parsed.signal || '', latencyMs, fallbackFrom: primaryReason || '', mode });
+        return instagramFollowerResponsePayload();
+      } catch (err) {
+        const status = Number(err?.httpStatus || 0);
+        const message = String(err?.message || err || 'instagram_public_scrape_failed').slice(0, 220);
+        secondaryReason = ((status === 401 || status === 403) ? 'instagram_public_scrape_blocked' : /not_found/i.test(message) ? 'instagram_public_signal_not_found' : /abort|timeout/i.test(message) ? 'instagram_public_scrape_timeout' : 'instagram_public_scrape_failed') + ': ' + message;
+      }
+    }
+
+    const chainReason = [primaryReason, secondaryReason].filter(Boolean).join(' | ').slice(0, 280);
+    const envCountRaw = Number.isFinite(Number(INSTAGRAM_FOLLOWERS_COUNT)) ? Number(INSTAGRAM_FOLLOWERS_COUNT) : null;
+    const envCount = Number.isFinite(envCountRaw) && envCountRaw > 0 ? envCountRaw : null;
+
+    if (!instagramFollowersState.latest && Number.isFinite(envCount)) {
+      const fetchedAt = new Date().toISOString();
+      instagramFollowersState.latest = { followersCount: envCount, fetchedAt, source: 'placeholder_env', requestId, latencyMs: Math.max(0, Date.now() - startedAt), stale: false };
+      instagramFollowersState.status = {
+        ok: true,
+        lastSuccessAt: fetchedAt,
+        lastAttemptAt: fetchedAt,
+        consecutiveFailures: 0,
+        lastError: ('provider_chain_unavailable_using_placeholder: ' + chainReason).slice(0, 280),
+      };
+      instagramFollowersState.history.push({ followersCount: envCount, fetchedAt });
+      if (instagramFollowersState.history.length > INSTAGRAM_FOLLOWERS_HISTORY_LIMIT) instagramFollowersState.history = instagramFollowersState.history.slice(-INSTAGRAM_FOLLOWERS_HISTORY_LIMIT);
+    } else {
+      instagramFollowersState.status.ok = false;
+      instagramFollowersState.status.lastAttemptAt = new Date().toISOString();
+      instagramFollowersState.status.consecutiveFailures = (instagramFollowersState.status.consecutiveFailures || 0) + 1;
+      instagramFollowersState.status.lastError = ('instagram_provider_chain_failed: ' + chainReason).slice(0, 280);
+      if (instagramFollowersState.latest && Number.isFinite(Number(instagramFollowersState.latest.followersCount)) && Number(instagramFollowersState.latest.followersCount) > 0) {
+        const envBaseline = Number.isFinite(Number(INSTAGRAM_FOLLOWERS_COUNT)) ? Number(INSTAGRAM_FOLLOWERS_COUNT) : null;
+        const historyBaseline = instagramFollowersState.history
+          .slice(-24)
+          .map((h) => (Number.isFinite(Number(h?.followersCount)) ? Number(h.followersCount) : null))
+          .filter((v) => Number.isFinite(v) && v > 0)
+          .sort((a, b) => b - a)[0] ?? null;
+        const baseline = [envBaseline, historyBaseline]
+          .filter((v) => Number.isFinite(v) && v > 0)
+          .sort((a, b) => b - a)[0] ?? null;
+        if (Number.isFinite(baseline) && Number(instagramFollowersState.latest.followersCount) < Math.floor(baseline * 0.75)) {
+          instagramFollowersState.latest.followersCount = baseline;
+        }
+        instagramFollowersState.latest.stale = true;
+        instagramFollowersState.latest.source = 'last_known_fallback';
+      }
+    }
+
+    instagramFollowersState.updatedAt = new Date().toISOString();
+    await persistInstagramFollowersState();
+    const freshness = classifyFacebookFollowerStaleLevel(instagramFollowersState.status.lastSuccessAt || '');
+    await appendInstagramFollowersLog({ ts: new Date().toISOString(), event: 'instagram_followers_poll', ok: false, source, requestId, followersCount: instagramFollowersState.latest?.followersCount ?? null, ageMs: freshness.ageMs, provider: instagramFollowersState.latest?.source === 'last_known_fallback' ? 'last_known_fallback' : (Number.isFinite(envCount) ? 'placeholder_env' : 'instagram_provider_chain_failed'), error: instagramFollowersState.status.lastError, signal: parsed.signal || '', primaryReason, secondaryReason, mode });
+    return instagramFollowerResponsePayload();
+  })();
+
+  instagramFollowersPollInFlight = run;
+  try { return await run; } finally { instagramFollowersPollInFlight = null; }
+}
+
+async function initInstagramFollowersService(){
+  await loadInstagramFollowersState();
+  await pollInstagramFollowers({ source: 'startup_bootstrap' });
+  if (instagramFollowersPollTimer) clearInterval(instagramFollowersPollTimer);
+  instagramFollowersPollTimer = setInterval(() => {
+    pollInstagramFollowers({ source: 'interval' }).catch(() => {});
+  }, INSTAGRAM_POLL_INTERVAL_MS);
+}
+
+async function handleApiInstagramFollowers(req, res) {
+  const pathname = new URL(req.url || '/api/instagram-followers', 'http://localhost:' + PORT).pathname;
+  if (!META_GRAPH_ALLOW_REMOTE && !isLocalRequest(req)) {
+    return sendJson(res, 403, { ok: false, error: 'local_only', message: 'Instagram followers endpoint is local-only by default. Set META_GRAPH_ALLOW_REMOTE=1 to allow remote requests.' });
+  }
+  if (pathname === '/api/instagram-followers/refresh') {
+    if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/instagram-followers/refresh.' });
+    let source = 'manual';
+    let followersCount = null;
+    try {
+      const reqUrl = new URL(req.url || '/api/instagram-followers/refresh', 'http://localhost:' + PORT);
+      source = String(reqUrl.searchParams.get('source') || '').trim() || source;
+      const bodyRaw = await readBody(req);
+      if (bodyRaw) {
+        const parsed = parseJsonSafely(bodyRaw, 'instagram_followers_refresh_body');
+        if (parsed.ok && parsed.value && typeof parsed.value === 'object') {
+          if (parsed.value.source) source = String(parsed.value.source).trim();
+          if (Number.isFinite(Number(parsed.value.followersCount)) && Number(parsed.value.followersCount) > 0) {
+            followersCount = Number(parsed.value.followersCount);
+          }
+        }
+      }
+    } catch {}
+    const payload = await pollInstagramFollowers({ source: source || 'manual', followersCount });
+    return sendJson(res, payload.ok ? 200 : 503, payload);
+  }
+  if (pathname === '/api/instagram-followers/health') {
+    if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/instagram-followers/health.' });
+    return sendJson(res, 200, { ok: true, status: instagramFollowerResponsePayload({ includeHistory: false }).status, profile: instagramFollowersState.profile });
+  }
+  if (pathname !== '/api/instagram-followers') return sendJson(res, 404, { ok: false, error: 'not_found' });
+  if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/instagram-followers.' });
+  return sendJson(res, 200, instagramFollowerResponsePayload());
+}
+
+function ensureTikTokFollowersShape(input){
+  const base = input && typeof input === 'object' ? input : {};
+  const latest = base.latest && typeof base.latest === 'object' ? {
+    followersCount: Number.isFinite(Number(base.latest.followersCount)) ? Number(base.latest.followersCount) : null,
+    fetchedAt: String(base.latest.fetchedAt || ''),
+    source: String(base.latest.source || 'tiktok_public_scrape_estimate'),
+    requestId: String(base.latest.requestId || ''),
+    latencyMs: Number.isFinite(Number(base.latest.latencyMs)) ? Math.max(0, Number(base.latest.latencyMs)) : null,
+    stale: !!base.latest.stale,
+  } : null;
+  const historyRaw = Array.isArray(base.history) ? base.history : [];
+  const profileHandle = String(base?.profile?.handle || TIKTOK_PROFILE_HANDLE || '').trim().replace(/^@+/, '');
+  const profileUrl = String(base?.profile?.url || TIKTOK_PROFILE_URL || (profileHandle ? ('https://www.tiktok.com/@' + profileHandle) : '')).trim();
+  return {
+    schemaVersion: 1,
+    profile: {
+      handle: profileHandle,
+      name: String(base?.profile?.name || TIKTOK_PROFILE_NAME || '').trim(),
+      url: profileUrl,
+    },
+    latest,
+    status: {
+      ok: !!base?.status?.ok,
+      setupRequired: !!base?.status?.setupRequired,
+      lastSuccessAt: String(base?.status?.lastSuccessAt || ''),
+      lastAttemptAt: String(base?.status?.lastAttemptAt || ''),
+      consecutiveFailures: Number.isFinite(Number(base?.status?.consecutiveFailures)) ? Math.max(0, Math.floor(Number(base.status.consecutiveFailures))) : 0,
+      lastError: String(base?.status?.lastError || '').slice(0, 280),
+    },
+    history: historyRaw.map((h) => ({ followersCount: Number.isFinite(Number(h?.followersCount)) ? Number(h.followersCount) : null, fetchedAt: String(h?.fetchedAt || '') }))
+      .filter((h) => Number.isFinite(h.followersCount) && h.fetchedAt)
+      .slice(-TIKTOK_FOLLOWERS_HISTORY_LIMIT),
+    updatedAt: String(base.updatedAt || ''),
+  };
+}
+
+async function persistTikTokFollowersState(){
+  await ensureDataDir();
+  const body = JSON.stringify(ensureTikTokFollowersShape(tiktokFollowersState), null, 2);
+  const tmpPath = TIKTOK_FOLLOWERS_PATH + '.tmp';
+  await fsp.writeFile(tmpPath, body, 'utf8');
+  await fsp.rename(tmpPath, TIKTOK_FOLLOWERS_PATH);
+}
+
+async function loadTikTokFollowersState(){
+  try {
+    const raw = await fsp.readFile(TIKTOK_FOLLOWERS_PATH, 'utf8');
+    const parsed = parseJsonSafely(raw, 'tiktok_followers_state');
+    if (!parsed.ok) return;
+    tiktokFollowersState = ensureTikTokFollowersShape(parsed.value);
+  } catch {}
+}
+
+async function appendTikTokFollowersLog(event){
+  try {
+    await fsp.mkdir(path.dirname(TIKTOK_FOLLOWERS_LOG_PATH), { recursive: true });
+    await fsp.appendFile(TIKTOK_FOLLOWERS_LOG_PATH, JSON.stringify(event) + '\n', 'utf8');
+  } catch {}
+}
+
+function tiktokFollowerResponsePayload(opts = {}){
+  const successTs = tiktokFollowersState.status.lastSuccessAt || tiktokFollowersState.latest?.fetchedAt || '';
+  const freshness = classifyFacebookFollowerStaleLevel(successTs);
+  return {
+    ok: !!tiktokFollowersState.latest,
+    profile: { ...tiktokFollowersState.profile },
+    latest: tiktokFollowersState.latest ? {
+      followersCount: tiktokFollowersState.latest.followersCount,
+      fetchedAt: tiktokFollowersState.latest.fetchedAt,
+      source: tiktokFollowersState.latest.source || 'tiktok_public_scrape_estimate',
+      delta: calculateFollowerDelta(tiktokFollowersState.history, tiktokFollowersState.latest.followersCount),
+    } : null,
+    status: {
+      stale: freshness.stale,
+      staleLevel: freshness.staleLevel,
+      ageMs: freshness.ageMs,
+      setupRequired: !!tiktokFollowersState.status.setupRequired,
+      lastSuccessAt: tiktokFollowersState.status.lastSuccessAt || '',
+      lastAttemptAt: tiktokFollowersState.status.lastAttemptAt || '',
+      consecutiveFailures: tiktokFollowersState.status.consecutiveFailures || 0,
+      lastError: tiktokFollowersState.status.lastError || '',
+    },
+    history: opts.includeHistory === false ? [] : tiktokFollowersState.history,
+  };
+}
+
+async function pollTikTokFollowers({ source = 'interval' } = {}){
+  if (tiktokFollowersPollInFlight) return tiktokFollowersPollInFlight;
+  const run = (async () => {
+    const requestId = 'ttf_' + Date.now().toString(36) + '_' + crypto.randomBytes(2).toString('hex');
+    const startedAt = Date.now();
+    tiktokFollowersState.status.lastAttemptAt = new Date().toISOString();
+
+    const profileHandle = String(tiktokFollowersState.profile.handle || TIKTOK_PROFILE_HANDLE || '').trim().replace(/^@+/, '');
+    const profileUrl = String(tiktokFollowersState.profile.url || TIKTOK_PROFILE_URL || (profileHandle ? ('https://www.tiktok.com/@' + profileHandle) : '')).trim();
+
+    if (!profileHandle || !profileUrl) {
+      tiktokFollowersState.status.ok = false;
+      tiktokFollowersState.status.setupRequired = true;
+      tiktokFollowersState.status.consecutiveFailures = (tiktokFollowersState.status.consecutiveFailures || 0) + 1;
+      tiktokFollowersState.status.lastError = 'setup_required: set TIKTOK_PROFILE_HANDLE and/or TIKTOK_PROFILE_URL';
+      tiktokFollowersState.updatedAt = new Date().toISOString();
+      await persistTikTokFollowersState();
+      await appendTikTokFollowersLog({ ts: new Date().toISOString(), event: 'tiktok_followers_poll', ok: false, source, requestId, provider: 'setup_required', error: tiktokFollowersState.status.lastError });
+      return tiktokFollowerResponsePayload();
+    }
+
+    try {
+      const html = await fetchTextViaCurl(profileUrl, META_GRAPH_TIMEOUT_MS);
+      const parsed = extractTikTokPublicFollowerEstimate(html);
+      if (!Number.isFinite(parsed.count)) throw Object.assign(new Error('tiktok_public_follower_signal_not_found'), { httpStatus: 502 });
+
+      const previousKnown = Number.isFinite(Number(tiktokFollowersState.latest?.followersCount)) ? Number(tiktokFollowersState.latest.followersCount) : null;
+      const envKnown = Number.isFinite(Number(TIKTOK_FOLLOWERS_COUNT)) ? Number(TIKTOK_FOLLOWERS_COUNT) : null;
+      const recentReference = tiktokFollowersState.history
+        .slice(-24)
+        .map((h) => (Number.isFinite(Number(h?.followersCount)) ? Number(h.followersCount) : null))
+        .filter((v) => Number.isFinite(v) && v > 0)
+        .sort((a, b) => b - a)[0] ?? null;
+      const referenceCount = [previousKnown, envKnown, recentReference]
+        .filter((v) => Number.isFinite(v) && v > 0)
+        .sort((a, b) => b - a)[0] ?? null;
+      if (Number.isFinite(referenceCount) && referenceCount > 0) {
+        const minAllowed = Math.floor(referenceCount * 0.75);
+        const maxAllowed = Math.ceil(referenceCount * 1.5);
+        if (parsed.count < minAllowed || parsed.count > maxAllowed) {
+          throw Object.assign(new Error('tiktok_public_count_outlier_' + parsed.count + '_expected_near_' + referenceCount), { httpStatus: 502 });
+        }
+      }
+
+      const fetchedAt = new Date().toISOString();
+      const stale = classifyFacebookFollowerStaleLevel(fetchedAt).stale;
+      const latencyMs = Math.max(0, Date.now() - startedAt);
+      tiktokFollowersState.profile.handle = profileHandle;
+      tiktokFollowersState.profile.url = profileUrl;
+      tiktokFollowersState.latest = { followersCount: parsed.count, fetchedAt, source: 'tiktok_public_scrape_estimate', requestId, latencyMs, stale };
+      tiktokFollowersState.status = { ok: true, setupRequired: false, lastSuccessAt: fetchedAt, lastAttemptAt: fetchedAt, consecutiveFailures: 0, lastError: '' };
+      tiktokFollowersState.history.push({ followersCount: parsed.count, fetchedAt });
+      if (tiktokFollowersState.history.length > TIKTOK_FOLLOWERS_HISTORY_LIMIT) tiktokFollowersState.history = tiktokFollowersState.history.slice(-TIKTOK_FOLLOWERS_HISTORY_LIMIT);
+      tiktokFollowersState.updatedAt = new Date().toISOString();
+      await persistTikTokFollowersState();
+      await appendTikTokFollowersLog({ ts: new Date().toISOString(), event: 'tiktok_followers_poll', ok: true, source, requestId, followersCount: parsed.count, delta: calculateFollowerDelta(tiktokFollowersState.history, parsed.count), provider: 'tiktok_public_scrape_estimate', signal: parsed.signal || '', latencyMs });
+      return tiktokFollowerResponsePayload();
+    } catch (err) {
+      const status = Number(err?.httpStatus || 0);
+      const message = String(err?.message || err || 'tiktok_public_scrape_failed').slice(0, 220);
+      tiktokFollowersState.status.ok = false;
+      tiktokFollowersState.status.setupRequired = false;
+      tiktokFollowersState.status.lastAttemptAt = new Date().toISOString();
+      tiktokFollowersState.status.consecutiveFailures = (tiktokFollowersState.status.consecutiveFailures || 0) + 1;
+      tiktokFollowersState.status.lastError = (((status === 401 || status === 403) ? 'tiktok_public_scrape_blocked' : /not_found/i.test(message) ? 'tiktok_public_signal_not_found' : /abort|timeout/i.test(message) ? 'tiktok_public_scrape_timeout' : 'tiktok_public_scrape_failed') + ': ' + message).slice(0, 280);
+      if (tiktokFollowersState.latest && Number.isFinite(Number(tiktokFollowersState.latest.followersCount)) && Number(tiktokFollowersState.latest.followersCount) > 0) {
+        tiktokFollowersState.latest.stale = true;
+        tiktokFollowersState.latest.source = 'last_known_fallback';
+      }
+      tiktokFollowersState.updatedAt = new Date().toISOString();
+      await persistTikTokFollowersState();
+      const freshness = classifyFacebookFollowerStaleLevel(tiktokFollowersState.status.lastSuccessAt || '');
+      await appendTikTokFollowersLog({ ts: new Date().toISOString(), event: 'tiktok_followers_poll', ok: false, source, requestId, followersCount: tiktokFollowersState.latest?.followersCount ?? null, ageMs: freshness.ageMs, provider: tiktokFollowersState.latest?.source === 'last_known_fallback' ? 'last_known_fallback' : 'tiktok_public_scrape_estimate', error: tiktokFollowersState.status.lastError });
+      return tiktokFollowerResponsePayload();
+    }
+  })();
+
+  tiktokFollowersPollInFlight = run;
+  try { return await run; } finally { tiktokFollowersPollInFlight = null; }
+}
+
+async function initTikTokFollowersService(){
+  await loadTikTokFollowersState();
+  await pollTikTokFollowers({ source: 'startup_bootstrap' });
+  if (tiktokFollowersPollTimer) clearInterval(tiktokFollowersPollTimer);
+  tiktokFollowersPollTimer = setInterval(() => {
+    pollTikTokFollowers({ source: 'interval' }).catch(() => {});
+  }, TIKTOK_POLL_INTERVAL_MS);
+}
+
+async function handleApiTikTokFollowers(req, res) {
+  const pathname = new URL(req.url || '/api/tiktok-followers', 'http://localhost:' + PORT).pathname;
+  if (!META_GRAPH_ALLOW_REMOTE && !isLocalRequest(req)) {
+    return sendJson(res, 403, { ok: false, error: 'local_only', message: 'TikTok followers endpoint is local-only by default. Set META_GRAPH_ALLOW_REMOTE=1 to allow remote requests.' });
+  }
+  if (pathname === '/api/tiktok-followers/refresh') {
+    if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/tiktok-followers/refresh.' });
+    let source = 'manual';
+    try {
+      const reqUrl = new URL(req.url || '/api/tiktok-followers/refresh', 'http://localhost:' + PORT);
+      source = String(reqUrl.searchParams.get('source') || '').trim() || source;
+    } catch {}
+    const payload = await pollTikTokFollowers({ source: source || 'manual' });
+    return sendJson(res, payload.ok ? 200 : 503, payload);
+  }
+  if (pathname === '/api/tiktok-followers/health') {
+    if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/tiktok-followers/health.' });
+    return sendJson(res, 200, { ok: true, status: tiktokFollowerResponsePayload({ includeHistory: false }).status, profile: tiktokFollowersState.profile });
+  }
+  if (pathname !== '/api/tiktok-followers') return sendJson(res, 404, { ok: false, error: 'not_found' });
+  if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/tiktok-followers.' });
+  return sendJson(res, 200, tiktokFollowerResponsePayload());
+}
+
+function ensureYoutubeSubscribersShape(input){
+  const base = input && typeof input === 'object' ? input : {};
+  const latest = base.latest && typeof base.latest === 'object' ? {
+    subscribersCount: Number.isFinite(Number(base.latest.subscribersCount)) ? Number(base.latest.subscribersCount) : null,
+    fetchedAt: String(base.latest.fetchedAt || ''),
+    source: String(base.latest.source || 'youtube_public_scrape_estimate'),
+    requestId: String(base.latest.requestId || ''),
+    latencyMs: Number.isFinite(Number(base.latest.latencyMs)) ? Math.max(0, Number(base.latest.latencyMs)) : null,
+    stale: !!base.latest.stale,
+  } : null;
+  const historyRaw = Array.isArray(base.history) ? base.history : [];
+  return {
+    schemaVersion: 1,
+    channel: {
+      name: String(base?.channel?.name || YOUTUBE_CHANNEL_NAME || '').trim(),
+      url: String(base?.channel?.url || YOUTUBE_CHANNEL_URL || '').trim(),
+    },
+    latest,
+    status: {
+      ok: !!base?.status?.ok,
+      setupRequired: !!base?.status?.setupRequired,
+      lastSuccessAt: String(base?.status?.lastSuccessAt || ''),
+      lastAttemptAt: String(base?.status?.lastAttemptAt || ''),
+      consecutiveFailures: Number.isFinite(Number(base?.status?.consecutiveFailures)) ? Math.max(0, Math.floor(Number(base.status.consecutiveFailures))) : 0,
+      lastError: String(base?.status?.lastError || '').slice(0, 280),
+    },
+    history: historyRaw.map((h) => ({ subscribersCount: Number.isFinite(Number(h?.subscribersCount)) ? Number(h.subscribersCount) : null, fetchedAt: String(h?.fetchedAt || '') }))
+      .filter((h) => Number.isFinite(h.subscribersCount) && h.fetchedAt)
+      .slice(-YOUTUBE_SUBSCRIBERS_HISTORY_LIMIT),
+    updatedAt: String(base.updatedAt || ''),
+  };
+}
+
+async function persistYoutubeSubscribersState(){
+  await ensureDataDir();
+  const body = JSON.stringify(ensureYoutubeSubscribersShape(youtubeSubscribersState), null, 2);
+  const tmpPath = YOUTUBE_SUBSCRIBERS_PATH + '.tmp';
+  await fsp.writeFile(tmpPath, body, 'utf8');
+  await fsp.rename(tmpPath, YOUTUBE_SUBSCRIBERS_PATH);
+}
+
+async function loadYoutubeSubscribersState(){
+  try {
+    const raw = await fsp.readFile(YOUTUBE_SUBSCRIBERS_PATH, 'utf8');
+    const parsed = parseJsonSafely(raw, 'youtube_subscribers_state');
+    if (!parsed.ok) return;
+    youtubeSubscribersState = ensureYoutubeSubscribersShape(parsed.value);
+  } catch {}
+}
+
+async function appendYoutubeSubscribersLog(event){
+  try {
+    await fsp.mkdir(path.dirname(YOUTUBE_SUBSCRIBERS_LOG_PATH), { recursive: true });
+    await fsp.appendFile(YOUTUBE_SUBSCRIBERS_LOG_PATH, JSON.stringify(event) + '\n', 'utf8');
+  } catch {}
+}
+
+function calculateSubscriberDelta(history = [], latestCount = null){
+  const latest = Number.isFinite(Number(latestCount)) ? Number(latestCount) : null;
+  if (!Number.isFinite(latest)) return null;
+  const records = (Array.isArray(history) ? history : []).filter((h) => Number.isFinite(Number(h?.subscribersCount)));
+  if (!records.length) return 0;
+  const prev = Number(records.length > 1 ? records[records.length - 2].subscribersCount : records[records.length - 1].subscribersCount);
+  if (!Number.isFinite(prev)) return null;
+  return latest - prev;
+}
+
+function youtubeSubscriberResponsePayload(opts = {}){
+  const successTs = youtubeSubscribersState.status.lastSuccessAt || youtubeSubscribersState.latest?.fetchedAt || '';
+  const freshness = classifyFacebookFollowerStaleLevel(successTs);
+  return {
+    ok: !!youtubeSubscribersState.latest,
+    channel: { ...youtubeSubscribersState.channel },
+    latest: youtubeSubscribersState.latest ? {
+      subscribersCount: youtubeSubscribersState.latest.subscribersCount,
+      fetchedAt: youtubeSubscribersState.latest.fetchedAt,
+      source: youtubeSubscribersState.latest.source || 'youtube_public_scrape_estimate',
+      delta: calculateSubscriberDelta(youtubeSubscribersState.history, youtubeSubscribersState.latest.subscribersCount),
+    } : null,
+    status: {
+      stale: freshness.stale,
+      staleLevel: freshness.staleLevel,
+      ageMs: freshness.ageMs,
+      setupRequired: !!youtubeSubscribersState.status.setupRequired,
+      lastSuccessAt: youtubeSubscribersState.status.lastSuccessAt || '',
+      lastAttemptAt: youtubeSubscribersState.status.lastAttemptAt || '',
+      consecutiveFailures: youtubeSubscribersState.status.consecutiveFailures || 0,
+      lastError: youtubeSubscribersState.status.lastError || '',
+    },
+    history: opts.includeHistory === false ? [] : youtubeSubscribersState.history,
+  };
+}
+
+async function pollYoutubeSubscribers({ source = 'interval' } = {}){
+  if (youtubeSubscribersPollInFlight) return youtubeSubscribersPollInFlight;
+  const run = (async () => {
+    const requestId = 'yts_' + Date.now().toString(36) + '_' + crypto.randomBytes(2).toString('hex');
+    const startedAt = Date.now();
+    youtubeSubscribersState.status.lastAttemptAt = new Date().toISOString();
+
+    const channelUrl = String(youtubeSubscribersState.channel.url || YOUTUBE_CHANNEL_URL || '').trim();
+    if (!channelUrl) {
+      youtubeSubscribersState.status.ok = false;
+      youtubeSubscribersState.status.setupRequired = true;
+      youtubeSubscribersState.status.consecutiveFailures = (youtubeSubscribersState.status.consecutiveFailures || 0) + 1;
+      youtubeSubscribersState.status.lastError = 'setup_required: set YOUTUBE_CHANNEL_URL';
+      youtubeSubscribersState.updatedAt = new Date().toISOString();
+      await persistYoutubeSubscribersState();
+      await appendYoutubeSubscribersLog({ ts: new Date().toISOString(), event: 'youtube_subscribers_poll', ok: false, source, requestId, provider: 'setup_required', error: youtubeSubscribersState.status.lastError });
+      return youtubeSubscriberResponsePayload();
+    }
+
+    try {
+      const html = await fetchTextViaCurl(channelUrl, META_GRAPH_TIMEOUT_MS);
+      const parsed = extractYouTubePublicSubscriberEstimate(html);
+      if (!Number.isFinite(parsed.count)) throw Object.assign(new Error('youtube_public_subscriber_signal_not_found'), { httpStatus: 502 });
+
+
+      const fetchedAt = new Date().toISOString();
+      const latencyMs = Math.max(0, Date.now() - startedAt);
+      const stale = classifyFacebookFollowerStaleLevel(fetchedAt).stale;
+      youtubeSubscribersState.latest = { subscribersCount: parsed.count, fetchedAt, source: 'youtube_public_scrape_estimate', requestId, latencyMs, stale };
+      youtubeSubscribersState.status = { ok: true, setupRequired: false, lastSuccessAt: fetchedAt, lastAttemptAt: fetchedAt, consecutiveFailures: 0, lastError: '' };
+      youtubeSubscribersState.history.push({ subscribersCount: parsed.count, fetchedAt });
+      if (youtubeSubscribersState.history.length > YOUTUBE_SUBSCRIBERS_HISTORY_LIMIT) youtubeSubscribersState.history = youtubeSubscribersState.history.slice(-YOUTUBE_SUBSCRIBERS_HISTORY_LIMIT);
+      youtubeSubscribersState.updatedAt = new Date().toISOString();
+      await persistYoutubeSubscribersState();
+      await appendYoutubeSubscribersLog({ ts: new Date().toISOString(), event: 'youtube_subscribers_poll', ok: true, source, requestId, subscribersCount: parsed.count, delta: calculateSubscriberDelta(youtubeSubscribersState.history, parsed.count), provider: 'youtube_public_scrape_estimate', signal: parsed.signal || '', latencyMs });
+      return youtubeSubscriberResponsePayload();
+    } catch (err) {
+      const status = Number(err?.httpStatus || 0);
+      const message = String(err?.message || err || 'youtube_public_scrape_failed').slice(0, 220);
+      youtubeSubscribersState.status.ok = false;
+      youtubeSubscribersState.status.setupRequired = false;
+      youtubeSubscribersState.status.lastAttemptAt = new Date().toISOString();
+      youtubeSubscribersState.status.consecutiveFailures = (youtubeSubscribersState.status.consecutiveFailures || 0) + 1;
+      youtubeSubscribersState.status.lastError = (((status === 401 || status === 403) ? 'youtube_public_scrape_blocked' : /not_found/i.test(message) ? 'youtube_public_signal_not_found' : /abort|timeout/i.test(message) ? 'youtube_public_scrape_timeout' : 'youtube_public_scrape_failed') + ': ' + message).slice(0, 280);
+      if (youtubeSubscribersState.latest && Number.isFinite(Number(youtubeSubscribersState.latest.subscribersCount)) && Number(youtubeSubscribersState.latest.subscribersCount) > 0) {
+        youtubeSubscribersState.latest.stale = true;
+        youtubeSubscribersState.latest.source = 'last_known_fallback';
+      }
+      youtubeSubscribersState.updatedAt = new Date().toISOString();
+      await persistYoutubeSubscribersState();
+      const freshness = classifyFacebookFollowerStaleLevel(youtubeSubscribersState.status.lastSuccessAt || '');
+      await appendYoutubeSubscribersLog({ ts: new Date().toISOString(), event: 'youtube_subscribers_poll', ok: false, source, requestId, subscribersCount: youtubeSubscribersState.latest?.subscribersCount ?? null, ageMs: freshness.ageMs, provider: youtubeSubscribersState.latest?.source === 'last_known_fallback' ? 'last_known_fallback' : 'youtube_public_scrape_estimate', error: youtubeSubscribersState.status.lastError });
+      return youtubeSubscriberResponsePayload();
+    }
+  })();
+
+  youtubeSubscribersPollInFlight = run;
+  try { return await run; } finally { youtubeSubscribersPollInFlight = null; }
+}
+
+async function initYoutubeSubscribersService(){
+  await loadYoutubeSubscribersState();
+  await pollYoutubeSubscribers({ source: 'startup_bootstrap' });
+  if (youtubeSubscribersPollTimer) clearInterval(youtubeSubscribersPollTimer);
+  youtubeSubscribersPollTimer = setInterval(() => {
+    pollYoutubeSubscribers({ source: 'interval' }).catch(() => {});
+  }, YOUTUBE_POLL_INTERVAL_MS);
+}
+
+async function handleApiYoutubeSubscribers(req, res) {
+  const pathname = new URL(req.url || '/api/youtube-subscribers', 'http://localhost:' + PORT).pathname;
+  if (!META_GRAPH_ALLOW_REMOTE && !isLocalRequest(req)) {
+    return sendJson(res, 403, { ok: false, error: 'local_only', message: 'YouTube subscribers endpoint is local-only by default. Set META_GRAPH_ALLOW_REMOTE=1 to allow remote requests.' });
+  }
+  if (pathname === '/api/youtube-subscribers/refresh') {
+    if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/youtube-subscribers/refresh.' });
+    let source = 'manual';
+    try {
+      const reqUrl = new URL(req.url || '/api/youtube-subscribers/refresh', 'http://localhost:' + PORT);
+      source = String(reqUrl.searchParams.get('source') || '').trim() || source;
+    } catch {}
+    const payload = await pollYoutubeSubscribers({ source: source || 'manual' });
+    return sendJson(res, payload.ok ? 200 : 503, payload);
+  }
+  if (pathname === '/api/youtube-subscribers/health') {
+    if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/youtube-subscribers/health.' });
+    return sendJson(res, 200, { ok: true, status: youtubeSubscriberResponsePayload({ includeHistory: false }).status, channel: youtubeSubscribersState.channel });
+  }
+  if (pathname !== '/api/youtube-subscribers') return sendJson(res, 404, { ok: false, error: 'not_found' });
+  if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/youtube-subscribers.' });
+  return sendJson(res, 200, youtubeSubscriberResponsePayload());
 }
 
 const DIARY_INDEX_ROOTS = [
@@ -2089,12 +3140,24 @@ const server = http.createServer(async (req, res) => {
   if ((req.url || '').startsWith('/api/home-devices/wake')) return handleApiHomeDeviceWake(req, res);
   if ((req.url || '').startsWith('/api/diary-index')) return handleApiDiaryIndex(req, res);
   if ((req.url || '').startsWith('/api/facebook-followers')) return handleApiFacebookFollowers(req, res);
+  if ((req.url || '').startsWith('/api/instagram-followers')) return handleApiInstagramFollowers(req, res);
+  if ((req.url || '').startsWith('/api/tiktok-followers')) return handleApiTikTokFollowers(req, res);
+  if ((req.url || '').startsWith('/api/youtube-subscribers')) return handleApiYoutubeSubscribers(req, res);
   return handleStatic(req, res);
 });
 
 if (require.main === module) {
   initFacebookFollowersService().catch((err) => {
     console.error('Facebook followers service init failed:', err?.message || err);
+  });
+  initInstagramFollowersService().catch((err) => {
+    console.error('Instagram followers service init failed:', err?.message || err);
+  });
+  initTikTokFollowersService().catch((err) => {
+    console.error('TikTok followers service init failed:', err?.message || err);
+  });
+  initYoutubeSubscribersService().catch((err) => {
+    console.error('YouTube subscribers service init failed:', err?.message || err);
   });
   server.listen(PORT, () => {
     console.log(`Mission Control running on http://localhost:${PORT}`);
@@ -2106,6 +3169,9 @@ if (require.main === module) {
     console.log(`Gas price proxy API: enabled (${GAS_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
     console.log(`Speed test API: enabled (${SPEED_TEST_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; timeout ${SPEED_TEST_TIMEOUT_MS}ms)`);
     console.log(`Facebook followers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${META_GRAPH_POLL_INTERVAL_MS}ms)`);
+    console.log(`Instagram followers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${INSTAGRAM_POLL_INTERVAL_MS}ms; provider ${INSTAGRAM_PROVIDER})`);
+    console.log(`TikTok followers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${TIKTOK_POLL_INTERVAL_MS}ms; provider public_scrape_estimate)`);
+    console.log(`YouTube subscribers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${YOUTUBE_POLL_INTERVAL_MS}ms; provider public_scrape_estimate)`);
   });
 }
 
@@ -2116,5 +3182,8 @@ module.exports = {
   ensureFacebookFollowersShape,
   facebookFollowerResponsePayload,
   extractFacebookPublicFollowerEstimate,
+  extractInstagramPublicFollowerEstimate,
+  extractTikTokPublicFollowerEstimate,
+  extractYouTubePublicSubscriberEstimate,
   parseCompactCount,
 };

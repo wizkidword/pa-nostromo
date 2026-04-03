@@ -18,5 +18,8 @@
     "test:facebook-followers": "node tests/facebook-followers-api.test.mjs && node tests/facebook-public-scrape-parser.test.mjs",
     "qa:facebook-followers": "node scripts/qa-facebook-followers-smoke.mjs"
   },
+  "devDependencies": {
+    "playwright": "1.58.2"
+  },
   "license": "MIT"
 }

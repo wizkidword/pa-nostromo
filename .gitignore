@@ -3,7 +3,15 @@ node_modules/
 *.log
 .env
 .env.local
+logs/
+test-results/
+playwright-report/
 
 data/*.bak
-data/state.json
+data/state*.json
 data/backups/
+data/.auth/
+data/facebook-followers.json
+data/instagram-followers.json
+data/tiktok-followers.json
+data/youtube-subscribers.json

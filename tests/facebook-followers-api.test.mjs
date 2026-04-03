@@ -81,7 +81,10 @@ async function main(){
     assert.equal(healthRes.status, 200);
     const healthPayload = await healthRes.json();
     assert.equal(healthPayload.ok, true);
-    assert.equal(healthPayload.status.staleLevel, 'stale');
+    const expectedHealthStaleLevel = refreshPayload.latest?.source === 'public_scrape_estimate'
+      ? 'fresh'
+      : 'stale';
+    assert.equal(healthPayload.status.staleLevel, expectedHealthStaleLevel);
 
     console.log('facebook-followers-api: PASS');
   } finally {

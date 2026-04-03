@@ -114,6 +114,46 @@ Optional watchdog cron (defense-in-depth):
 * * * * * curl -fsS -X POST "http://127.0.0.1:4187/api/facebook-followers/refresh?source=cron" >/dev/null 2>&1
 ```
 
+### Instagram follower pod (Meta Business Suite primary)
+
+Primary mode:
+
+- `INSTAGRAM_PROVIDER` (default `meta_suite`; options: `meta_suite`, `public`, `auto`)
+- `INSTAGRAM_POLL_INTERVAL_MS` (default `180000`, min enforced to 60s)
+- `INSTAGRAM_META_SUITE_URL` (default `https://business.facebook.com/latest/insights`)
+- `INSTAGRAM_META_SUITE_STORAGE_PATH` (default `./data/.auth/meta-suite-instagram-storage.json`)
+- `INSTAGRAM_META_SUITE_TIMEOUT_MS` (default `45000`)
+- `INSTAGRAM_META_SUITE_HEADFUL` (default `0`, set to `1` for debug)
+
+Profile + optional baseline:
+
+- `INSTAGRAM_PROFILE_HANDLE`
+- `INSTAGRAM_PROFILE_NAME`
+- `INSTAGRAM_PROFILE_URL`
+- `INSTAGRAM_FOLLOWERS_COUNT` (optional seed fallback only)
+
+One-time setup for authenticated Meta Suite scraping:
+
+```bash
+node scripts/instagram-meta-suite-login.mjs --storage ./data/.auth/meta-suite-instagram-storage.json --url "https://business.facebook.com/latest/insights"
+```
+
+Then start the server normally. The Instagram pod will poll every 3 minutes by default and keep last-known values if providers fail.
+
+### TikTok follower pod (public scrape estimate)
+
+- `TIKTOK_POLL_INTERVAL_MS` (default `180000`, min enforced to 60s)
+- `TIKTOK_PROFILE_HANDLE` (without `@`)
+- `TIKTOK_PROFILE_NAME` (optional label)
+- `TIKTOK_PROFILE_URL` (e.g., `https://www.tiktok.com/@yourhandle`)
+- `TIKTOK_FOLLOWERS_COUNT` (optional baseline for sanity checks only)
+
+The backend polls TikTok every 3 minutes by default, persists snapshots to `data/tiktok-followers.json`, and appends poll events to `logs/tiktok-followers-poller.log`.
+
+If scrape fails, the service preserves the last known non-zero value and marks the payload stale (`source: last_known_fallback`) rather than replacing with `0`.
+
+If `TIKTOK_PROFILE_HANDLE`/`TIKTOK_PROFILE_URL` is missing, the API returns setup-required status and the pod renders setup guidance.
+
 > Keep this app local unless you intentionally add network controls and authentication.
 
 ## Core Workflows
