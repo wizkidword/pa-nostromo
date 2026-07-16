@@ -11,6 +11,8 @@ const { fetchGmailImapMessageBody, fetchGmailImapAccountSnapshot, markGmailImapM
 const { resolveRuntimeStorage, ensurePrivateRuntimeStorage } = require('./lib/runtime-storage.js');
 const { SECURITY_RESPONSE_HEADERS, createHostPolicy, validateHostHeader, parseScopedTokens, bearerTokenHasScope, hasBrowserMetadata, validateBrowserIntent, createCsrfToken } = require('./lib/route-security.js');
 const { buildRouteManifest, resolveRoute } = require('./lib/route-manifest.js');
+const { safeFetch } = require('./lib/safe-fetch.js');
+const { createWorkCoordinator } = require('./lib/work-coordinator.js');
 
 const ROOT = __dirname;
 const PUBLIC_ROOT = path.join(ROOT, 'public');
@@ -101,6 +103,11 @@ const RSS_FETCH_ALLOW_REMOTE = parseBool(process.env.RSS_FETCH_ALLOW_REMOTE);
 const RSS_FETCH_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.RSS_FETCH_TIMEOUT_MS, 12000));
 const RSS_FETCH_MAX_BYTES = Math.max(128 * 1024, parsePositiveInt(process.env.RSS_FETCH_MAX_BYTES, 2 * 1024 * 1024));
 const RSS_FETCH_MAX_FEEDS = Math.max(1, parsePositiveInt(process.env.RSS_FETCH_MAX_FEEDS, 12));
+const RSS_FETCH_MAX_ENTRIES = Math.max(1, Math.min(100, parsePositiveInt(process.env.RSS_FETCH_MAX_ENTRIES, 40)));
+const RSS_FETCH_CACHE_TTL_MS = Math.max(5_000, parsePositiveInt(process.env.RSS_FETCH_CACHE_TTL_MS, 5 * 60_000));
+const OUTBOUND_MAX_CONCURRENCY = Math.max(1, Math.min(16, parsePositiveInt(process.env.OUTBOUND_MAX_CONCURRENCY, 4)));
+const OUTBOUND_PER_HOST_CONCURRENCY = Math.max(1, Math.min(8, parsePositiveInt(process.env.OUTBOUND_PER_HOST_CONCURRENCY, 1)));
+const MANUAL_REFRESH_COOLDOWN_MS = Math.max(0, parsePositiveInt(process.env.MANUAL_REFRESH_COOLDOWN_MS, 3_000));
 const CRYPTO_PROXY_ALLOW_REMOTE = parseBool(process.env.CRYPTO_PROXY_ALLOW_REMOTE);
 const CRYPTO_PROXY_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.CRYPTO_PROXY_TIMEOUT_MS, 10000));
 const GAS_PROXY_ALLOW_REMOTE = parseBool(process.env.GAS_PROXY_ALLOW_REMOTE);
@@ -160,6 +167,7 @@ const EBAY_TRAFFIC_TOKEN_URL = String(
   ? 'https://api.sandbox.ebay.com/identity/v1/oauth2/token'
   : 'https://api.ebay.com/identity/v1/oauth2/token');
 const EBAY_TRAFFIC_SCOPE = String(process.env.EBAY_TRAFFIC_SCOPE || 'https://api.ebay.com/oauth/api_scope/sell.analytics.readonly').trim() || 'https://api.ebay.com/oauth/api_scope/sell.analytics.readonly';
+const EBAY_ALLOWED_HOSTS = ['api.ebay.com', 'api.sandbox.ebay.com'];
 const EBAY_TRAFFIC_LABEL = String(process.env.EBAY_TRAFFIC_LABEL || 'eBay Store').trim() || 'eBay Store';
 const EBAY_TRAFFIC_MARKETPLACE_ID = String(process.env.EBAY_TRAFFIC_MARKETPLACE_ID || 'EBAY_US').trim().toUpperCase() || 'EBAY_US';
 const EBAY_TRAFFIC_CLIENT_ID = String(process.env.EBAY_TRAFFIC_CLIENT_ID || '').trim();
@@ -262,6 +270,13 @@ const ROUTE_MANIFEST = buildRouteManifest({
     social: () => META_GRAPH_ALLOW_REMOTE,
   },
 });
+
+const WORK_COORDINATOR = createWorkCoordinator({
+  globalLimit: OUTBOUND_MAX_CONCURRENCY,
+  perIntegrationLimit: 1,
+  perHostLimit: OUTBOUND_PER_HOST_CONCURRENCY,
+});
+const rssFeedCache = new Map();
 
 let facebookFollowersState = {
   schemaVersion: 1,
@@ -1103,12 +1118,13 @@ function buildEbayMarketingDateRange(rangeDays = EBAY_TRAFFIC_RANGE_DAYS) {
 }
 
 async function fetchEbayMarketingJson(accessToken, input, init = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), EBAY_TRAFFIC_TIMEOUT_MS);
-  try {
-    const response = await fetch(input, {
+  const response = await coordinatedSafeFetch(input, {
       method: init.method || 'GET',
-      signal: controller.signal,
+      timeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
+      firstByteTimeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
+      maxBytes: 5 * 1024 * 1024,
+      maxRedirects: 2,
+      allowedHosts: EBAY_ALLOWED_HOSTS,
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: 'application/json',
@@ -1116,26 +1132,23 @@ async function fetchEbayMarketingJson(accessToken, input, init = {}) {
         ...(init.headers || {}),
       },
       body: init.body ? JSON.stringify(init.body) : undefined,
-    });
-    const text = await response.text();
-    const parsed = parseJsonSafely(text || '{}', 'ebay_marketing_response');
-    const payload = parsed.ok && parsed.value && typeof parsed.value === 'object' ? parsed.value : {};
-    if (!response.ok) {
-      const message = String(
-        payload?.errors?.[0]?.longMessage
-        || payload?.errors?.[0]?.message
-        || payload?.message
-        || `HTTP ${response.status}`
-      ).trim();
-      const error = new Error(message || `HTTP ${response.status}`);
-      error.status = response.status;
-      error.details = payload;
-      throw error;
-    }
-    return { payload, headers: response.headers, status: response.status };
-  } finally {
-    clearTimeout(timeout);
+  }, { integration: 'ebay', key: `ebay:marketing:${new URL(input).pathname}` });
+  const text = await response.text();
+  const parsed = parseJsonSafely(text || '{}', 'ebay_marketing_response');
+  const payload = parsed.ok && parsed.value && typeof parsed.value === 'object' ? parsed.value : {};
+  if (!response.ok) {
+    const message = String(
+      payload?.errors?.[0]?.longMessage
+      || payload?.errors?.[0]?.message
+      || payload?.message
+      || `HTTP ${response.status}`
+    ).trim();
+    const error = new Error(message || `HTTP ${response.status}`);
+    error.status = response.status;
+    error.details = payload;
+    throw error;
   }
+  return { payload, headers: response.headers, status: response.status };
 }
 
 async function createEbayMarketingReportTask(accessToken, store) {
@@ -1185,31 +1198,29 @@ async function fetchRecentSuccessfulEbayMarketingReportTask(accessToken, store) 
 async function downloadEbayMarketingReport(accessToken, reportHref) {
   const target = String(reportHref || '').trim();
   if (!target) return { rows: [], headers: [] };
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), EBAY_TRAFFIC_TIMEOUT_MS);
-  try {
-    const response = await fetch(target, {
+  const response = await coordinatedSafeFetch(target, {
       method: 'GET',
-      signal: controller.signal,
+      timeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
+      firstByteTimeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
+      maxBytes: 10 * 1024 * 1024,
+      maxRedirects: 2,
+      allowedHosts: EBAY_ALLOWED_HOSTS,
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: '*/*',
       },
-    });
-    if (!response.ok) {
-      const message = `Unable to download eBay marketing report (HTTP ${response.status}).`;
-      const error = new Error(message);
-      error.status = response.status;
-      throw error;
-    }
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const text = buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b
-      ? zlib.gunzipSync(buffer).toString('utf8')
-      : buffer.toString('utf8');
-    return parseEbayMarketingReport(text);
-  } finally {
-    clearTimeout(timeout);
+  }, { integration: 'ebay', key: `ebay:marketing-report:${new URL(target).pathname}` });
+  if (!response.ok) {
+    const message = `Unable to download eBay marketing report (HTTP ${response.status}).`;
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
   }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const text = buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b
+    ? zlib.gunzipSync(buffer).toString('utf8')
+    : buffer.toString('utf8');
+  return parseEbayMarketingReport(text);
 }
 
 function createEbayMarketingReportMeta(task = null) {
@@ -1518,18 +1529,19 @@ async function fetchEbayPromotionMix(accessToken, store, baselineStore) {
 async function fetchEbayTradingWatchCount(accessToken, itemId) {
   const listingId = String(itemId || '').trim();
   if (!listingId) return null;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), EBAY_TRAFFIC_TIMEOUT_MS);
-  try {
-    const body = `<?xml version="1.0" encoding="utf-8"?>
+  const body = `<?xml version="1.0" encoding="utf-8"?>
 <GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <ItemID>${listingId}</ItemID>
   <IncludeWatchCount>true</IncludeWatchCount>
   <OutputSelector>Item.WatchCount</OutputSelector>
 </GetItemRequest>`;
-    const response = await fetch(EBAY_TRADING_API_URL, {
+  const response = await coordinatedSafeFetch(EBAY_TRADING_API_URL, {
       method: 'POST',
-      signal: controller.signal,
+      timeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
+      firstByteTimeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
+      maxBytes: 512 * 1024,
+      maxRedirects: 0,
+      allowedHosts: EBAY_ALLOWED_HOSTS,
       headers: {
         'Content-Type': 'text/xml',
         'X-EBAY-API-CALL-NAME': 'GetItem',
@@ -1539,28 +1551,25 @@ async function fetchEbayTradingWatchCount(accessToken, itemId) {
         Accept: 'text/xml',
       },
       body,
-    });
-    const xml = await response.text();
-    if (!response.ok) {
-      const message = readXmlTagText(xml, 'LongMessage')
-        || readXmlTagText(xml, 'ShortMessage')
-        || `HTTP ${response.status}`;
-      const error = new Error(message);
-      error.status = response.status;
-      throw error;
-    }
-    const ack = readXmlTagText(xml, 'Ack');
-    if (ack && !/^success|warning$/i.test(ack)) {
-      const error = new Error(readXmlTagText(xml, 'LongMessage') || readXmlTagText(xml, 'ShortMessage') || `GetItem ${ack}`);
-      error.status = 502;
-      throw error;
-    }
-    const watchCountRaw = readXmlTagText(xml, 'WatchCount');
-    const watchCount = Number(watchCountRaw);
-    return Number.isFinite(watchCount) && watchCount >= 0 ? watchCount : 0;
-  } finally {
-    clearTimeout(timeout);
+  }, { integration: 'ebay', key: `ebay:watch:${listingId}` });
+  const xml = await response.text();
+  if (!response.ok) {
+    const message = readXmlTagText(xml, 'LongMessage')
+      || readXmlTagText(xml, 'ShortMessage')
+      || `HTTP ${response.status}`;
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
   }
+  const ack = readXmlTagText(xml, 'Ack');
+  if (ack && !/^success|warning$/i.test(ack)) {
+    const error = new Error(readXmlTagText(xml, 'LongMessage') || readXmlTagText(xml, 'ShortMessage') || `GetItem ${ack}`);
+    error.status = 502;
+    throw error;
+  }
+  const watchCountRaw = readXmlTagText(xml, 'WatchCount');
+  const watchCount = Number(watchCountRaw);
+  return Number.isFinite(watchCount) && watchCount >= 0 ? watchCount : 0;
 }
 
 async function enrichEbayTopListingsWithWatchCounts(accessToken, topListings = []) {
@@ -1679,77 +1688,73 @@ function normalizeEbayTrafficStoreSnapshot(store, dayReport, listingReport, opti
 }
 
 async function refreshEbayTrafficAccessToken(store) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), EBAY_TRAFFIC_TIMEOUT_MS);
-  try {
-    const body = new URLSearchParams({
+  const body = new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: store.refreshToken,
       scope: store.scope || EBAY_TRAFFIC_SCOPE,
     });
-    const auth = Buffer.from(`${store.clientId}:${store.clientSecret}`, 'utf8').toString('base64');
-    const response = await fetch(EBAY_TRAFFIC_TOKEN_URL, {
+  const auth = Buffer.from(`${store.clientId}:${store.clientSecret}`, 'utf8').toString('base64');
+  const response = await coordinatedSafeFetch(EBAY_TRAFFIC_TOKEN_URL, {
       method: 'POST',
-      signal: controller.signal,
+      timeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
+      firstByteTimeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
+      maxBytes: 512 * 1024,
+      maxRedirects: 0,
+      allowedHosts: EBAY_ALLOWED_HOSTS,
       headers: {
         Authorization: `Basic ${auth}`,
         'Content-Type': 'application/x-www-form-urlencoded',
         Accept: 'application/json',
       },
       body: body.toString(),
-    });
-    const text = await response.text();
-    const parsed = parseJsonSafely(text || '{}', 'ebay_token_response');
-    const payload = parsed.ok && parsed.value && typeof parsed.value === 'object' ? parsed.value : {};
-    if (!response.ok) {
-      const message = String(payload?.error_description || payload?.error || `HTTP ${response.status}`).trim();
-      const error = new Error(message || `HTTP ${response.status}`);
-      error.status = response.status;
-      throw error;
-    }
-    const accessToken = String(payload?.access_token || '').trim();
-    if (!accessToken) {
-      const error = new Error('eBay token response did not include access_token.');
-      error.status = 502;
-      throw error;
-    }
-    return accessToken;
-  } finally {
-    clearTimeout(timeout);
+  }, { integration: 'ebay', key: `ebay:token:${store.id}` });
+  const text = await response.text();
+  const parsed = parseJsonSafely(text || '{}', 'ebay_token_response');
+  const payload = parsed.ok && parsed.value && typeof parsed.value === 'object' ? parsed.value : {};
+  if (!response.ok) {
+    const message = String(payload?.error_description || payload?.error || `HTTP ${response.status}`).trim();
+    const error = new Error(message || `HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
+  const accessToken = String(payload?.access_token || '').trim();
+  if (!accessToken) {
+    const error = new Error('eBay token response did not include access_token.');
+    error.status = 502;
+    throw error;
+  }
+  return accessToken;
 }
 
 async function fetchEbayTrafficReport({ accessToken, dimension, metrics, filter, sort = '' }) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), EBAY_TRAFFIC_TIMEOUT_MS);
-  try {
-    const url = new URL('/sell/analytics/v1/traffic_report', EBAY_TRAFFIC_BASE_URL);
-    url.searchParams.set('dimension', dimension);
-    url.searchParams.set('metric', metrics.join(','));
-    url.searchParams.set('filter', filter);
-    if (sort) url.searchParams.set('sort', sort);
-    const response = await fetch(url, {
+  const url = new URL('/sell/analytics/v1/traffic_report', EBAY_TRAFFIC_BASE_URL);
+  url.searchParams.set('dimension', dimension);
+  url.searchParams.set('metric', metrics.join(','));
+  url.searchParams.set('filter', filter);
+  if (sort) url.searchParams.set('sort', sort);
+  const response = await coordinatedSafeFetch(url, {
       method: 'GET',
-      signal: controller.signal,
+      timeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
+      firstByteTimeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
+      maxBytes: 5 * 1024 * 1024,
+      maxRedirects: 2,
+      allowedHosts: EBAY_ALLOWED_HOSTS,
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: 'application/json',
         'Accept-Language': 'en-US',
       },
-    });
-    const text = await response.text();
-    const parsed = parseJsonSafely(text || '{}', 'ebay_traffic_report');
-    const payload = parsed.ok && parsed.value && typeof parsed.value === 'object' ? parsed.value : {};
-    if (!response.ok) {
-      const message = String(payload?.errors?.[0]?.message || payload?.message || `HTTP ${response.status}`).trim();
-      const error = new Error(message || `HTTP ${response.status}`);
-      error.status = response.status;
-      throw error;
-    }
-    return payload;
-  } finally {
-    clearTimeout(timeout);
+  }, { integration: 'ebay', key: `ebay:traffic:${dimension}:${sort || 'default'}` });
+  const text = await response.text();
+  const parsed = parseJsonSafely(text || '{}', 'ebay_traffic_report');
+  const payload = parsed.ok && parsed.value && typeof parsed.value === 'object' ? parsed.value : {};
+  if (!response.ok) {
+    const message = String(payload?.errors?.[0]?.message || payload?.message || `HTTP ${response.status}`).trim();
+    const error = new Error(message || `HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
+  return payload;
 }
 
 async function fetchEbayTrafficStoreSnapshot(store) {
@@ -2138,19 +2143,20 @@ async function fetchUnreadEmailFeedForAccountViaAtom(account){
     };
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), EMAIL_UNREAD_TIMEOUT_MS);
   try {
     const auth = Buffer.from(`${account.username}:${account.appPassword}`, 'utf8').toString('base64');
-    const res = await fetch(account.feedUrl || EMAIL_UNREAD_URL, {
+    const res = await coordinatedSafeFetch(account.feedUrl || EMAIL_UNREAD_URL, {
       method: 'GET',
-      signal: controller.signal,
+      timeoutMs: EMAIL_UNREAD_TIMEOUT_MS,
+      firstByteTimeoutMs: EMAIL_UNREAD_TIMEOUT_MS,
+      maxBytes: 1024 * 1024,
+      maxRedirects: 2,
       headers: {
         Authorization: `Basic ${auth}`,
         Accept: 'application/atom+xml,application/xml,text/xml;q=0.9,*/*;q=0.1',
         'User-Agent': 'pa-nostromo-unread-email/1.0',
       },
-    });
+    }, { integration: 'email', key: `email:atom:${account.id}` });
     if (!res.ok) {
       const err = new Error(`Mail feed request failed (${res.status})`);
       err.status = res.status;
@@ -2175,14 +2181,12 @@ async function fetchUnreadEmailFeedForAccountViaAtom(account){
       message: '',
     };
   } catch (error) {
-    if (error?.name === 'AbortError') {
+    if (error?.code === 'request_timeout') {
       const timeoutError = new Error(`Mail feed timed out after ${EMAIL_UNREAD_TIMEOUT_MS}ms`);
       timeoutError.status = 504;
       throw timeoutError;
     }
     throw error;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -2616,6 +2620,7 @@ function createEmailUnreadAccountErrorPayload(account, error){
     status: 'error',
     message,
     errorCode: status === 401 || status === 403
+      && error?.code !== 'blocked_address'
       ? 'mail_auth_failed'
       : status === 404
         ? 'mail_feed_not_found'
@@ -2958,30 +2963,19 @@ function extractYouTubePublicSubscriberEstimate(html){
 
 async function delay(ms){ return new Promise((resolve) => setTimeout(resolve, ms)); }
 
-async function fetchTextViaCurl(url, timeoutMs = 12000){
-  return await new Promise((resolve, reject) => {
-    const seconds = Math.max(3, Math.ceil(Number(timeoutMs || 12000) / 1000));
-    const args = ['-L', '-sS', '--max-time', String(seconds), '--compressed', '-A', 'Mozilla/5.0 MissionControlLite/1.0 (+facebook-followers-fallback)', url];
-    execFile('curl', args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) {
-        const message = String((stderr || err.message || 'curl_fetch_failed')).trim();
-        return reject(Object.assign(new Error(message), { httpStatus: 502 }));
-      }
-      resolve(String(stdout || ''));
-    });
-  });
-}
-
 async function fetchInstagramWebProfileInfo(handle, timeoutMs = META_GRAPH_TIMEOUT_MS){
   const cleanHandle = String(handle || INSTAGRAM_PROFILE_HANDLE || '').trim().replace(/^@+/, '');
   if (!cleanHandle) throw Object.assign(new Error('instagram_handle_missing'), { httpStatus: 400 });
 
   const endpoint = 'https://i.instagram.com/api/v1/users/web_profile_info/?username=' + encodeURIComponent(cleanHandle);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs || META_GRAPH_TIMEOUT_MS)));
-
   try {
-    const res = await fetch(endpoint, {
+    const res = await coordinatedSafeFetch(endpoint, {
+      method: 'GET',
+      timeoutMs: Math.max(1000, Number(timeoutMs || META_GRAPH_TIMEOUT_MS)),
+      firstByteTimeoutMs: Math.max(1000, Number(timeoutMs || META_GRAPH_TIMEOUT_MS)),
+      maxBytes: 2 * 1024 * 1024,
+      maxRedirects: 1,
+      allowedHosts: ['i.instagram.com'],
       headers: {
         'accept': '*/*',
         'accept-language': 'en-US,en;q=0.9',
@@ -2991,8 +2985,7 @@ async function fetchInstagramWebProfileInfo(handle, timeoutMs = META_GRAPH_TIMEO
         'x-ig-app-id': '936619743392459',
         'x-requested-with': 'XMLHttpRequest',
       },
-      signal: controller.signal,
-    });
+    }, { integration: 'social', key: `social:instagram-web:${cleanHandle}` });
 
     const text = await res.text();
     if (!res.ok) {
@@ -3017,12 +3010,10 @@ async function fetchInstagramWebProfileInfo(handle, timeoutMs = META_GRAPH_TIMEO
       endpoint,
     };
   } catch (err) {
-    if (String(err?.name || '').toLowerCase() === 'aborterror') {
+    if (err?.code === 'request_timeout') {
       throw Object.assign(new Error('instagram_web_profile_info_timeout'), { httpStatus: 504 });
     }
     throw err;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -3031,14 +3022,16 @@ function isInstagramGraphConfigured(){
 }
 
 async function fetchMetaGraphJson(endpoint, { timeoutMs = META_GRAPH_TIMEOUT_MS, label = 'meta_graph' } = {}){
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || META_GRAPH_TIMEOUT_MS));
   try {
-    const res = await fetch(endpoint, {
+    const res = await coordinatedSafeFetch(endpoint, {
       method: 'GET',
-      signal: controller.signal,
+      timeoutMs: Math.max(1000, Number(timeoutMs) || META_GRAPH_TIMEOUT_MS),
+      firstByteTimeoutMs: Math.max(1000, Number(timeoutMs) || META_GRAPH_TIMEOUT_MS),
+      maxBytes: 2 * 1024 * 1024,
+      maxRedirects: 1,
+      allowedHosts: ['graph.facebook.com'],
       headers: { 'Accept': 'application/json' },
-    });
+    }, { integration: 'social', key: `social:meta:${new URL(endpoint).pathname}` });
     const text = await res.text();
     const parsed = parseJsonSafely(text, label);
     const body = parsed.ok && parsed.value && typeof parsed.value === 'object' ? parsed.value : {};
@@ -3061,12 +3054,10 @@ async function fetchMetaGraphJson(endpoint, { timeoutMs = META_GRAPH_TIMEOUT_MS,
     }
     return body;
   } catch (err) {
-    if (String(err?.name || '').toLowerCase() === 'aborterror') {
+    if (err?.code === 'request_timeout') {
       throw Object.assign(new Error(label + '_timeout'), { httpStatus: 504 });
     }
     throw err;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -4169,11 +4160,17 @@ async function pollFacebookFollowers({ source = 'interval' } = {}){
     if (graphEnabled) {
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
         facebookFollowersState.status.lastAttemptAt = new Date().toISOString();
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), META_GRAPH_TIMEOUT_MS);
         try {
           const endpoint = 'https://graph.facebook.com/' + encodeURIComponent(META_GRAPH_API_VERSION) + '/' + encodeURIComponent(META_GRAPH_PAGE_ID) + '?fields=followers_count,fan_count,name&access_token=' + encodeURIComponent(META_GRAPH_PAGE_ACCESS_TOKEN);
-          const res = await fetch(endpoint, { method: 'GET', signal: controller.signal, headers: { 'Accept': 'application/json' } });
+          const res = await coordinatedSafeFetch(endpoint, {
+            method: 'GET',
+            timeoutMs: META_GRAPH_TIMEOUT_MS,
+            firstByteTimeoutMs: META_GRAPH_TIMEOUT_MS,
+            maxBytes: 2 * 1024 * 1024,
+            maxRedirects: 1,
+            allowedHosts: ['graph.facebook.com'],
+            headers: { 'Accept': 'application/json' },
+          }, { integration: 'social', key: 'social:facebook-followers-graph' });
           httpStatus = Number(res.status || 0);
           const body = await res.json().catch(() => ({}));
           if (!res.ok) {
@@ -4208,8 +4205,6 @@ async function pollFacebookFollowers({ source = 'interval' } = {}){
           const retryAfter = Number(err?.retryAfter || 0);
           if (Number.isFinite(retryAfter) && retryAfter > 0) delayMs = Math.max(delayMs, retryAfter * 1000);
           await delay(delayMs);
-        } finally {
-          clearTimeout(timeout);
         }
       }
     }
@@ -5544,56 +5539,32 @@ function parseJsonSafely(raw, sourceLabel = 'json') {
 }
 
 function fetchJsonViaCurl(upstreamUrl, timeoutMs = CRYPTO_PROXY_TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    const timeoutSec = Math.max(2, Math.ceil(timeoutMs / 1000));
-    execFile(
-      'curl',
-      ['-fsSL', '--max-time', String(timeoutSec), upstreamUrl],
-      {
-        timeout: timeoutMs + 1000,
-        maxBuffer: 2 * 1024 * 1024,
-      },
-      (err, stdout, stderr) => {
-        if (err) {
-          const details = String(stderr || err?.message || err).trim() || 'curl execution failed';
-          return reject(new Error(details));
-        }
-
-        const parsed = parseJsonSafely(String(stdout || ''), 'curl');
-        if (!parsed.ok) {
-          return reject(new Error(parsed.message));
-        }
-
-        return resolve(parsed.value);
-      }
-    );
+  return coordinatedSafeFetch(upstreamUrl, {
+    method: 'GET',
+    timeoutMs,
+    firstByteTimeoutMs: timeoutMs,
+    maxBytes: 2 * 1024 * 1024,
+    maxRedirects: 3,
+    headers: { Accept: 'application/json, text/plain;q=0.8, */*;q=0.5' },
+  }, { integration: 'json-fetch' }).then(async (response) => {
+    if (!response.ok) throw Object.assign(new Error('upstream_http_error'), { code: 'upstream_http_error', status: response.status });
+    const parsed = parseJsonSafely(await response.text(), 'safe_fetch');
+    if (!parsed.ok) throw Object.assign(new Error(parsed.message), { code: parsed.error });
+    return parsed.value;
   });
 }
 
 function fetchTextViaCurl(upstreamUrl, timeoutMs = RSS_FETCH_TIMEOUT_MS, maxBytes = RSS_FETCH_MAX_BYTES) {
-  return new Promise((resolve, reject) => {
-    const timeoutSec = Math.max(2, Math.ceil(timeoutMs / 1000));
-    execFile(
-      'curl',
-      ['-fsSL', '--max-time', String(timeoutSec), upstreamUrl],
-      {
-        timeout: timeoutMs + 1000,
-        maxBuffer: maxBytes,
-      },
-      (err, stdout, stderr) => {
-        if (err) {
-          const details = String(stderr || err?.message || err).trim() || 'curl execution failed';
-          return reject(new Error(details));
-        }
-
-        const text = String(stdout || '');
-        if (Buffer.byteLength(text, 'utf8') > maxBytes) {
-          return reject(new Error(`Feed too large (curl payload exceeded ${maxBytes} bytes)`));
-        }
-
-        return resolve(text);
-      }
-    );
+  return coordinatedSafeFetch(upstreamUrl, {
+    method: 'GET',
+    timeoutMs,
+    firstByteTimeoutMs: timeoutMs,
+    maxBytes,
+    maxRedirects: 3,
+    headers: { 'User-Agent': 'pa-nostromo-safe-fetch/1.0', Accept: 'text/html, application/xml, text/xml;q=0.9, */*;q=0.5' },
+  }, { integration: 'public-fetch' }).then(async (response) => {
+    if (!response.ok) throw Object.assign(new Error('upstream_http_error'), { code: 'upstream_http_error', status: response.status });
+    return response.text();
   });
 }
 
@@ -5922,42 +5893,63 @@ function isAllowedCameraHost(hostname) {
   return CAMERA_PROXY_ALLOWLIST.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
 }
 
-function isPrivateCameraHost(hostname) {
-  const host = String(hostname || '').trim().toLowerCase();
-  if (!host) return false;
-  if (host === 'localhost' || host.endsWith('.local')) return true;
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-    if (host.startsWith('10.')) return true;
-    if (host.startsWith('127.')) return true;
-    if (host.startsWith('192.168.')) return true;
-    const second = Number(host.split('.')[1]);
-    if (host.startsWith('172.') && second >= 16 && second <= 31) return true;
-  }
-  return false;
-}
-
 function isCameraProxyTargetAllowed(targetUrl) {
   try {
     const parsed = new URL(targetUrl);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return { ok: false, code: 'invalid_protocol', message: 'Only http/https camera URLs are allowed.' };
     }
-
-    const host = parsed.hostname;
-    if (isAllowedCameraHost(host)) return { ok: true };
-
-    if (isPrivateCameraHost(host)) {
-      return { ok: true };
+    if (parsed.username || parsed.password) {
+      return { ok: false, code: 'credentials_not_allowed', message: 'Camera URL credentials are not allowed.' };
     }
+    if (!CAMERA_PROXY_ALLOWLIST.length) {
+      return { ok: false, code: 'camera_allowlist_required', message: 'Set CAMERA_PROXY_ALLOWLIST to an explicit public camera hostname.' };
+    }
+    if (isAllowedCameraHost(parsed.hostname)) return { ok: true, url: parsed };
 
     return {
       ok: false,
       code: 'host_not_allowed',
-      message: 'Camera host is not in local/private ranges or CAMERA_PROXY_ALLOWLIST.',
+      message: 'Camera host is not in CAMERA_PROXY_ALLOWLIST.',
     };
   } catch {
     return { ok: false, code: 'invalid_url', message: 'Invalid camera URL.' };
   }
+}
+
+function createClientAbortSignal(req, res) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (req?.aborted) abort();
+  else req?.once?.('aborted', abort);
+  res?.once?.('close', abort);
+  return {
+    signal: controller.signal,
+    dispose() {
+      req?.removeListener?.('aborted', abort);
+      res?.removeListener?.('close', abort);
+    },
+  };
+}
+
+function coordinatedSafeFetch(input, requestOptions = {}, coordination = {}) {
+  let parsed;
+  try {
+    parsed = input instanceof URL ? new URL(input.toString()) : new URL(String(input));
+  } catch {
+    return safeFetch(input, requestOptions);
+  }
+  const integration = String(coordination.integration || 'outbound').trim() || 'outbound';
+  const key = String(coordination.key || `${integration}:${parsed.protocol}//${parsed.host}${parsed.pathname}`);
+  return WORK_COORDINATOR.run({
+    key,
+    integration,
+    host: parsed.hostname,
+    signal: requestOptions.signal,
+    timeoutMs: requestOptions.timeoutMs,
+    manual: coordination.manual === true,
+    cooldownMs: coordination.cooldownMs || 0,
+  }, ({ signal }) => safeFetch(parsed, { ...requestOptions, signal }));
 }
 
 async function relayRowanMessage(text) {
@@ -6739,30 +6731,33 @@ async function handleApiCameraSnapshot(req, res) {
   }
 
   let upstream;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), CAMERA_PROXY_TIMEOUT_MS);
+  const clientRequest = createClientAbortSignal(req, res);
   try {
-    upstream = await fetch(targetUrl, {
+    const normalizedUrl = targetCheck.url.toString();
+    upstream = await WORK_COORDINATOR.run({
+      key: `camera:${normalizedUrl}`,
+      integration: 'camera',
+      host: targetCheck.url.hostname,
+      signal: clientRequest.signal,
+      timeoutMs: CAMERA_PROXY_TIMEOUT_MS,
+    }, ({ signal }) => safeFetch(normalizedUrl, {
       method: 'GET',
-      redirect: 'manual',
-      signal: controller.signal,
+      signal,
+      timeoutMs: CAMERA_PROXY_TIMEOUT_MS,
+      firstByteTimeoutMs: CAMERA_PROXY_TIMEOUT_MS,
+      maxBytes: CAMERA_PROXY_MAX_BYTES,
+      maxRedirects: 0,
+      allowedHosts: CAMERA_PROXY_ALLOWLIST,
       headers: {
         'User-Agent': 'mission-control-lite-camera-proxy/1.0',
-        'Accept': 'image/*,*/*;q=0.8',
+        'Accept': 'image/jpeg,image/png,image/webp,image/gif;q=0.9',
       },
-    });
+    }));
   } catch (err) {
-    return sendJson(res, 502, { ok: false, error: 'upstream_fetch_failed', message: String(err?.message || err) });
+    const status = Number(err?.status || 0) || (err?.code === 'response_too_large' ? 413 : err?.code === 'blocked_address' ? 403 : 502);
+    return sendJson(res, status, { ok: false, error: err?.code || 'upstream_fetch_failed', message: 'Camera source could not be fetched safely.' });
   } finally {
-    clearTimeout(timeout);
-  }
-
-  if (upstream.status >= 300 && upstream.status < 400) {
-    return sendJson(res, 502, {
-      ok: false,
-      error: 'redirect_not_allowed',
-      message: 'Camera source redirects are blocked by proxy safety policy.',
-    });
+    clientRequest.dispose();
   }
 
   if (!upstream.ok) {
@@ -6774,6 +6769,13 @@ async function handleApiCameraSnapshot(req, res) {
   }
 
   const contentType = String(upstream.headers.get('content-type') || 'application/octet-stream');
+  if (!/^image\/(?:jpeg|png|webp|gif)$/i.test(contentType.split(';', 1)[0].trim())) {
+    return sendJson(res, 415, {
+      ok: false,
+      error: 'unsupported_media_type',
+      message: 'Camera proxy only returns JPEG, PNG, WebP, or GIF images.',
+    });
+  }
   const contentLength = Number(upstream.headers.get('content-length') || 0);
   if (contentLength && contentLength > CAMERA_PROXY_MAX_BYTES) {
     return sendJson(res, 413, {
@@ -6901,7 +6903,7 @@ function parseFeedXml(xmlRaw, feedUrl) {
     ? (xml.match(/<entry[\s\S]*?<\/entry>/gi) || [])
     : (xml.match(/<item[\s\S]*?<\/item>/gi) || []);
 
-  return entryBlocks.slice(0, 40).map((block) => {
+  return entryBlocks.slice(0, RSS_FETCH_MAX_ENTRIES).map((block) => {
     const link = isAtom
       ? (extractTagAttr(block, 'link', 'href') || stripTags(extractTagValue(block, 'link')))
       : stripTags(extractTagValue(block, 'link'));
@@ -6935,46 +6937,47 @@ function parseFeedXml(xmlRaw, feedUrl) {
   }).filter((item) => /^https?:\/\//i.test(item.link));
 }
 
-async function fetchFeedXml(url) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), RSS_FETCH_TIMEOUT_MS);
+async function fetchFeedXml(url, options = {}) {
+  let normalized;
+  try {
+    normalized = new URL(url);
+  } catch {
+    throw Object.assign(new Error('rss_invalid_url'), { code: 'invalid_url', status: 400 });
+  }
+  const key = normalized.toString();
+  const cached = rssFeedCache.get(key);
+  const cachedFresh = cached && (Date.now() - cached.fetchedAt) < RSS_FETCH_CACHE_TTL_MS;
+  if (cachedFresh) return { xml: cached.xml, stale: false, cached: true, fetchedAt: cached.fetchedAt };
 
   try {
-    const response = await fetch(url, {
+    const response = await WORK_COORDINATOR.run({
+      key: `rss:${key}`,
+      integration: 'rss',
+      host: normalized.hostname,
+      signal: options.signal,
+      timeoutMs: RSS_FETCH_TIMEOUT_MS,
+      manual: options.manual === true,
+      cooldownMs: MANUAL_REFRESH_COOLDOWN_MS,
+    }, ({ signal }) => safeFetch(normalized, {
       method: 'GET',
-      signal: controller.signal,
+      signal,
+      timeoutMs: RSS_FETCH_TIMEOUT_MS,
+      firstByteTimeoutMs: RSS_FETCH_TIMEOUT_MS,
+      maxBytes: RSS_FETCH_MAX_BYTES,
+      maxRedirects: 3,
       headers: {
         'User-Agent': 'mission-control-lite-rss/1.0',
         'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5',
       },
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const contentLength = Number(response.headers.get('content-length') || 0);
-    if (contentLength && contentLength > RSS_FETCH_MAX_BYTES) {
-      throw new Error(`Feed too large (${contentLength} bytes)`);
-    }
-
-    const arrayBuf = await response.arrayBuffer();
-    const buf = Buffer.from(arrayBuf);
-    if (buf.length > RSS_FETCH_MAX_BYTES) {
-      throw new Error(`Feed too large (${buf.length} bytes)`);
-    }
-
-    return buf.toString('utf8');
+    }));
+    if (!response.ok) throw Object.assign(new Error('rss_upstream_http_error'), { code: 'rss_upstream_http_error', status: response.status });
+    const xml = await response.text();
+    const fetchedAt = Date.now();
+    rssFeedCache.set(key, { xml, fetchedAt });
+    return { xml, stale: false, cached: false, fetchedAt };
   } catch (err) {
-    try {
-      return await fetchTextViaCurl(url, RSS_FETCH_TIMEOUT_MS, RSS_FETCH_MAX_BYTES);
-    } catch (curlErr) {
-      const fetchReason = String(err?.message || err || 'fetch failed');
-      const curlReason = String(curlErr?.message || curlErr || 'curl failed');
-      throw new Error(`${fetchReason} (curl fallback failed: ${curlReason})`);
-    }
-  } finally {
-    clearTimeout(timeout);
+    if (cached) return { xml: cached.xml, stale: true, cached: true, fetchedAt: cached.fetchedAt, errorCode: err?.code || 'rss_refresh_failed' };
+    throw err;
   }
 }
 
@@ -6999,19 +7002,27 @@ async function handleApiCryptoProxy(req, res) {
   const upstreamUrl = new URL(route.upstream);
   reqUrl.searchParams.forEach((value, key) => upstreamUrl.searchParams.set(key, value));
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), CRYPTO_PROXY_TIMEOUT_MS);
-  let fetchFailure = null;
-
+  const clientRequest = createClientAbortSignal(req, res);
   try {
-    const upstream = await fetch(upstreamUrl, {
+    const upstream = await WORK_COORDINATOR.run({
+      key: `crypto:${upstreamUrl.toString()}`,
+      integration: 'crypto',
+      host: upstreamUrl.hostname,
+      signal: clientRequest.signal,
+      timeoutMs: CRYPTO_PROXY_TIMEOUT_MS,
+    }, ({ signal }) => safeFetch(upstreamUrl, {
       method: 'GET',
-      signal: controller.signal,
+      signal,
+      timeoutMs: CRYPTO_PROXY_TIMEOUT_MS,
+      firstByteTimeoutMs: CRYPTO_PROXY_TIMEOUT_MS,
+      maxBytes: 2 * 1024 * 1024,
+      maxRedirects: 2,
+      allowedHosts: [new URL(route.upstream).hostname],
       headers: {
         'User-Agent': 'mission-control-lite-crypto-proxy/1.0',
         'Accept': 'application/json, text/plain;q=0.8, */*;q=0.5',
       },
-    });
+    }));
 
     if (!upstream.ok) {
       return sendJson(res, upstream.status, {
@@ -7027,46 +7038,30 @@ async function handleApiCryptoProxy(req, res) {
     if (parsed.ok) {
       return sendJson(res, 200, parsed.value);
     }
-
-    fetchFailure = {
-      error: parsed.error,
-      message: parsed.message,
-    };
+    return sendJson(res, 502, { ok: false, error: parsed.error, message: 'Crypto upstream returned invalid JSON.' });
   } catch (err) {
-    const isAbort = String(err?.name || '') === 'AbortError';
-    fetchFailure = {
-      error: isAbort ? 'timeout' : 'crypto_proxy_fetch_failed',
-      message: isAbort ? 'Crypto upstream request timed out.' : String(err?.message || err),
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  try {
-    const json = await fetchJsonViaCurl(upstreamUrl.toString(), CRYPTO_PROXY_TIMEOUT_MS);
-    return sendJson(res, 200, json);
-  } catch (curlErr) {
-    return sendJson(res, 502, {
+    return sendJson(res, Number(err?.status || 0) || 502, {
       ok: false,
-      error: 'crypto_proxy_upstream_failed',
-      message: 'Upstream request failed via both fetch and curl fallback.',
-      details: {
-        fetch: {
-          error: fetchFailure?.error || 'crypto_proxy_fetch_failed',
-          message: fetchFailure?.message || 'Unknown fetch failure.',
-        },
-        curl: {
-          error: 'crypto_proxy_curl_failed',
-          message: String(curlErr?.message || curlErr),
-        },
-      },
+      error: err?.code || 'crypto_proxy_fetch_failed',
+      message: 'Crypto upstream could not be fetched safely.',
     });
+  } finally {
+    clientRequest.dispose();
   }
 }
 
 function execFileSafe(command, args, options = {}) {
   return new Promise((resolve) => {
-    execFile(command, args, options, (error, stdout, stderr) => {
+    const { signal, ...execOptions } = options;
+    let killTimer = null;
+    let child;
+    const terminate = () => {
+      child?.kill('SIGTERM');
+      killTimer = setTimeout(() => child?.kill('SIGKILL'), 2_000);
+    };
+    child = execFile(command, args, execOptions, (error, stdout, stderr) => {
+      if (killTimer) clearTimeout(killTimer);
+      signal?.removeEventListener?.('abort', terminate);
       resolve({
         ok: !error,
         error,
@@ -7074,6 +7069,8 @@ function execFileSafe(command, args, options = {}) {
         stderr: String(stderr || ''),
       });
     });
+    if (signal?.aborted) terminate();
+    else signal?.addEventListener?.('abort', terminate, { once: true });
   });
 }
 
@@ -7116,7 +7113,7 @@ function normalizeBackendSpeedResult(tool, json) {
   return null;
 }
 
-async function runBackendSpeedTest() {
+async function runBackendSpeedTest(signal) {
   const candidates = [
     { tool: 'speedtest', cmd: 'speedtest', args: ['--accept-license', '--accept-gdpr', '-f', 'json'] },
     { tool: 'speedtest-cli', cmd: 'speedtest-cli', args: ['--json'] },
@@ -7125,10 +7122,12 @@ async function runBackendSpeedTest() {
 
   const checked = [];
   for (const candidate of candidates) {
+    if (signal?.aborted) throw Object.assign(new Error('speed_test_cancelled'), { code: 'work_cancelled' });
     checked.push(candidate.tool);
     const result = await execFileSafe(candidate.cmd, candidate.args, {
       timeout: SPEED_TEST_TIMEOUT_MS,
       maxBuffer: 2 * 1024 * 1024,
+      signal,
     });
     if (!result.ok) continue;
 
@@ -7154,8 +7153,17 @@ async function handleApiSpeedTest(req, res) {
     return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/speed-test.' });
   }
 
+  const clientRequest = createClientAbortSignal(req, res);
   try {
-    const run = await runBackendSpeedTest();
+    const run = await WORK_COORDINATOR.run({
+      key: 'speed-test',
+      integration: 'speed-test',
+      host: 'local',
+      signal: clientRequest.signal,
+      timeoutMs: SPEED_TEST_TIMEOUT_MS,
+      manual: true,
+      cooldownMs: MANUAL_REFRESH_COOLDOWN_MS,
+    }, ({ signal }) => runBackendSpeedTest(signal));
     if (!run.ok) {
       return sendJson(res, 200, {
         ok: true,
@@ -7181,6 +7189,8 @@ async function handleApiSpeedTest(req, res) {
       error: 'speed_test_failed',
       message: String(err?.message || err || 'Speed test failed').slice(0, 180),
     });
+  } finally {
+    clientRequest.dispose();
   }
 }
 
@@ -7313,18 +7323,26 @@ async function handleApiRssFetch(req, res) {
 
   const items = [];
   const errors = [];
+  const feedStatus = [];
+  const clientRequest = createClientAbortSignal(req, res);
 
-  for (const url of urls) {
-    try {
-      const xml = await fetchFeedXml(url);
-      const parsedItems = parseFeedXml(xml, url);
-      items.push(...parsedItems);
-    } catch (err) {
-      errors.push({ feedUrl: url, message: String(err?.message || err).slice(0, 180) });
+  try {
+    for (const url of urls) {
+      try {
+        const feed = await fetchFeedXml(url, { signal: clientRequest.signal, manual: true });
+        const parsedItems = parseFeedXml(feed.xml, url);
+        items.push(...parsedItems);
+        feedStatus.push({ feedUrl: url, stale: feed.stale, cached: feed.cached, fetchedAt: new Date(feed.fetchedAt).toISOString() });
+        if (feed.stale) errors.push({ feedUrl: url, error: feed.errorCode || 'rss_refresh_failed', message: 'Refresh failed; showing the last cached feed.', stale: true });
+      } catch (err) {
+        errors.push({ feedUrl: url, error: err?.code || 'rss_fetch_failed', message: 'Feed could not be fetched safely.' });
+      }
     }
+  } finally {
+    clientRequest.dispose();
   }
 
-  return sendJson(res, 200, { ok: true, items, errors });
+  return sendJson(res, 200, { ok: true, items: items.slice(0, RSS_FETCH_MAX_FEEDS * RSS_FETCH_MAX_ENTRIES), feeds: feedStatus, errors });
 }
 
 function decodeStaticPath(urlPath) {
@@ -7485,6 +7503,16 @@ const server = http.createServer(async (req, res) => {
 });
 
 if (require.main === module) {
+  let shutdownRequested = false;
+  const shutdown = () => {
+    if (shutdownRequested) return;
+    shutdownRequested = true;
+    WORK_COORDINATOR.close();
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(1), 5_000).unref();
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
   void (async () => {
     const migrationResults = await ensureRuntimeStorageReady();
     for (const result of migrationResults) {

@@ -89,7 +89,7 @@ Every response carries anti-sniffing, frame, referrer, and same-origin resource 
 ### Camera snapshot proxy safety
 
 - `CAMERA_PROXY_ALLOW_REMOTE` (default `0`)
-- `CAMERA_PROXY_ALLOWLIST` (comma-separated public hosts)
+- `CAMERA_PROXY_ALLOWLIST` (required comma-separated public hosts; private, loopback, link-local, and internal-network addresses are always rejected)
 - `CAMERA_PROXY_TIMEOUT_MS`
 - `CAMERA_PROXY_MAX_BYTES`
 
@@ -99,6 +99,12 @@ Every response carries anti-sniffing, frame, referrer, and same-origin resource 
 - `RSS_FETCH_TIMEOUT_MS`
 - `RSS_FETCH_MAX_BYTES`
 - `RSS_FETCH_MAX_FEEDS`
+- `RSS_FETCH_MAX_ENTRIES`
+- `RSS_FETCH_CACHE_TTL_MS` (last-known-good feed cache; a failed refresh returns a visible stale result)
+
+### Outbound network safety
+
+All ordinary server-side HTTP requests use a DNS-pinned request boundary. It rejects URL credentials, non-HTTP(S) schemes, loopback/private/link-local/reserved/documentation/metadata addresses, and unsafe redirect targets before connecting. Response sizes and deadlines are bounded. Expensive outbound work is globally and per-host limited, deduplicated while in flight, and cancelled during shutdown or client disconnects. See [the outbound inventory](docs/outbound-network-inventory.md) for the remaining deliberate exceptions.
 
 ### Facebook follower pod (Graph API + fallback)
 

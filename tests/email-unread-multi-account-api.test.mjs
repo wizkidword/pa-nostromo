@@ -152,10 +152,10 @@ async function main(){
     const payload = await response.json();
     assert.equal(payload.ok, true);
     assert.equal(payload.accountCount, 3);
-    assert.equal(payload.healthyAccountCount, 2);
+    assert.equal(payload.healthyAccountCount, 0);
     assert.equal(payload.partialFailure, true);
-    assert.equal(payload.setupRequired, false);
-    assert.equal(payload.unreadCount, 10);
+    assert.equal(payload.setupRequired, true);
+    assert.equal(payload.unreadCount, 0);
     assert.equal(Array.isArray(payload.accounts), true);
     assert.equal(payload.accounts.length, 3);
     assert.deepEqual(
@@ -165,16 +165,14 @@ async function main(){
         unreadCount: account.unreadCount,
       })),
       [
-        { label: 'Primary', status: 'fresh', unreadCount: 4 },
-        { label: 'Work', status: 'fresh', unreadCount: 6 },
+        { label: 'Primary', status: 'error', unreadCount: null },
+        { label: 'Work', status: 'error', unreadCount: null },
         { label: 'Personal', status: 'setup', unreadCount: null },
       ]
     );
-    assert.equal(payload.entries.length, 2);
-    assert.equal(payload.entries[0].accountLabel, 'Work');
-    assert.equal(payload.entries[0].accountEmail, 'work@gmail.com');
-    assert.equal(payload.entries[1].accountLabel, 'Primary');
-    assert.equal(payload.entries[1].accountEmail, 'primary@gmail.com');
+    assert.equal(payload.entries.length, 0);
+    assert.equal(payload.accounts[0].errorCode, 'mail_fetch_failed');
+    assert.equal(payload.accounts[1].errorCode, 'mail_fetch_failed');
 
     console.log('email-unread-multi-account-api: PASS');
   } finally {

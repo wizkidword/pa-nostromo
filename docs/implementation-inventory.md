@@ -1,6 +1,6 @@
 # PA Nostromo implementation inventory
 
-Baseline recorded for Phase 0 on 2026-07-16. This is a working map of the application surface before Phase 2 centralizes authorization and Phase 3 centralizes outbound networking.
+Baseline recorded for Phase 0 on 2026-07-16 and updated through Phase 3. This is the current map of the application surface after centralized route authorization and outbound-network controls.
 
 ## Runtime layout
 
@@ -12,7 +12,7 @@ Baseline recorded for Phase 0 on 2026-07-16. This is a working map of the applic
 
 ## HTTP routes
 
-All routes are dispatched from the `http.createServer` block in `server.js`. Current local/remote rules remain route-specific until Phase 2; the table records current behavior rather than treating it as the target security model.
+All routes are dispatched through `ROUTE_MANIFEST` before reaching their handler. Host validation, scoped remote authorization, same-origin CSRF for browser mutations, and shared security headers are applied centrally.
 
 | Route | Methods | Body limit | Current gate and side effects | External systems |
 | --- | --- | --- | --- | --- |
@@ -21,10 +21,10 @@ All routes are dispatched from the `http.createServer` block in `server.js`. Cur
 | `/api/state/backups` | GET | none | same state gate; lists backup metadata | private filesystem |
 | `/api/state/restore` | POST | action: 64 KiB | same state gate; snapshots current state then restores selected backup | private filesystem |
 | `/api/rowan-send` | POST | action: 64 KiB | local by default; sends relay text | configured Rowan relay |
-| `/api/camera-snapshot` | GET | none | local by default; fetches one allowlisted/private camera URL | camera HTTP endpoint |
-| `/api/rss/fetch` | POST | RSS: 256 KiB | local by default; fetches up to configured feeds | arbitrary feed URLs (Phase 3 target) |
+| `/api/camera-snapshot` | GET | none | local by default; explicit public hostname allowlist, no redirects, image-only bounded response | camera HTTP endpoint |
+| `/api/rss/fetch` | POST | RSS: 256 KiB | local by default; bounded feeds/entries/bytes, cached and stale-aware | arbitrary public feed URLs via `safeFetch` |
 | `/api/gas-prices` | GET | none | local by default | configured gas providers/RapidAPI |
-| `/api/crypto/*` | GET | none | local by default | CoinGecko-compatible upstreams/curl fallback |
+| `/api/crypto/*` | GET | none | local by default; fixed upstream hostname per route | CoinGecko-compatible upstreams via `safeFetch` |
 | `/api/system-resources` | GET | none | local by default; reads host/process information | OS APIs and PowerShell/`df`/`ps` |
 | `/api/speed-test` | GET | none | local by default; explicitly launches diagnostic work | speed-test command/network |
 | `/api/home-devices/ping` | POST | action: 64 KiB | local by default; private/local hostname required | `ping` subprocess |
@@ -48,13 +48,13 @@ All routes are dispatched from the `http.createServer` block in `server.js`. Cur
 
 | Area | Entry points | Boundary and current limits |
 | --- | --- | --- |
-| eBay | `fetchEbay*`, `getEbayTrafficPayload` | Fetch with abort timers; OAuth client credentials and refresh tokens are private configuration; cache in `DATA_DIR`. |
-| Email | `fetchUnreadEmail*`, `lib/email-imap.js` | Gmail Atom fetch or IMAP snapshot/body/read/move operations; credentials are environment-only. |
-| Social | `fetchMetaGraphJson`, public-page fetches, `fetch*Via*Session` | Meta Graph, public HTML, and Playwright child scripts; persisted history and poll logs. |
-| RSS | `fetchFeedXml`, `fetchTextViaCurl` | Request feed URLs supplied by the browser; configured byte/feed/time limits. Phase 3 replaces this with `safeFetch`. |
-| Camera | `handleApiCameraSnapshot` | Camera URL query parameter; currently private range or configured hostname allowlist. Phase 3 adds DNS/redirect-safe fetch. |
-| Crypto and gas | `handleApiCryptoProxy`, `handleApiGasPrices`, curl fallback | fixed target catalog/configured providers. |
-| Relay | `relayRowanMessage` | configured relay URL with optional bearer/header. |
+| eBay | `fetchEbay*`, `getEbayTrafficPayload` | eBay hostname allowlist, `safeFetch`, coordinator, private OAuth configuration, and cache in `DATA_DIR`. |
+| Email | `fetchUnreadEmail*`, `lib/email-imap.js` | Gmail Atom uses `safeFetch` and the coordinator; IMAP is a separately bounded TLS protocol. Credentials are environment-only. |
+| Social | `fetchMetaGraphJson`, public-page fetches, `fetch*Via*Session` | HTTP calls use `safeFetch` and the coordinator; Playwright child scripts retain script-specific timeouts and session-storage containment. |
+| RSS | `fetchFeedXml` | User-provided feed URLs use DNS-pinned `safeFetch`, configured byte/feed/entry/time limits, coordinator deduplication, and stale cache fallback. |
+| Camera | `handleApiCameraSnapshot` | Explicit public hostname allowlist, DNS-pinned `safeFetch`, zero redirects, image content-type and byte limits. |
+| Crypto and gas | `handleApiCryptoProxy`, `handleApiGasPrices` | Fixed target catalog/configured providers via `safeFetch`; no arbitrary URL reaches `curl`. |
+| Relay | `relayRowanMessage` | Explicitly configured trusted relay URL with optional bearer/header; the only direct HTTP exception because a loopback relay is supported. |
 | System and devices | `readDiskUsagePercent`, `readTopProcesses`, `runExecFile`, speed-test helpers | PowerShell, `df`, `ps`, `ping`, `wakeonlan`, `etherwake`, and speed-test commands with timeouts/buffers. |
 
 ## Filesystem reads and writes
