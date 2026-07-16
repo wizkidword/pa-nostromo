@@ -22,7 +22,7 @@
 - **Media + live inputs**: music player, camera feed pod, live stream launcher
 - **Voice-to-relay workflow**: send dictated text through a local backend relay endpoint
 - **Cross-browser local state sharing**: Brave/Chrome can sync through disk-backed API storage
-- **State safety guardrails**: automatic backups, restore endpoints, and downgrade-protection on risky writes
+- **State safety guardrails**: validated atomic saves, verified backups, restore endpoints, and conflict protection for simultaneous browser edits
 - **Themeable cockpit**: Settings includes dark, light, system, Ember, Forest, Terminal, and Aurora themes
 
 ## Quick Start
@@ -71,6 +71,7 @@ Open: `http://127.0.0.1:4287`
 - `NOSTROMO_API_TOKENS_JSON` — scoped bearer-token records for deliberately remote-enabled routes. A route still remains disabled until its own `*_ALLOW_REMOTE=1` flag is set.
 - `NOSTROMO_API_TOKEN` — legacy state-only token compatibility; use the scoped token configuration for new setups.
 - `REQUEST_BODY_LIMIT_ACTION_BYTES`, `REQUEST_BODY_LIMIT_STATE_BYTES`, `REQUEST_BODY_LIMIT_RSS_BYTES` — request size caps
+- `STATE_BACKUP_MIN_INTERVAL_MS` — routine shared-state backup coalescing interval (default `30000`)
 - `ROWAN_RELAY_URL` — required for `POST /api/rowan-send`
 - `ROWAN_RELAY_AUTH_BEARER` — optional bearer token for upstream relay
 - `ROWAN_RELAY_AUTH_HEADER` — auth header name (default `Authorization`)
@@ -187,10 +188,11 @@ If `TIKTOK_PROFILE_HANDLE`/`TIKTOK_PROFILE_URL` is missing, the API returns setu
   - `GET /api/state`
   - `POST /api/state`
 - Disk-backed state lives at `DATA_DIR/state.json`
+- Existing state replacements require the revision returned by the last read/write (`If-Match`); the browser handles it automatically. See [durable shared state](docs/state-persistence.md) for migration and conflict recovery.
 
 ### 2) Backup + recovery flow
 
-- Every accepted state write snapshots the previous state into `DATA_DIR/backups/`
+- Accepted state writes are validated, serialized, and atomically renamed into place; routine snapshots are coalesced before being retained in `DATA_DIR/backups/`
 - List backups: `GET /api/state/backups`
 - Restore backup: `POST /api/state/restore`
 

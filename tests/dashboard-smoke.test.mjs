@@ -57,31 +57,55 @@ try {
   assert.match(await page.title(), /Nostromo|Mission Control/i);
 
   const stateResult = await page.evaluate(async () => {
-    const read = async () => (await fetch('/api/state')).json();
-    const write = async (state) => {
+    const read = async () => {
+      const response = await fetch('/api/state');
+      return { status: response.status, body: await response.json() };
+    };
+    const write = async (state, revision) => {
+      const headers = { 'Content-Type': 'application/json' };
+      if (Number.isSafeInteger(revision) && revision >= 0) headers['If-Match'] = `"${revision}"`;
       const response = await fetch('/api/state', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(state),
       });
       return { status: response.status, body: await response.json() };
     };
 
-    const created = await write({ tasks: [{ id: 'smoke-task', title: 'Created by smoke test' }] });
+    const before = await read();
+    let revision = Number(before.body?.__integrity?.revision);
+    if (!Number.isSafeInteger(revision) || revision < 0) revision = undefined;
+    const created = await write({ tasks: [{ id: 'smoke-task', title: 'Created by smoke test', column: 'inbox' }] }, revision);
     const afterCreate = await read();
-    const updated = await write({ tasks: [{ id: 'smoke-task', title: 'Updated by smoke test' }] });
+    revision = created.body?.revision;
+    const updated = await write({ tasks: [{ id: 'smoke-task', title: 'Updated by smoke test', column: 'inbox' }] }, revision);
     const afterUpdate = await read();
-    const removed = await write({ tasks: [] });
+    revision = updated.body?.revision;
+    const removed = await write({ tasks: [] }, revision);
     const afterRemove = await read();
     return { created, afterCreate, updated, afterUpdate, removed, afterRemove };
   });
 
   assert.equal(stateResult.created.status, 200);
-  assert.equal(stateResult.afterCreate.tasks[0].title, 'Created by smoke test');
+  assert.equal(stateResult.afterCreate.body.tasks[0].title, 'Created by smoke test');
   assert.equal(stateResult.updated.status, 200);
-  assert.equal(stateResult.afterUpdate.tasks[0].title, 'Updated by smoke test');
+  assert.equal(stateResult.afterUpdate.body.tasks[0].title, 'Updated by smoke test');
   assert.equal(stateResult.removed.status, 200);
-  assert.deepEqual(stateResult.afterRemove.tasks, []);
+  assert.deepEqual(stateResult.afterRemove.body.tasks, []);
+
+  const conflictResult = await page.evaluate(async () => {
+    state.tasks = [...state.tasks, { id: 'local-conflict-task', title: 'Preserved local draft', column: 'inbox' }];
+    const saved = await pushStateToSharedApi('smoke_conflict');
+    return {
+      saved,
+      conflictVisible: Boolean(document.getElementById('sharedStateConflictNotice')),
+      draftPreserved: Array.isArray(sharedStateConflictDraft?.tasks)
+        && sharedStateConflictDraft.tasks.some((task) => task.id === 'local-conflict-task'),
+    };
+  });
+  assert.equal(conflictResult.saved, false);
+  assert.equal(conflictResult.conflictVisible, true);
+  assert.equal(conflictResult.draftPreserved, true);
   assert.deepEqual(pageErrors, []);
 } finally {
   await browser?.close();

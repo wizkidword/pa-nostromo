@@ -938,6 +938,7 @@ let sharedHydrateSeq = 0;
 let sharedHydrateScheduledTimer = null;
 let sharedHydrateQueuedReason = '';
 let sharedHydrateLastRunAt = 0;
+let sharedStateConflictDraft = null;
 const SHARED_HYDRATE_MIN_INTERVAL_MS = 250;
 let suppressCrossTabSync = false;
 let sharedSyncChannel = null;
@@ -1332,6 +1333,67 @@ function extractStateRevision(obj){
   return Number.isFinite(rev) ? rev : 0;
 }
 
+function applySharedWriteIntegrity(target, result){
+  if (!target || typeof target !== 'object' || !result?.ok) return;
+  target.schemaVersion = 2;
+  target.__integrity = {
+    ...(target.__integrity || {}),
+    revision: Number(result.revision || 0),
+    savedAt: String(result.savedAt || now()),
+    checksum: String(result.checksum || ''),
+    stateSchemaVersion: 2,
+  };
+}
+
+function clearSharedStateConflict(){
+  sharedStateConflictDraft = null;
+  document.getElementById('sharedStateConflictNotice')?.remove();
+}
+
+function showSharedStateConflict(error){
+  if (!sharedStateConflictDraft) {
+    try { sharedStateConflictDraft = JSON.parse(JSON.stringify(state)); } catch { sharedStateConflictDraft = state; }
+  }
+  const existing = document.getElementById('sharedStateConflictNotice');
+  if (existing) return;
+  const notice = document.createElement('section');
+  notice.id = 'sharedStateConflictNotice';
+  notice.className = 'change-log-item';
+  notice.setAttribute('role', 'alert');
+  notice.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:9999;max-width:430px;border:1px solid #d08b31;background:#241a10;color:#fff;padding:14px;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.35)';
+  notice.innerHTML = `<strong>Shared state changed elsewhere</strong><div class="note-meta" style="color:inherit;margin:8px 0;">Your local edits are still kept in this browser. Reload the newer shared copy, export your edits, or explicitly overwrite it.</div><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn ghost" data-state-conflict="reload" type="button">Reload shared</button><button class="btn ghost" data-state-conflict="export" type="button">Export my edits</button><button class="btn" data-state-conflict="overwrite" type="button">Keep my edits</button></div>`;
+  document.body.appendChild(notice);
+  notice.querySelector('[data-state-conflict="reload"]')?.addEventListener('click', async () => {
+    await runSharedHydrateNow();
+    clearSharedStateConflict();
+  });
+  notice.querySelector('[data-state-conflict="export"]')?.addEventListener('click', () => {
+    downloadJsonFile(`pa-nostromo-conflict-draft-${now().replace(/[:.]/g, '-')}.json`, sharedStateConflictDraft || state);
+  });
+  notice.querySelector('[data-state-conflict="overwrite"]')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    if (!window.confirm('Replace the newer shared state with your preserved local edits?')) return;
+    button.disabled = true;
+    try {
+      const remoteResponse = await fetch(`${SHARED_STATE_API}?_=${Date.now()}`, { cache: 'no-store' });
+      const remote = remoteResponse.ok ? await remoteResponse.json() : null;
+      const draft = sharedStateConflictDraft || state;
+      const result = await writeStateToSharedApi({
+        ...draft,
+        __writeControl: { overrideDowngrade: true, source: 'conflict_overwrite', explicitLiveOverride: true },
+      }, { expectedRevision: extractStateRevision(remote) });
+      applySharedWriteIntegrity(draft, result);
+      applyIncomingState(draft, { render: true });
+      broadcastCrossTabSync('state_conflict_overwrite', { reason: 'explicit_conflict_overwrite' });
+      clearSharedStateConflict();
+    } catch (overwriteError) {
+      alert(`Could not keep local edits: ${String(overwriteError?.message || overwriteError)}`);
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
 function applyIncomingState(incoming, { render = false } = {}){
   if (!incoming || typeof incoming !== 'object') return false;
   suppressCrossTabSync = true;
@@ -1417,22 +1479,29 @@ async function hydrateStateFromSharedApi(){
   }
 }
 
-async function writeStateToSharedApi(payload){
+async function writeStateToSharedApi(payload, { expectedRevision = extractStateRevision(state) } = {}){
+  const headers = { 'Content-Type': 'application/json' };
+  if (Number.isSafeInteger(expectedRevision) && expectedRevision >= 0) headers['If-Match'] = `"${expectedRevision}"`;
   const res = await fetch(SHARED_STATE_API, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
     let details = '';
+    let errorBody = null;
     try {
-      const errBody = await res.json();
-      details = errBody?.message || errBody?.error || '';
+      errorBody = await res.json();
+      details = errorBody?.message || errorBody?.error || '';
     } catch {
       // ignore
     }
-    throw new Error(details || `State sync failed (HTTP ${res.status})`);
+    const error = new Error(details || `State sync failed (HTTP ${res.status})`);
+    error.code = errorBody?.error || 'state_sync_failed';
+    error.status = res.status;
+    error.currentRevision = errorBody?.currentRevision;
+    throw error;
   }
 
   return res.json().catch(() => null);
@@ -1445,10 +1514,14 @@ async function pushStateToSharedApi(reason = 'unspecified'){
   }
 
   try {
-    await writeStateToSharedApi(state);
+    const result = await writeStateToSharedApi(state);
+    applySharedWriteIntegrity(state, result);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    clearSharedStateConflict();
     broadcastCrossTabSync('state_changed', { reason });
     return true;
-  } catch {
+  } catch (error) {
+    if (error?.code === 'state_revision_conflict') showSharedStateConflict(error);
     // Local fallback only
     return false;
   }
@@ -1624,11 +1697,16 @@ async function refreshStateSafetyBackups(force = false){
         try {
           const resp = await fetch(SHARED_STATE_RESTORE_API, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'If-Match': `"${extractStateRevision(state)}"` },
             body: JSON.stringify({ backupFile }),
           });
           const payload = await resp.json();
-          if (!resp.ok || !payload?.ok) throw new Error(payload?.message || payload?.error || `HTTP ${resp.status}`);
+          if (!resp.ok || !payload?.ok) {
+            const restoreError = new Error(payload?.message || payload?.error || `HTTP ${resp.status}`);
+            restoreError.code = payload?.error || 'restore_failed';
+            if (restoreError.code === 'state_revision_conflict') showSharedStateConflict(restoreError);
+            throw restoreError;
+          }
           clearUndoPrompt('restore_applied');
           await scheduleSharedHydrate('manual_restore_applied');
           broadcastCrossTabSync('state_restored', { reason: 'manual_restore_applied' });
@@ -1660,7 +1738,7 @@ async function importStateSnapshotFromFile(file){
     throw new Error('Selected file is not a valid state object.');
   }
 
-  await writeStateToSharedApi({
+  const result = await writeStateToSharedApi({
     ...incoming,
     __writeControl: {
       overrideDowngrade: true,
@@ -1669,6 +1747,7 @@ async function importStateSnapshotFromFile(file){
     },
   });
 
+  applySharedWriteIntegrity(incoming, result);
   applyIncomingState(incoming, { render: true });
   broadcastCrossTabSync('state_imported', { reason: 'manual_import' });
 }

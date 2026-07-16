@@ -13,12 +13,12 @@ const { SECURITY_RESPONSE_HEADERS, createHostPolicy, validateHostHeader, parseSc
 const { buildRouteManifest, resolveRoute } = require('./lib/route-manifest.js');
 const { safeFetch } = require('./lib/safe-fetch.js');
 const { createWorkCoordinator } = require('./lib/work-coordinator.js');
+const { StateSchemaError } = require('./lib/state-schema.js');
+const { StateStore, StateStoreError } = require('./lib/state-store.js');
 
 const ROOT = __dirname;
 const PUBLIC_ROOT = path.join(ROOT, 'public');
 const BACKUP_RETENTION = 200;
-const STATE_SCHEMA_VERSION = 2;
-const SNAPSHOT_SCHEMA_VERSION = 1;
 
 function loadEnvFile(filePath, shellEnvKeys = new Set()) {
   if (!fs.existsSync(filePath)) return;
@@ -61,6 +61,13 @@ function parsePositiveInt(value, fallback) {
   const num = Number(value);
   return Number.isFinite(num) && num > 0 ? Math.floor(num) : fallback;
 }
+
+const STATE_STORE = new StateStore({
+  statePath: STATE_PATH,
+  backupsDir: BACKUPS_DIR,
+  backupRetention: BACKUP_RETENTION,
+  backupMinIntervalMs: Math.max(1_000, parsePositiveInt(process.env.STATE_BACKUP_MIN_INTERVAL_MS, 30_000)),
+});
 
 function parseBool(value) {
   const normalized = String(value || '').trim().toLowerCase();
@@ -5744,147 +5751,6 @@ function deepClone(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
 
-function stripIntegrityMeta(stateObj) {
-  const clone = deepClone(stateObj || {});
-  if (clone && typeof clone === 'object') {
-    delete clone.__integrity;
-    delete clone.__writeControl;
-  }
-  return clone;
-}
-
-function computeChecksum(stateObj) {
-  const canonical = JSON.stringify(stripIntegrityMeta(stateObj));
-  return crypto.createHash('sha256').update(canonical).digest('hex');
-}
-
-function buildBackupFileName() {
-  const iso = new Date().toISOString().replace(/[:.]/g, '-');
-  const nonce = crypto.randomBytes(3).toString('hex');
-  return `state-${iso}-${nonce}.json`;
-}
-
-async function listBackupFiles() {
-  await ensureDataDir();
-  const entries = await fsp.readdir(BACKUPS_DIR, { withFileTypes: true });
-  const files = [];
-
-  for (const ent of entries) {
-    if (!ent.isFile()) continue;
-    if (!ent.name.startsWith('state-') || !ent.name.endsWith('.json')) continue;
-    const abs = path.join(BACKUPS_DIR, ent.name);
-    try {
-      const st = await fsp.stat(abs);
-      let snapshotMeta = null;
-      try {
-        const raw = await fsp.readFile(abs, 'utf8');
-        const parsed = JSON.parse(raw);
-        const checksum = String(parsed?.__integrity?.checksum || '').trim() || null;
-        snapshotMeta = {
-          snapshotSchemaVersion: Number(parsed?.__snapshotMeta?.snapshotSchemaVersion || SNAPSHOT_SCHEMA_VERSION),
-          stateSchemaVersion: Number(parsed?.__integrity?.stateSchemaVersion || STATE_SCHEMA_VERSION),
-          revision: Number(parsed?.__integrity?.revision || 0),
-          reason: String(parsed?.__backupMeta?.reason || '').trim() || 'unspecified',
-          checksum,
-          hasChecksum: !!checksum,
-          criticalCounts: parsed?.__snapshotMeta?.criticalCounts || null,
-        };
-      } catch {
-        snapshotMeta = {
-          snapshotSchemaVersion: SNAPSHOT_SCHEMA_VERSION,
-          stateSchemaVersion: STATE_SCHEMA_VERSION,
-          revision: 0,
-          reason: 'unknown',
-          checksum: null,
-          hasChecksum: false,
-          criticalCounts: null,
-        };
-      }
-
-      files.push({
-        backupFile: ent.name,
-        size: st.size,
-        createdAt: st.birthtime?.toISOString?.() || st.mtime.toISOString(),
-        mtimeMs: st.mtimeMs,
-        snapshotMeta,
-      });
-    } catch {
-      // ignore race/deleted file
-    }
-  }
-
-  files.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return files;
-}
-
-async function pruneBackups(maxKeep = BACKUP_RETENTION) {
-  const files = await listBackupFiles();
-  const stale = files.slice(maxKeep);
-  await Promise.all(stale.map((f) => fsp.unlink(path.join(BACKUPS_DIR, f.backupFile)).catch(() => {})));
-}
-
-async function readStateFileSafe() {
-  try {
-    const raw = await fsp.readFile(STATE_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return { state: null, integrity: 'invalid' };
-
-    const storedChecksum = String(parsed?.__integrity?.checksum || '').trim();
-    if (!storedChecksum) return { state: parsed, integrity: 'missing_checksum' };
-
-    const computed = computeChecksum(parsed);
-    return { state: parsed, integrity: computed === storedChecksum ? 'ok' : 'checksum_mismatch' };
-  } catch {
-    return { state: null, integrity: 'not_found' };
-  }
-}
-
-async function writeBackupSnapshot(stateObj, reason = 'write') {
-  if (!stateObj || typeof stateObj !== 'object') return null;
-  await ensureDataDir();
-  const backupFile = buildBackupFileName();
-  const backupPath = path.join(BACKUPS_DIR, backupFile);
-  const clone = deepClone(stateObj);
-  const payload = {
-    ...clone,
-    __backupMeta: {
-      reason,
-      createdAt: new Date().toISOString(),
-    },
-    __snapshotMeta: {
-      snapshotSchemaVersion: SNAPSHOT_SCHEMA_VERSION,
-      criticalCounts: {
-        tasks: Array.isArray(clone.tasks) ? clone.tasks.length : 0,
-        notes: Array.isArray(clone.notes) ? clone.notes.length : 0,
-        projects: Array.isArray(clone.projects) ? clone.projects.length : 0,
-        reminders: Array.isArray(clone.reminders) ? clone.reminders.length : 0,
-        layoutRows: Array.isArray(clone?.layout?.utilityRows) ? clone.layout.utilityRows.length : 0,
-      },
-    },
-  };
-  await fsp.writeFile(backupPath, JSON.stringify(payload, null, 2), 'utf8');
-  await pruneBackups(BACKUP_RETENTION);
-  return backupFile;
-}
-
-async function writeStateWithIntegrity(incomingState, opts = {}) {
-  const savedAt = new Date().toISOString();
-  const next = deepClone(incomingState || {});
-  const previousRevision = Number(opts?.previousRevision || 0);
-  const revision = previousRevision + 1;
-  next.__integrity = {
-    savedAt,
-    revision,
-    stateSchemaVersion: STATE_SCHEMA_VERSION,
-    source: String(opts?.source || 'unknown'),
-    reason: String(opts?.reason || 'state_write'),
-    checksum: computeChecksum(next),
-  };
-
-  await fsp.writeFile(STATE_PATH, JSON.stringify(next, null, 2), 'utf8');
-  return next.__integrity;
-}
-
 function isAllowedCameraHost(hostname) {
   if (!hostname) return false;
   const host = String(hostname || '').trim().toLowerCase();
@@ -6538,136 +6404,144 @@ async function handleApiDiaryIndex(req, res) {
   }
 }
 
+function parseExpectedStateRevision(req, body) {
+  const header = String(req.headers['if-match'] || '').trim();
+  const fallback = body?.__writeControl?.expectedRevision;
+  const supplied = header || (fallback == null ? '' : String(fallback).trim());
+  if (!supplied) return undefined;
+  const match = supplied.match(/^(?:W\/)?"?(\d+)"?$/i);
+  if (!match) throw new StateStoreError('invalid_revision', 'If-Match must be a non-negative integer revision.');
+  const revision = Number(match[1]);
+  if (!Number.isSafeInteger(revision)) throw new StateStoreError('invalid_revision', 'If-Match revision is not safe.');
+  return revision;
+}
+
+function sendStateStoreError(res, err, { restore = false } = {}) {
+  if (err instanceof StateStoreError) {
+    if (err.code === 'revision_conflict') {
+      return sendJson(res, 409, { ok: false, error: 'state_revision_conflict', message: err.message, currentRevision: err.details?.currentRevision });
+    }
+    if (err.code === 'state_downgrade_blocked') {
+      return sendJson(res, 409, { ok: false, error: err.code, message: err.message, ...err.details });
+    }
+    if (err.code === 'revision_required') {
+      return sendJson(res, 428, { ok: false, error: 'state_revision_required', message: err.message, currentRevision: err.details?.currentRevision });
+    }
+    if (err.code === 'invalid_revision' || err.code === 'invalid_backup_file') {
+      return sendJson(res, 400, { ok: false, error: err.code, message: err.message });
+    }
+    return sendJson(res, restore ? 400 : 500, { ok: false, error: restore ? 'restore_failed' : err.code, message: err.message });
+  }
+  if (err instanceof StateSchemaError) {
+    const status = err.code === 'unsupported_future_schema' ? 409 : 422;
+    return sendJson(res, status, { ok: false, error: err.code, message: err.message });
+  }
+  return sendJson(res, restore ? 400 : 500, { ok: false, error: restore ? 'restore_failed' : 'state_unavailable', message: String(err?.message || err) });
+}
+
 async function handleApiState(req, res) {
-  await ensureDataDir();
   const pathname = new URL(req.url || '/api/state', `http://localhost:${PORT}`).pathname;
 
   if (pathname === '/api/state/backups') {
     if (req.method !== 'GET') return sendJson(res, 405, { error: 'method_not_allowed' });
-    const backups = await listBackupFiles();
-    return sendJson(res, 200, { ok: true, backups: backups.map(({ mtimeMs, ...rest }) => rest) });
+    try {
+      const backups = await STATE_STORE.listBackups();
+      return sendJson(res, 200, { ok: true, backups: backups.map(({ mtimeMs, ...rest }) => rest) });
+    } catch (err) {
+      return sendStateStoreError(res, err);
+    }
   }
 
   if (pathname === '/api/state/restore') {
     if (req.method !== 'POST') return sendJson(res, 405, { error: 'method_not_allowed' });
-
     try {
       const body = await readBody(req, { maxBytes: REQUEST_BODY_LIMIT_ACTION_BYTES });
       const parsed = JSON.parse(body || '{}');
-      const backupFile = path.basename(String(parsed?.backupFile || '').trim());
-      if (!backupFile || !backupFile.startsWith('state-') || !backupFile.endsWith('.json')) {
-        return sendJson(res, 400, { ok: false, error: 'invalid_backup_file' });
-      }
-
-      const backupPath = path.join(BACKUPS_DIR, backupFile);
-      const raw = await fsp.readFile(backupPath, 'utf8');
-      const backupState = JSON.parse(raw);
-
-      const { state: currentState } = await readStateFileSafe();
-      let preRestoreSnapshot = null;
-      if (currentState) {
-        preRestoreSnapshot = await writeBackupSnapshot(currentState, 'pre_restore');
-      }
-
-      const previousRevision = Number(currentState?.__integrity?.revision || 0);
-      const integrity = await writeStateWithIntegrity(backupState, {
-        source: 'manual_restore',
-        reason: 'manual_restore_from_backup',
-        previousRevision,
+      const result = await STATE_STORE.restore(parsed?.backupFile, {
+        expectedRevision: parseExpectedStateRevision(req, parsed),
       });
       return sendJson(res, 200, {
         ok: true,
-        restoredFrom: backupFile,
-        preRestoreSnapshot,
-        savedAt: integrity.savedAt,
-        checksum: integrity.checksum,
+        restoredFrom: String(parsed?.backupFile || ''),
+        preRestoreSnapshot: result.backupFile,
+        savedAt: result.integrity.savedAt,
+        checksum: result.integrity.checksum,
+        revision: result.integrity.revision,
       });
     } catch (err) {
       if (isPayloadTooLargeError(err)) return sendPayloadTooLarge(res, err);
-      return sendJson(res, 400, { ok: false, error: 'restore_failed', message: String(err?.message || err) });
+      return sendStateStoreError(res, err, { restore: true });
     }
   }
 
-  if (pathname !== '/api/state') {
-    return sendJson(res, 404, { error: 'not_found' });
-  }
+  if (pathname !== '/api/state') return sendJson(res, 404, { error: 'not_found' });
 
   if (req.method === 'GET') {
     try {
-      const raw = await fsp.readFile(STATE_PATH, 'utf8');
-      const parsed = JSON.parse(raw);
-      return sendJson(res, 200, parsed);
-    } catch {
-      return sendJson(res, 404, { error: 'state_not_found' });
-    }
-  }
-
-  if (req.method === 'POST') {
-    try {
-      const body = await readBody(req, { maxBytes: REQUEST_BODY_LIMIT_STATE_BYTES });
-      const parsed = JSON.parse(body || '{}');
-      if (!parsed || typeof parsed !== 'object') {
-        return sendJson(res, 400, { error: 'invalid_json', message: 'State payload must be an object.' });
+      const result = await STATE_STORE.load();
+      if (!result.state) {
+        if (result.integrity === 'not_found') return sendJson(res, 404, { error: 'state_not_found' });
+        return sendJson(res, 409, { ok: false, error: 'state_corrupt_quarantined', message: 'Invalid saved state was quarantined; a new state can be created.' });
       }
-
-      const overrideDowngrade = parsed?.__writeControl?.overrideDowngrade === true;
-      const source = String(parsed?.__writeControl?.source || '').trim();
-      const explicitLiveOverride = parsed?.__writeControl?.explicitLiveOverride === true;
-      const allowOverride = overrideDowngrade && (
-        source === 'manual_restore'
-        || source === 'manual_import'
-        || (source === 'qa_script' && explicitLiveOverride)
-      );
-
-      const cleanIncoming = deepClone(parsed);
-      delete cleanIncoming.__writeControl;
-
-      const { state: current, integrity } = await readStateFileSafe();
-      if (source === 'qa_script' && !explicitLiveOverride) {
-        return sendJson(res, 409, {
-          ok: false,
-          error: 'qa_override_requires_explicit_opt_in',
-          message: 'QA/script overwrite is blocked unless __writeControl.explicitLiveOverride=true.',
-        });
-      }
-
-      if (current) {
-        const incomingScore = stateRichnessScore(cleanIncoming);
-        const currentScore = stateRichnessScore(current);
-
-        const looksLikeDangerousDowngrade = currentScore >= 20 && incomingScore <= Math.floor(currentScore * 0.35);
-        if (looksLikeDangerousDowngrade && !allowOverride) {
-          return sendJson(res, 409, {
-            ok: false,
-            error: 'state_downgrade_blocked',
-            message: 'Incoming state looks much smaller than current shared state; write blocked to prevent accidental data loss.',
-            currentScore,
-            incomingScore,
-          });
-        }
-
-        await writeBackupSnapshot(current, 'pre_write');
-      }
-
-      const previousRevision = Number(current?.__integrity?.revision || 0);
-      const writeIntegrity = await writeStateWithIntegrity(cleanIncoming, {
-        source: source || 'api_state_post',
-        reason: 'api_state_post',
-        previousRevision,
-      });
-      return sendJson(res, 200, {
-        ok: true,
-        savedAt: writeIntegrity.savedAt,
-        checksum: writeIntegrity.checksum,
-        previousStateIntegrity: integrity,
-      });
+      return sendJson(res, 200, result.state);
     } catch (err) {
-      if (isPayloadTooLargeError(err)) return sendPayloadTooLarge(res, err);
-      return sendJson(res, 400, { error: 'invalid_json', message: String(err?.message || err) });
+      return sendStateStoreError(res, err);
     }
   }
 
-  sendJson(res, 405, { error: 'method_not_allowed' });
+  if (req.method !== 'POST') return sendJson(res, 405, { error: 'method_not_allowed' });
+
+  try {
+    const body = await readBody(req, { maxBytes: REQUEST_BODY_LIMIT_STATE_BYTES });
+    const parsed = JSON.parse(body || '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return sendJson(res, 400, { error: 'invalid_json', message: 'State payload must be an object.' });
+    }
+
+    const overrideDowngrade = parsed?.__writeControl?.overrideDowngrade === true;
+    const source = String(parsed?.__writeControl?.source || '').trim();
+    const explicitLiveOverride = parsed?.__writeControl?.explicitLiveOverride === true;
+    const allowOverride = overrideDowngrade && (
+      source === 'manual_restore'
+      || source === 'manual_import'
+      || source === 'conflict_overwrite'
+      || (source === 'qa_script' && explicitLiveOverride)
+    );
+    if (source === 'qa_script' && !explicitLiveOverride) {
+      return sendJson(res, 409, {
+        ok: false,
+        error: 'qa_override_requires_explicit_opt_in',
+        message: 'QA/script overwrite is blocked unless __writeControl.explicitLiveOverride=true.',
+      });
+    }
+
+    const cleanIncoming = deepClone(parsed);
+    delete cleanIncoming.__writeControl;
+    const result = await STATE_STORE.write(cleanIncoming, {
+      expectedRevision: parseExpectedStateRevision(req, parsed),
+      source: source || 'api_state_post',
+      reason: 'api_state_post',
+      validateCurrent: (current, incoming) => {
+        if (!current) return;
+        const incomingScore = stateRichnessScore(incoming);
+        const currentScore = stateRichnessScore(current);
+        if (currentScore >= 20 && incomingScore <= Math.floor(currentScore * 0.35) && !allowOverride) {
+          throw new StateStoreError('state_downgrade_blocked', 'Incoming state looks much smaller than current shared state; write blocked to prevent accidental data loss.', { currentScore, incomingScore });
+        }
+      },
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      savedAt: result.integrity.savedAt,
+      checksum: result.integrity.checksum,
+      revision: result.integrity.revision,
+      previousStateIntegrity: result.previousStateIntegrity,
+      backupFile: result.backupFile,
+    });
+  } catch (err) {
+    if (isPayloadTooLargeError(err)) return sendPayloadTooLarge(res, err);
+    return sendStateStoreError(res, err);
+  }
 }
 
 async function handleApiRowanSend(req, res) {
