@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const [appSource, htmlSource, cssSource] = await Promise.all([
-  readFile('app.js', 'utf8'),
-  readFile('index.html', 'utf8'),
-  readFile('styles.css', 'utf8'),
+  readFile('public/app.js', 'utf8'),
+  readFile('public/index.html', 'utf8'),
+  readFile('public/styles.css', 'utf8'),
 ]);
 
 const expectedThemes = ['dark', 'light', 'system', 'ember', 'forest', 'terminal', 'aurora'];

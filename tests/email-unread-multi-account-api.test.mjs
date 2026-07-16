@@ -1,8 +1,21 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import net from 'node:net';
+import { createTempRuntime } from './helpers/temp-runtime.mjs';
 
 function wait(ms){ return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+function getAvailablePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close((error) => error ? reject(error) : resolve(port));
+    });
+  });
+}
 
 async function startStubMailServer() {
   const routes = {
@@ -90,7 +103,8 @@ async function waitForAppServer(port, timeoutMs = 8000) {
 
 async function main(){
   const stub = await startStubMailServer();
-  const appPort = 4798;
+  const runtime = await createTempRuntime('nostromo-email-api-');
+  const appPort = await getAvailablePort();
   const accounts = [
     {
       label: 'Primary',
@@ -119,6 +133,9 @@ async function main(){
     env: {
       ...process.env,
       PORT: String(appPort),
+      DATA_DIR: runtime.dataDir,
+      LOG_DIR: runtime.logDir,
+      NOSTROMO_DISABLE_BACKGROUND_SERVICES: '1',
       EMAIL_UNREAD_ALLOW_REMOTE: '1',
       EMAIL_UNREAD_PROVIDER: 'gmail_atom',
       EMAIL_UNREAD_ACCOUNTS_JSON: JSON.stringify(accounts),
@@ -163,6 +180,7 @@ async function main(){
   } finally {
     child.kill('SIGTERM');
     await new Promise((resolve) => stub.server.close(resolve));
+    await runtime.cleanup();
   }
 }
 

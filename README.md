@@ -65,7 +65,7 @@ Open: `http://127.0.0.1:4287`
 ### Core relay settings
 
 - `HOST` — server bind address (default `127.0.0.1`; use `0.0.0.0` only behind trusted controls)
-- `DATA_DIR` / `LOG_DIR` — runtime storage roots, mainly useful for tests or portable installs
+- `DATA_DIR` / `LOG_DIR` — runtime storage roots. Leave both blank for the private OS app-data location (`%LOCALAPPDATA%\\PA-Nostromo` on Windows); use absolute paths for a portable install.
 - `STATE_API_ALLOW_REMOTE` — keep `0` unless intentionally exposing state API beyond loopback
 - `NOSTROMO_API_TOKEN` — required bearer token for remote state API access when remote state is enabled
 - `REQUEST_BODY_LIMIT_ACTION_BYTES`, `REQUEST_BODY_LIMIT_STATE_BYTES`, `REQUEST_BODY_LIMIT_RSS_BYTES` — request size caps
@@ -75,6 +75,10 @@ Open: `http://127.0.0.1:4287`
 - `ROWAN_RELAY_TIMEOUT_MS` — relay timeout (default `8000`)
 - `ROWAN_SEND_MAX_TEXT_LENGTH` — max accepted message length (default `2000`)
 - `ROWAN_ALLOW_REMOTE` — keep `0` for local-only deployments
+
+### Private runtime storage migration
+
+New installs keep state, backups, logs, caches, and browser-session storage outside the repository. On first start, an existing legacy `./data` or `./logs` directory is copied into the private app-data location and verified; the original folders are not removed. Existing files in the private destination are never overwritten. If the same private file already differs, startup stops so you can choose the authoritative copy (or temporarily set `DATA_DIR` / `LOG_DIR` to the legacy location) rather than silently losing data.
 
 ### Camera snapshot proxy safety
 
@@ -110,7 +114,7 @@ Fallback / optional:
 - `META_GRAPH_CRITICAL_STALE_AFTER_MS` (default `900000`)
 - `META_GRAPH_ALLOW_REMOTE` (default `0`)
 
-The backend polls every minute and persists snapshots to `data/facebook-followers.json` with append-only poll logs in `logs/facebook-followers-poller.log`.
+The backend polls every minute and persists snapshots under `DATA_DIR` with append-only poll logs under `LOG_DIR`.
 
 If Graph credentials are missing/invalid (or Graph fetch fails), the service fetches `FACEBOOK_PAGE_URL` and tries to estimate followers from public HTML/embedded JSON signals. This is best-effort and can drift or fail when Facebook changes markup.
 
@@ -127,7 +131,7 @@ Primary mode:
 - `INSTAGRAM_PROVIDER` (default `meta_suite`; options: `meta_suite`, `public`, `auto`)
 - `INSTAGRAM_POLL_INTERVAL_MS` (default `180000`, min enforced to 60s)
 - `INSTAGRAM_META_SUITE_URL` (default `https://business.facebook.com/latest/insights`)
-- `INSTAGRAM_META_SUITE_STORAGE_PATH` (default `./data/.auth/meta-suite-instagram-storage.json`)
+- `INSTAGRAM_META_SUITE_STORAGE_PATH` (default: private `DATA_DIR/.auth/meta-suite-instagram-storage.json`)
 - `INSTAGRAM_META_SUITE_TIMEOUT_MS` (default `45000`)
 - `INSTAGRAM_META_SUITE_HEADFUL` (default `0`, set to `1` for debug)
 
@@ -141,7 +145,7 @@ Profile + optional baseline:
 One-time setup for authenticated Meta Suite scraping:
 
 ```bash
-node scripts/instagram-meta-suite-login.mjs --storage ./data/.auth/meta-suite-instagram-storage.json --url "https://business.facebook.com/latest/insights"
+node scripts/instagram-meta-suite-login.mjs --storage "%LOCALAPPDATA%\\PA-Nostromo\\data\\.auth\\meta-suite-instagram-storage.json" --url "https://business.facebook.com/latest/insights"
 ```
 
 Then start the server normally. The Instagram pod will poll every 3 minutes by default and keep last-known values if providers fail.
@@ -154,7 +158,7 @@ Then start the server normally. The Instagram pod will poll every 3 minutes by d
 - `TIKTOK_PROFILE_URL` (e.g., `https://www.tiktok.com/@yourhandle`)
 - `TIKTOK_FOLLOWERS_COUNT` (optional baseline for sanity checks only)
 
-The backend polls TikTok every 3 minutes by default, persists snapshots to `data/tiktok-followers.json`, and appends poll events to `logs/tiktok-followers-poller.log`.
+The backend polls TikTok every 3 minutes by default, persists snapshots under `DATA_DIR`, and appends poll events under `LOG_DIR`.
 
 If scrape fails, the service preserves the last known non-zero value and marks the payload stale (`source: last_known_fallback`) rather than replacing with `0`.
 
@@ -170,11 +174,11 @@ If `TIKTOK_PROFILE_HANDLE`/`TIKTOK_PROFILE_URL` is missing, the API returns setu
 - Shared persistence is exposed through:
   - `GET /api/state`
   - `POST /api/state`
-- Disk-backed state lives at `data/state.json`
+- Disk-backed state lives at `DATA_DIR/state.json`
 
 ### 2) Backup + recovery flow
 
-- Every accepted state write snapshots the previous state into `data/backups/`
+- Every accepted state write snapshots the previous state into `DATA_DIR/backups/`
 - List backups: `GET /api/state/backups`
 - Restore backup: `POST /api/state/restore`
 
@@ -191,8 +195,8 @@ If `TIKTOK_PROFILE_HANDLE`/`TIKTOK_PROFILE_URL` is missing, the API returns setu
 
 ## Data & Storage Notes
 
-- Main shared state file: `data/state.json`
-- Automatic state backups: `data/backups/`
+- Main shared state file: `DATA_DIR/state.json`
+- Automatic state backups: `DATA_DIR/backups/`
 - Browser fallback cache: `localStorage`
 - This repository is designed for **local-first usage** and personal trusted environments
 

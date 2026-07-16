@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const appPath = path.join(__dirname, '..', 'app.js');
+const appPath = path.join(__dirname, '..', 'public', 'app.js');
 const src = fs.readFileSync(appPath, 'utf8');
 
 const errors = [];

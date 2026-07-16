@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { fetchWithFailover } = require('../app/core/crypto-failover.js');
+const { fetchWithFailover } = require('../public/app/core/crypto-failover.js');
 
 async function testFallbackAfterPrimaryFailure(){
   const calls = [];

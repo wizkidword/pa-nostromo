@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const appSource = await readFile('app.js', 'utf8');
+const appSource = await readFile('public/app.js', 'utf8');
 
 const managedMatch = appSource.match(/const managed = \[([\s\S]*?)\];/);
 assert.ok(managedMatch, 'syncUtilityPodLifecycle should define its managed pod list');

@@ -5,10 +5,13 @@ const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
 const { execFile } = require('child_process');
+const { pipeline } = require('stream/promises');
 const os = require('os');
 const { fetchGmailImapMessageBody, fetchGmailImapAccountSnapshot, markGmailImapMessagesRead, markGmailImapMessageRead, moveGmailImapMessageToSpam, moveGmailImapMessageToTrash, moveGmailImapMessagesToSpam, moveGmailImapMessagesToTrash } = require('./lib/email-imap.js');
+const { resolveRuntimeStorage, ensurePrivateRuntimeStorage } = require('./lib/runtime-storage.js');
 
 const ROOT = __dirname;
+const PUBLIC_ROOT = path.join(ROOT, 'public');
 const BACKUP_RETENTION = 200;
 const STATE_SCHEMA_VERSION = 2;
 const SNAPSHOT_SCHEMA_VERSION = 1;
@@ -43,8 +46,10 @@ loadEnvFile(path.join(ROOT, '.env.local'), SHELL_ENV_KEYS);
 
 const PORT = Number(process.env.PORT || 4287);
 const HOST = String(process.env.HOST || '127.0.0.1').trim() || '127.0.0.1';
-const DATA_DIR = path.resolve(ROOT, String(process.env.DATA_DIR || 'data').trim() || 'data');
-const LOG_DIR = path.resolve(ROOT, String(process.env.LOG_DIR || 'logs').trim() || 'logs');
+const DISABLE_BACKGROUND_SERVICES = parseBool(process.env.NOSTROMO_DISABLE_BACKGROUND_SERVICES);
+const RUNTIME_STORAGE = resolveRuntimeStorage({ root: ROOT });
+const DATA_DIR = RUNTIME_STORAGE.dataDir;
+const LOG_DIR = RUNTIME_STORAGE.logDir;
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
 const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 
@@ -185,7 +190,7 @@ const FACEBOOK_GROUP_MEMBERS_HISTORY_LIMIT = 1440;
 const FACEBOOK_GROUP_POLL_INTERVAL_MS = Math.max(60_000, parsePositiveInt(process.env.FACEBOOK_GROUP_POLL_INTERVAL_MS, 180_000));
 const FACEBOOK_SESSION_SCRIPT_PATH = path.resolve(ROOT, String(process.env.FACEBOOK_SESSION_SCRIPT_PATH || path.join('scripts', 'facebook-page-session-scraper.mjs')).trim() || path.join('scripts', 'facebook-page-session-scraper.mjs'));
 const FACEBOOK_GROUP_SESSION_SCRIPT_PATH = path.resolve(ROOT, String(process.env.FACEBOOK_GROUP_SESSION_SCRIPT_PATH || path.join('scripts', 'facebook-group-session-scraper.mjs')).trim() || path.join('scripts', 'facebook-group-session-scraper.mjs'));
-const FACEBOOK_SESSION_STORAGE_PATH = path.resolve(ROOT, String(process.env.FACEBOOK_SESSION_STORAGE_PATH || process.env.INSTAGRAM_META_SUITE_STORAGE_PATH || path.join('data', '.auth', 'meta-suite-instagram-storage.json')).trim() || path.join('data', '.auth', 'meta-suite-instagram-storage.json'));
+const FACEBOOK_SESSION_STORAGE_PATH = path.resolve(ROOT, String(process.env.FACEBOOK_SESSION_STORAGE_PATH || process.env.INSTAGRAM_META_SUITE_STORAGE_PATH || path.join(DATA_DIR, '.auth', 'meta-suite-instagram-storage.json')).trim() || path.join(DATA_DIR, '.auth', 'meta-suite-instagram-storage.json'));
 const FACEBOOK_SESSION_TIMEOUT_MS = Math.max(5_000, parsePositiveInt(process.env.FACEBOOK_SESSION_TIMEOUT_MS, parsePositiveInt(process.env.INSTAGRAM_META_SUITE_TIMEOUT_MS, 45_000)));
 const FACEBOOK_SESSION_HEADLESS = !parseBool(process.env.FACEBOOK_SESSION_HEADFUL || process.env.INSTAGRAM_META_SUITE_HEADFUL);
 const FACEBOOK_CONTENT_CACHE_TTL_MS = Math.max(60_000, parsePositiveInt(process.env.FACEBOOK_CONTENT_CACHE_TTL_MS, 10 * 60_000));
@@ -203,7 +208,7 @@ const INSTAGRAM_PROVIDER = String(process.env.INSTAGRAM_PROVIDER || 'auto').trim
 const INSTAGRAM_META_SUITE_SCRIPT_PATH = path.resolve(ROOT, String(process.env.INSTAGRAM_META_SUITE_SCRIPT_PATH || path.join('scripts', 'instagram-meta-suite-scraper.mjs')).trim() || path.join('scripts', 'instagram-meta-suite-scraper.mjs'));
 const INSTAGRAM_PROFILE_SESSION_SCRIPT_PATH = path.resolve(ROOT, String(process.env.INSTAGRAM_PROFILE_SESSION_SCRIPT_PATH || path.join('scripts', 'instagram-profile-session-scraper.mjs')).trim() || path.join('scripts', 'instagram-profile-session-scraper.mjs'));
 const INSTAGRAM_CONTENT_SESSION_SCRIPT_PATH = path.resolve(ROOT, String(process.env.INSTAGRAM_CONTENT_SESSION_SCRIPT_PATH || path.join('scripts', 'instagram-content-session-scraper.mjs')).trim() || path.join('scripts', 'instagram-content-session-scraper.mjs'));
-const INSTAGRAM_META_SUITE_STORAGE_PATH = path.resolve(ROOT, String(process.env.INSTAGRAM_META_SUITE_STORAGE_PATH || path.join('data', '.auth', 'meta-suite-instagram-storage.json')).trim() || path.join('data', '.auth', 'meta-suite-instagram-storage.json'));
+const INSTAGRAM_META_SUITE_STORAGE_PATH = path.resolve(ROOT, String(process.env.INSTAGRAM_META_SUITE_STORAGE_PATH || path.join(DATA_DIR, '.auth', 'meta-suite-instagram-storage.json')).trim() || path.join(DATA_DIR, '.auth', 'meta-suite-instagram-storage.json'));
 const INSTAGRAM_META_SUITE_URL = String(process.env.INSTAGRAM_META_SUITE_URL || 'https://business.facebook.com/latest/insights').trim() || 'https://business.facebook.com/latest/insights';
 const INSTAGRAM_META_SUITE_TIMEOUT_MS = Math.max(5_000, parsePositiveInt(process.env.INSTAGRAM_META_SUITE_TIMEOUT_MS, 45_000));
 const INSTAGRAM_META_SUITE_HEADLESS = !parseBool(process.env.INSTAGRAM_META_SUITE_HEADFUL);
@@ -5611,7 +5616,22 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+let runtimeStorageReadyPromise = null;
+
+async function ensureRuntimeStorageReady() {
+  if (!runtimeStorageReadyPromise) {
+    runtimeStorageReadyPromise = ensurePrivateRuntimeStorage(RUNTIME_STORAGE);
+  }
+  try {
+    return await runtimeStorageReadyPromise;
+  } catch (error) {
+    runtimeStorageReadyPromise = null;
+    throw error;
+  }
+}
+
 async function ensureDataDir() {
+  await ensureRuntimeStorageReady();
   await fsp.mkdir(DATA_DIR, { recursive: true });
   await fsp.mkdir(BACKUPS_DIR, { recursive: true });
 }
@@ -7342,39 +7362,108 @@ async function handleApiRssFetch(req, res) {
   return sendJson(res, 200, { ok: true, items, errors });
 }
 
+function decodeStaticPath(urlPath) {
+  const rawPath = String(urlPath || '/').split(/[?#]/, 1)[0] || '/';
+  let decoded = rawPath;
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    }
+  } catch {
+    return null;
+  }
+
+  const normalized = decoded.normalize('NFKC').replace(/\\/g, '/');
+  if (!normalized.startsWith('/') || normalized.includes('\0')) return null;
+  const segments = normalized.split('/').filter(Boolean);
+  if (segments.some((segment) => (
+    segment === '.'
+    || segment === '..'
+    || segment.startsWith('.')
+    || segment.includes(':')
+    || path.isAbsolute(segment)
+    || path.win32.isAbsolute(segment)
+  ))) return null;
+  return segments;
+}
+
+function isPathInside(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 function safePathFromUrl(urlPath) {
-  const pathname = decodeURIComponent((urlPath || '/').split('?')[0]);
-  const rel = pathname === '/' ? '/index.html' : pathname;
-  const candidate = path.normalize(path.join(ROOT, rel));
-  const relative = path.relative(ROOT, candidate);
-  if (relative === '' || (relative && !relative.startsWith('..') && !path.isAbsolute(relative))) return candidate;
-  return null;
+  const segments = decodeStaticPath(urlPath);
+  if (!segments) return null;
+  const candidate = path.resolve(PUBLIC_ROOT, ...(segments.length ? segments : ['index.html']));
+  return isPathInside(PUBLIC_ROOT, candidate) ? candidate : null;
+}
+
+async function resolveStaticFile(urlPath) {
+  const candidate = safePathFromUrl(urlPath);
+  if (!candidate) return null;
+  try {
+    const [publicRootReal, targetReal] = await Promise.all([
+      fsp.realpath(PUBLIC_ROOT),
+      fsp.realpath(candidate),
+    ]);
+    if (!isPathInside(publicRootReal, targetReal)) return null;
+    const stat = await fsp.stat(targetReal);
+    return stat.isFile() ? { path: targetReal, stat } : null;
+  } catch {
+    return null;
+  }
+}
+
+function staticHeaders(filePath, stat) {
+  const ext = path.extname(filePath).toLowerCase();
+  const isHtml = ext === '.html';
+  const etag = `W/\"${stat.size}-${Math.floor(stat.mtimeMs)}\"`;
+  return {
+    'Content-Type': MIME[ext] || 'application/octet-stream',
+    'Content-Length': stat.size,
+    'Last-Modified': stat.mtime.toUTCString(),
+    ETag: etag,
+    'Cache-Control': isHtml ? 'no-store' : 'public, max-age=300',
+    'X-Content-Type-Options': 'nosniff',
+  };
+}
+
+function staticNotModified(req, headers, stat) {
+  if (String(req.headers['if-none-match'] || '') === headers.ETag) return true;
+  const since = Date.parse(String(req.headers['if-modified-since'] || ''));
+  return Number.isFinite(since) && Math.floor(stat.mtimeMs / 1000) <= Math.floor(since / 1000);
 }
 
 async function handleStatic(req, res) {
-  const target = safePathFromUrl(req.url || '/');
-  if (!target) {
-    res.writeHead(403);
-    return res.end('Forbidden');
+  if (!['GET', 'HEAD'].includes(req.method || 'GET')) {
+    res.writeHead(405, { Allow: 'GET, HEAD', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+    return res.end();
   }
 
-  try {
-    const st = await fsp.stat(target);
-    if (st.isDirectory()) {
-      const idx = path.join(target, 'index.html');
-      const raw = await fsp.readFile(idx);
-      res.writeHead(200, { 'Content-Type': MIME['.html'] });
-      return res.end(raw);
-    }
+  const file = await resolveStaticFile(req.url || '/');
+  if (!file) {
+    res.writeHead(404, { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+    return res.end('Not found');
+  }
 
-    const ext = path.extname(target).toLowerCase();
-    const type = MIME[ext] || 'application/octet-stream';
-    const raw = await fsp.readFile(target);
-    res.writeHead(200, { 'Content-Type': type });
-    res.end(raw);
+  const headers = staticHeaders(file.path, file.stat);
+  if (staticNotModified(req, headers, file.stat)) {
+    res.writeHead(304, headers);
+    return res.end();
+  }
+  if (req.method === 'HEAD') {
+    res.writeHead(200, headers);
+    return res.end();
+  }
+
+  res.writeHead(200, headers);
+  try {
+    await pipeline(fs.createReadStream(file.path), res);
   } catch {
-    res.writeHead(404);
-    res.end('Not found');
+    if (!res.writableEnded) res.destroy();
   }
 }
 
@@ -7409,44 +7498,55 @@ const server = http.createServer(async (req, res) => {
 });
 
 if (require.main === module) {
-  initFacebookFollowersService().catch((err) => {
-    console.error('Facebook followers service init failed:', err?.message || err);
-  });
-  initFacebookGroupMembersService().catch((err) => {
-    console.error('Facebook group members service init failed:', err?.message || err);
-  });
-  initInstagramFollowersService().catch((err) => {
-    console.error('Instagram followers service init failed:', err?.message || err);
-  });
-  initTikTokFollowersService().catch((err) => {
-    console.error('TikTok followers service init failed:', err?.message || err);
-  });
-  initYoutubeSubscribersService().catch((err) => {
-    console.error('YouTube subscribers service init failed:', err?.message || err);
-  });
-  server.listen(PORT, HOST, () => {
-    console.log(`Mission Control running on http://${HOST}:${PORT}`);
-    console.log(`Shared state file: ${STATE_PATH}`);
-    console.log(`State backup dir: ${BACKUPS_DIR} (retain latest ${BACKUP_RETENTION})`);
-    console.log(`State API: enabled (${STATE_API_ALLOW_REMOTE ? 'remote token required' : 'local only'})`);
-    console.log(`Voice-to-Rowan relay: ${ROWAN_RELAY_URL ? 'configured' : 'not configured'} (${ROWAN_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
-    console.log(`Camera snapshot proxy: enabled (${CAMERA_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; allowlist entries: ${CAMERA_PROXY_ALLOWLIST.length})`);
-    console.log(`RSS fetch API: enabled (${RSS_FETCH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; max feeds/request: ${RSS_FETCH_MAX_FEEDS})`);
-    console.log(`Gas price proxy API: enabled (${GAS_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
-    console.log(`Speed test API: enabled (${SPEED_TEST_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; timeout ${SPEED_TEST_TIMEOUT_MS}ms)`);
-    console.log(`Unread email pod API: enabled (${EMAIL_UNREAD_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; provider ${EMAIL_UNREAD_PROVIDER}; accounts ${(() => { try { return getEmailUnreadAccountConfigs().length; } catch { return 0; } })()})`);
-    console.log(`eBay traffic pod API: enabled (${EBAY_TRAFFIC_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; env ${EBAY_TRAFFIC_ENVIRONMENT}; stores ${(() => { try { return getEbayTrafficStoreConfigs().length; } catch { return 0; } })()}; range ${EBAY_TRAFFIC_RANGE_DAYS}d)`);
-    console.log(`Facebook followers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${META_GRAPH_POLL_INTERVAL_MS}ms)`);
-    console.log(`Facebook group members API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${FACEBOOK_GROUP_POLL_INTERVAL_MS}ms; url ${FACEBOOK_GROUP_URL})`);
-    console.log(`Instagram followers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${INSTAGRAM_POLL_INTERVAL_MS}ms; provider ${INSTAGRAM_PROVIDER})`);
-    console.log(`TikTok followers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${TIKTOK_POLL_INTERVAL_MS}ms; provider public_scrape_estimate)`);
-    console.log(`YouTube subscribers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${YOUTUBE_POLL_INTERVAL_MS}ms; provider public_scrape_estimate)`);
+  void (async () => {
+    const migrationResults = await ensureRuntimeStorageReady();
+    for (const result of migrationResults) {
+      if (result.status === 'migrated') console.log(`Private ${result.label} storage migration verified; legacy files were preserved.`);
+    }
+    if (!DISABLE_BACKGROUND_SERVICES) {
+      initFacebookFollowersService().catch((err) => {
+        console.error('Facebook followers service init failed:', err?.message || err);
+      });
+      initFacebookGroupMembersService().catch((err) => {
+        console.error('Facebook group members service init failed:', err?.message || err);
+      });
+      initInstagramFollowersService().catch((err) => {
+        console.error('Instagram followers service init failed:', err?.message || err);
+      });
+      initTikTokFollowersService().catch((err) => {
+        console.error('TikTok followers service init failed:', err?.message || err);
+      });
+      initYoutubeSubscribersService().catch((err) => {
+        console.error('YouTube subscribers service init failed:', err?.message || err);
+      });
+    }
+    server.listen(PORT, HOST, () => {
+      console.log(`Mission Control running on http://${HOST}:${PORT}`);
+      console.log(`Private runtime storage: configured (retain latest ${BACKUP_RETENTION} state backups)`);
+      console.log(`State API: enabled (${STATE_API_ALLOW_REMOTE ? 'remote token required' : 'local only'})`);
+      console.log(`Voice-to-Rowan relay: ${ROWAN_RELAY_URL ? 'configured' : 'not configured'} (${ROWAN_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
+      console.log(`Camera snapshot proxy: enabled (${CAMERA_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; allowlist entries: ${CAMERA_PROXY_ALLOWLIST.length})`);
+      console.log(`RSS fetch API: enabled (${RSS_FETCH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; max feeds/request: ${RSS_FETCH_MAX_FEEDS})`);
+      console.log(`Gas price proxy API: enabled (${GAS_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
+      console.log(`Speed test API: enabled (${SPEED_TEST_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; timeout ${SPEED_TEST_TIMEOUT_MS}ms)`);
+      console.log(`Unread email pod API: enabled (${EMAIL_UNREAD_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; provider ${EMAIL_UNREAD_PROVIDER}; accounts ${(() => { try { return getEmailUnreadAccountConfigs().length; } catch { return 0; } })()})`);
+      console.log(`eBay traffic pod API: enabled (${EBAY_TRAFFIC_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; env ${EBAY_TRAFFIC_ENVIRONMENT}; stores ${(() => { try { return getEbayTrafficStoreConfigs().length; } catch { return 0; } })()}; range ${EBAY_TRAFFIC_RANGE_DAYS}d)`);
+      console.log(`Facebook followers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${META_GRAPH_POLL_INTERVAL_MS}ms)`);
+      console.log(`Facebook group members API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${FACEBOOK_GROUP_POLL_INTERVAL_MS}ms; url ${FACEBOOK_GROUP_URL})`);
+      console.log(`Instagram followers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${INSTAGRAM_POLL_INTERVAL_MS}ms; provider ${INSTAGRAM_PROVIDER})`);
+      console.log(`TikTok followers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${TIKTOK_POLL_INTERVAL_MS}ms; provider public_scrape_estimate)`);
+      console.log(`YouTube subscribers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${YOUTUBE_POLL_INTERVAL_MS}ms; provider public_scrape_estimate)`);
+    });
+  })().catch((err) => {
+    console.error('Private runtime storage setup failed; server did not start:', err?.message || err);
+    process.exitCode = 1;
   });
 }
 
 module.exports = {
   server,
   HOST,
+  PUBLIC_ROOT,
   DATA_DIR,
   LOG_DIR,
   STATE_PATH,
@@ -7454,6 +7554,7 @@ module.exports = {
   parseJsonSafely,
   fetchJsonViaCurl,
   safePathFromUrl,
+  resolveStaticFile,
   readBody,
   isPayloadTooLargeError,
   authorizeLocalOrToken,
