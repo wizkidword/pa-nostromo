@@ -18,6 +18,22 @@ const SHORTCUT_GLOBAL_PROJECT_ID = '__global__';
 const CRYPTO_PROXY_API = '/api/crypto';
 const HOME_DEVICES_PING_API = '/api/home-devices/ping';
 const HOME_DEVICES_WAKE_API = '/api/home-devices/wake';
+const UNREAD_EMAIL_API = '/api/email-unread';
+const EBAY_TRAFFIC_API = '/api/ebay-traffic';
+const EBAY_TRAFFIC_REFRESH_API = '/api/ebay-traffic/refresh';
+const EBAY_TRAFFIC_POLL_INTERVAL_MS = 30 * 60 * 1000;
+const UNREAD_EMAIL_MESSAGE_API = '/api/email-unread/message';
+const UNREAD_EMAIL_MARK_READ_API = '/api/email-unread/read';
+const UNREAD_EMAIL_MARK_READ_BATCH_API = '/api/email-unread/read-batch';
+const UNREAD_EMAIL_SPAM_API = '/api/email-unread/spam';
+const UNREAD_EMAIL_SPAM_BATCH_API = '/api/email-unread/spam-batch';
+const UNREAD_EMAIL_DELETE_API = '/api/email-unread/delete';
+const UNREAD_EMAIL_DELETE_BATCH_API = '/api/email-unread/delete-batch';
+const EBAY_TRAFFIC_ACTIVE_STORE_KEY = 'mission-control-ebay-traffic-active-store-v1';
+const EBAY_TRAFFIC_ACTIVE_INSIGHT_KEY = 'mission-control-ebay-traffic-active-insight-v1';
+const EBAY_TRAFFIC_ACTIVE_LISTINGS_KEY = 'mission-control-ebay-traffic-active-listings-v1';
+const EBAY_TRAFFIC_PROMO_LIFT_WINDOW_KEY = 'mission-control-ebay-traffic-promo-lift-window-v1';
+const UNREAD_EMAIL_ACTIVE_ACCOUNT_KEY = 'mission-control-unread-email-active-account-v1';
 const debugCounters = window.MissionControlModules?.debug || null;
 
 const COLUMNS = [
@@ -29,18 +45,100 @@ const COLUMNS = [
 ];
 const KANBAN_COLUMN_KEYS = new Set(COLUMNS.map(([key]) => key));
 
+const THEME_OPTIONS = [
+  {
+    id: 'dark',
+    label: 'Nostromo Dark',
+    description: 'Low-light command deck',
+    swatches: ['#0b1020', '#111831', '#2563eb'],
+  },
+  {
+    id: 'light',
+    label: 'Day Shift',
+    description: 'Bright operations view',
+    swatches: ['#f3f6fb', '#ffffff', '#2563eb'],
+  },
+  {
+    id: 'system',
+    label: 'System',
+    description: 'Follow Windows/browser',
+    swatches: ['#f8fafc', '#111831', '#2563eb'],
+  },
+  {
+    id: 'ember',
+    label: 'Ember',
+    description: 'Warm alert-room contrast',
+    swatches: ['#15100d', '#241713', '#f97316'],
+  },
+  {
+    id: 'forest',
+    label: 'Forest',
+    description: 'Quiet green console',
+    swatches: ['#08130f', '#10231b', '#22c55e'],
+  },
+  {
+    id: 'terminal',
+    label: 'Terminal',
+    description: 'High-contrast phosphor',
+    swatches: ['#030712', '#07120d', '#84cc16'],
+  },
+  {
+    id: 'aurora',
+    label: 'Aurora',
+    description: 'Teal, rose, and night',
+    swatches: ['#10131f', '#172033', '#14b8a6'],
+  },
+];
+const THEME_OPTION_IDS = new Set(THEME_OPTIONS.map((theme) => theme.id));
+const CONCRETE_THEME_CLASS_NAMES = THEME_OPTIONS
+  .map((theme) => theme.id)
+  .filter((themeId) => themeId !== 'dark' && themeId !== 'system')
+  .map((themeId) => `theme-${themeId}`);
+
+function normalizeThemePreference(value){
+  const themeId = String(value || '').trim().toLowerCase();
+  return THEME_OPTION_IDS.has(themeId) ? themeId : 'dark';
+}
+
+function themeOptionById(themeId){
+  const normalized = normalizeThemePreference(themeId);
+  return THEME_OPTIONS.find((theme) => theme.id === normalized) || THEME_OPTIONS[0];
+}
+
+function resolveThemePreference(themeId){
+  const normalized = normalizeThemePreference(themeId);
+  if (normalized !== 'system') return normalized;
+  const prefersLight = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-color-scheme: light)').matches
+    : false;
+  return prefersLight ? 'light' : 'dark';
+}
+
 const DEFAULT_SETTINGS = {
-  theme: 'dark', // dark | light | system
+  theme: 'dark',
   weatherIntervalMin: 15,
   defaultTaskColumn: 'inbox',
 };
 
+const MERGED_SOCIAL_FOLLOWERS_POD_ID = 'social-followers';
+const LEGACY_SOCIAL_FOLLOWERS_POD_IDS = [
+  'facebook-followers',
+  'instagram-followers',
+  'tiktok-followers',
+  'youtube-subscribers',
+];
+const MERGED_VOICE_POD_ID = 'voice-desk';
+const LEGACY_VOICE_POD_IDS = [
+  'voice-note',
+  'voice-to-rowan',
+];
+
 const DEFAULT_UTILITY_LAYOUT_ROWS = [
   ['shortcuts'],
   ['date-time', 'calendar', 'gas-prices'],
-  ['nba-scores', 'crypto-tracker', 'facebook-followers', 'instagram-followers', 'tiktok-followers', 'youtube-subscribers', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'],
+  ['nba-scores', 'crypto-tracker', MERGED_SOCIAL_FOLLOWERS_POD_ID, 'ebay-traffic', 'speed-test', 'rss-feed', 'unread-email', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'],
   ['camera-feed', 'live-streams'],
-  ['voice-note', 'voice-to-rowan', 'music-player'],
+  [MERGED_VOICE_POD_ID, 'music-player'],
 ];
 
 function createDefaultUtilityLayoutState(){
@@ -54,7 +152,12 @@ function normalizeUtilityLayoutState(layoutInput, knownPodIds = []){
   const defaults = createDefaultUtilityLayoutState();
   const fallbackRows = defaults.utilityRows;
   const fallbackIds = fallbackRows.flat();
-  const allKnown = [...new Set([...fallbackIds, ...knownPodIds.map((v) => String(v || '').trim()).filter(Boolean)])];
+  const allKnown = [...new Set([
+    ...fallbackIds,
+    ...LEGACY_SOCIAL_FOLLOWERS_POD_IDS,
+    ...LEGACY_VOICE_POD_IDS,
+    ...knownPodIds.map((v) => String(v || '').trim()).filter(Boolean),
+  ])];
   const allowed = new Set(allKnown);
   const incomingRows = Array.isArray(layoutInput?.utilityRows) ? layoutInput.utilityRows : fallbackRows;
   const seen = new Set();
@@ -95,6 +198,59 @@ function normalizeUtilityLayoutState(layoutInput, knownPodIds = []){
     rows[gasRowIndex] = rows[gasRowIndex].filter((podId) => podId !== gasPodId);
     rows[dateRowIndex].push(gasPodId);
   }
+
+  const mergedSocialIndex = rows.findIndex((row) => row.includes(MERGED_SOCIAL_FOLLOWERS_POD_ID));
+  let socialInsertRow = mergedSocialIndex;
+  let socialInsertIndex = mergedSocialIndex >= 0 ? rows[mergedSocialIndex].indexOf(MERGED_SOCIAL_FOLLOWERS_POD_ID) : -1;
+  if (socialInsertRow < 0) {
+    rows.some((row, rowIndex) => row.some((podId, podIndex) => {
+      if (!LEGACY_SOCIAL_FOLLOWERS_POD_IDS.includes(podId)) return false;
+      socialInsertRow = rowIndex;
+      socialInsertIndex = podIndex;
+      return true;
+    }));
+  }
+
+  rows.forEach((row, rowIndex) => {
+    rows[rowIndex] = row.filter((podId) => podId !== MERGED_SOCIAL_FOLLOWERS_POD_ID && !LEGACY_SOCIAL_FOLLOWERS_POD_IDS.includes(podId));
+  });
+
+  if (socialInsertRow < 0) {
+    socialInsertRow = fallbackRows.findIndex((row) => row.includes(MERGED_SOCIAL_FOLLOWERS_POD_ID));
+    socialInsertIndex = 0;
+  }
+  if (socialInsertRow < 0) socialInsertRow = Math.max(0, rows.length - 1);
+  while (rows.length <= socialInsertRow) rows.push([]);
+  const socialTargetRow = rows[socialInsertRow];
+  const socialTargetIndex = Number.isInteger(socialInsertIndex) ? Math.max(0, Math.min(socialInsertIndex, socialTargetRow.length)) : socialTargetRow.length;
+  socialTargetRow.splice(socialTargetIndex, 0, MERGED_SOCIAL_FOLLOWERS_POD_ID);
+
+  const mergedVoiceIndex = rows.findIndex((row) => row.includes(MERGED_VOICE_POD_ID));
+  let voiceInsertRow = mergedVoiceIndex;
+  let voiceInsertIndex = mergedVoiceIndex >= 0 ? rows[mergedVoiceIndex].indexOf(MERGED_VOICE_POD_ID) : -1;
+  if (voiceInsertRow < 0) {
+    rows.some((row, rowIndex) => row.some((podId, podIndex) => {
+      if (!LEGACY_VOICE_POD_IDS.includes(podId)) return false;
+      voiceInsertRow = rowIndex;
+      voiceInsertIndex = podIndex;
+      return true;
+    }));
+  }
+
+  rows.forEach((row, rowIndex) => {
+    rows[rowIndex] = row.filter((podId) => podId !== MERGED_VOICE_POD_ID && !LEGACY_VOICE_POD_IDS.includes(podId));
+  });
+
+  if (voiceInsertRow < 0) {
+    voiceInsertRow = fallbackRows.findIndex((row) => row.includes(MERGED_VOICE_POD_ID));
+    voiceInsertIndex = 0;
+  }
+  if (voiceInsertRow < 0) voiceInsertRow = Math.max(0, rows.length - 1);
+  while (rows.length <= voiceInsertRow) rows.push([]);
+  const voiceTargetRow = rows[voiceInsertRow];
+  const voiceTargetIndex = Number.isInteger(voiceInsertIndex) ? Math.max(0, Math.min(voiceInsertIndex, voiceTargetRow.length)) : voiceTargetRow.length;
+  voiceTargetRow.splice(voiceTargetIndex, 0, MERGED_VOICE_POD_ID);
+
   for (let i = rows.length - 1; i >= 0; i -= 1) {
     if (!rows[i].length) rows.splice(i, 1);
   }
@@ -105,7 +261,15 @@ function normalizeUtilityLayoutState(layoutInput, knownPodIds = []){
   const visibility = {};
   const rowIds = rows.flat();
   for (const podId of rowIds) {
-    visibility[podId] = visibilityInput[podId] !== false;
+    if (podId === MERGED_SOCIAL_FOLLOWERS_POD_ID) {
+      const legacyVisible = LEGACY_SOCIAL_FOLLOWERS_POD_IDS.some((legacyId) => visibilityInput[legacyId] !== false);
+      visibility[podId] = visibilityInput[podId] !== false && legacyVisible;
+    } else if (podId === MERGED_VOICE_POD_ID) {
+      const legacyVisible = LEGACY_VOICE_POD_IDS.some((legacyId) => visibilityInput[legacyId] !== false);
+      visibility[podId] = visibilityInput[podId] !== false && legacyVisible;
+    } else {
+      visibility[podId] = visibilityInput[podId] !== false;
+    }
   }
 
   return { utilityRows: rows, visibility };
@@ -241,6 +405,70 @@ function normalizeHomeDeviceControlState(input){
   };
 }
 
+const NBA_VIEW_MODES = new Set(['my-teams', 'live', 'all', 'recap']);
+const NBA_TEAM_OPTIONS = [
+  { abbr: 'ATL', name: 'Atlanta Hawks' },
+  { abbr: 'BOS', name: 'Boston Celtics' },
+  { abbr: 'BKN', name: 'Brooklyn Nets' },
+  { abbr: 'CHA', name: 'Charlotte Hornets' },
+  { abbr: 'CHI', name: 'Chicago Bulls' },
+  { abbr: 'CLE', name: 'Cleveland Cavaliers' },
+  { abbr: 'DAL', name: 'Dallas Mavericks' },
+  { abbr: 'DEN', name: 'Denver Nuggets' },
+  { abbr: 'DET', name: 'Detroit Pistons' },
+  { abbr: 'GS', name: 'Golden State Warriors' },
+  { abbr: 'HOU', name: 'Houston Rockets' },
+  { abbr: 'IND', name: 'Indiana Pacers' },
+  { abbr: 'LAC', name: 'LA Clippers' },
+  { abbr: 'LAL', name: 'Los Angeles Lakers' },
+  { abbr: 'MEM', name: 'Memphis Grizzlies' },
+  { abbr: 'MIA', name: 'Miami Heat' },
+  { abbr: 'MIL', name: 'Milwaukee Bucks' },
+  { abbr: 'MIN', name: 'Minnesota Timberwolves' },
+  { abbr: 'NO', name: 'New Orleans Pelicans' },
+  { abbr: 'NY', name: 'New York Knicks' },
+  { abbr: 'OKC', name: 'Oklahoma City Thunder' },
+  { abbr: 'ORL', name: 'Orlando Magic' },
+  { abbr: 'PHI', name: 'Philadelphia 76ers' },
+  { abbr: 'PHX', name: 'Phoenix Suns' },
+  { abbr: 'POR', name: 'Portland Trail Blazers' },
+  { abbr: 'SAC', name: 'Sacramento Kings' },
+  { abbr: 'SA', name: 'San Antonio Spurs' },
+  { abbr: 'TOR', name: 'Toronto Raptors' },
+  { abbr: 'UTAH', name: 'Utah Jazz' },
+  { abbr: 'WSH', name: 'Washington Wizards' },
+];
+
+function normalizeNbaState(input){
+  const favoriteTeams = Array.isArray(input?.favoriteTeams)
+    ? [...new Set(input.favoriteTeams.map((team) => String(team || '').trim().toUpperCase()).filter(Boolean))]
+        .filter((team) => NBA_TEAM_OPTIONS.some((option) => option.abbr === team))
+        .slice(0, 6)
+    : [];
+  const requestedView = String(input?.viewMode || '').trim();
+  return {
+    viewMode: NBA_VIEW_MODES.has(requestedView) ? requestedView : 'live',
+    favoriteTeams,
+  };
+}
+
+function normalizeUnreadEmailBlockedSenders(input){
+  const source = (input && typeof input === 'object') ? input : {};
+  const normalized = {};
+  for (const [accountIdRaw, senders] of Object.entries(source)) {
+    const accountId = String(accountIdRaw || '').trim();
+    if (!accountId) continue;
+    const list = Array.isArray(senders) ? senders : [];
+    const emails = [...new Set(
+      list
+        .map((value) => String(value || '').trim().toLowerCase())
+        .filter((value) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value))
+    )].slice(0, 200);
+    if (emails.length) normalized[accountId] = emails;
+  }
+  return normalized;
+}
+
 const REQUIRED_PROJECTS = [
   { name: 'Blast From The Ads', summary: 'Vintage ad content pipeline to social + WordPress', status: 'active', appLink: '', repoLink: '' },
   { name: 'Radio Map (Leaflet)', summary: 'Interactive radio station map web app', status: 'active', appLink: 'http://localhost:3399', repoLink: '' },
@@ -258,6 +486,8 @@ const seed = {
   ideas: [],
   reminders: [],
   settings: { ...DEFAULT_SETTINGS },
+  nba: normalizeNbaState(),
+  unreadEmailBlockedSenders: {},
   cryptoWatchlist: ['bitcoin', 'ethereum'],
   cryptoHoldings: {},
   musicPlayer: {
@@ -327,6 +557,21 @@ const seed = {
     source: '',
     staleLevel: 'fresh',
     ageMs: null,
+    lastError: '',
+    loading: false,
+  },
+  facebookGroupMembers: {
+    membersCount: null,
+    delta: null,
+    rollingDelta1h: null,
+    rollingDelta24h: null,
+    groupName: 'Blast From the Ads Community',
+    groupUrl: 'https://www.facebook.com/groups/blastfromtheads',
+    fetchedAt: '',
+    source: '',
+    staleLevel: 'fresh',
+    ageMs: null,
+    setupRequired: false,
     lastError: '',
     loading: false,
   },
@@ -449,6 +694,8 @@ const pollingFailureState = {
   'instagram-followers': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'tiktok-followers': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'youtube-subscribers': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
+  'ebay-traffic': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
+  'unread-email': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'system-resource-monitor': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'speed-test': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
 };
@@ -459,6 +706,54 @@ let systemMonitorLastPayload = null;
 let systemMonitorLastUpdatedAt = '';
 let systemMonitorLastError = '';
 let systemMonitorInFlight = false;
+let unreadEmailLastPayload = null;
+let unreadEmailLastUpdatedAt = '';
+let unreadEmailLastError = '';
+let unreadEmailInFlight = false;
+let unreadEmailMarkReadInFlight = '';
+let unreadEmailSpamInFlight = '';
+let unreadEmailDeleteInFlight = '';
+let unreadEmailSelectedKeys = new Set();
+let unreadEmailExpandedKeys = new Set();
+let unreadEmailExpandedBodies = new Map();
+let unreadEmailExpandedErrors = new Map();
+let unreadEmailExpandedLoadingKeys = new Set();
+let unreadEmailShowRecentInbox = false;
+let unreadEmailBlockedSenderQueries = {};
+let ebayTrafficLastPayload = null;
+let ebayTrafficLastUpdatedAt = '';
+let ebayTrafficLastError = '';
+let ebayTrafficInFlight = false;
+let ebayTrafficActiveStoreId = (() => {
+  try { return String(localStorage.getItem(EBAY_TRAFFIC_ACTIVE_STORE_KEY) || '').trim(); } catch { return ''; }
+})();
+let ebayTrafficActiveInsightView = (() => {
+  try {
+    const value = String(localStorage.getItem(EBAY_TRAFFIC_ACTIVE_INSIGHT_KEY) || '').trim();
+    return value === 'trend' || value === 'promo' ? value : 'sources';
+  } catch {
+    return 'sources';
+  }
+})();
+let ebayTrafficActiveListingsView = (() => {
+  try {
+    const value = String(localStorage.getItem(EBAY_TRAFFIC_ACTIVE_LISTINGS_KEY) || '').trim();
+    return value === 'watchers' ? 'watchers' : 'traffic';
+  } catch {
+    return 'traffic';
+  }
+})();
+let ebayTrafficPromoLiftWindow = (() => {
+  try {
+    const value = String(localStorage.getItem(EBAY_TRAFFIC_PROMO_LIFT_WINDOW_KEY) || '').trim();
+    return value === 'avg7' ? 'avg7' : 'day';
+  } catch {
+    return 'day';
+  }
+})();
+let unreadEmailActiveAccountId = (() => {
+  try { return String(localStorage.getItem(UNREAD_EMAIL_ACTIVE_ACCOUNT_KEY) || '').trim(); } catch { return ''; }
+})();
 let changeLogVisible = false;
 let changeLogLimit = 10;
 let pendingChanges = [];
@@ -607,6 +902,11 @@ let undoState = {
 };
 let safetyBackupsCache = [];
 let lastSafetyBackupsRefreshAt = 0;
+let nbaScoreboardCache = {
+  dateKey: '',
+  fetchedAt: '',
+  data: null,
+};
 
 function id(){ return Math.random().toString(36).slice(2,10); }
 function now(){ return new Date().toISOString(); }
@@ -620,6 +920,17 @@ function normalizeTaskColumn(column){
   const key = String(column || '').trim();
   return KANBAN_COLUMN_KEYS.has(key) ? key : 'inbox';
 }
+
+function normalizeSettingsState(input){
+  const settings = { ...DEFAULT_SETTINGS, ...(input || {}) };
+  settings.theme = normalizeThemePreference(settings.theme);
+  settings.defaultTaskColumn = normalizeTaskColumn(settings.defaultTaskColumn);
+  settings.shortcutsFilterProjectIds = Array.isArray(settings.shortcutsFilterProjectIds)
+    ? settings.shortcutsFilterProjectIds
+    : [];
+  return settings;
+}
+
 function migrateIdeasTasksToNotes(stateObj){
   if (!Array.isArray(stateObj?.tasks) || !Array.isArray(stateObj?.notes)) return 0;
   const ideasTasks = stateObj.tasks.filter((task) => task?.column === 'ideas');
@@ -674,11 +985,7 @@ function load(){
   state.notes = state.notes.map((n)=>({ pinned: !!n.pinned, ...n }));
   state.ideas = Array.isArray(state.ideas) ? state.ideas : [];
   state.reminders = Array.isArray(state.reminders) ? state.reminders : [];
-  state.settings = { ...DEFAULT_SETTINGS, ...(state.settings || {}) };
-  state.settings.defaultTaskColumn = normalizeTaskColumn(state.settings.defaultTaskColumn);
-  state.settings.shortcutsFilterProjectIds = Array.isArray(state.settings.shortcutsFilterProjectIds)
-    ? state.settings.shortcutsFilterProjectIds
-    : [];
+  state.settings = normalizeSettingsState(state.settings);
   const migratedIdeasTaskCount = migrateIdeasTasksToNotes(state);
   if (migratedIdeasTaskCount > 0) {
     ensureChangelogPatch(state, `Cleanup: migrated ${migratedIdeasTaskCount} idea task${migratedIdeasTaskCount === 1 ? '' : 's'} into Ideas notes and removed Kanban ideas column usage.`);
@@ -689,7 +996,6 @@ function load(){
   }));
   state.layout = normalizeUtilityLayoutState(state.layout);
   state.cryptoWatchlist = Array.isArray(state.cryptoWatchlist) ? state.cryptoWatchlist : ['bitcoin', 'ethereum'];
-
   // Migration: repair legacy/ambiguous crypto watchlist ids from older resolver behavior.
   const cryptoIdAliases = {
     btc: 'bitcoin',
@@ -718,7 +1024,6 @@ function load(){
       avgBuyPrice: Number.isFinite(avgBuyPrice) && avgBuyPrice >= 0 ? avgBuyPrice : 0,
     };
   }
-
   state.musicPlayer = {
     sourceType: 'stream',
     mode: 'stream',
@@ -864,6 +1169,8 @@ function load(){
   state.gasPrices = normalizeGasPricesState(state.gasPrices); state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
   state.systemMonitor = normalizeSystemMonitorState(state.systemMonitor);
   state.speedTest = normalizeSpeedTestState(state.speedTest); state.speedTest.running = false; state.homeDeviceControl = normalizeHomeDeviceControlState(state.homeDeviceControl);
+  state.nba = normalizeNbaState(state.nba);
+  state.unreadEmailBlockedSenders = normalizeUnreadEmailBlockedSenders(state.unreadEmailBlockedSenders);
   state.changelog = Array.isArray(state.changelog) ? state.changelog : [];
 
   ensureChangelogPatch(state, 'Patch: Crypto Tracker now supports portfolio holdings (qty + avg buy) with unrealized P/L summary.');
@@ -1329,12 +1636,26 @@ function projectDisplayName(projectId){
 }
 
 function applyTheme(){
-  const pref = state.settings.theme;
-  let theme = pref;
-  if (pref === 'system') {
-    theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  const pref = normalizeThemePreference(state.settings.theme);
+  if (state.settings.theme !== pref) state.settings.theme = pref;
+  const resolvedTheme = resolveThemePreference(pref);
+  document.body.classList.remove(...CONCRETE_THEME_CLASS_NAMES);
+  if (resolvedTheme !== 'dark') document.body.classList.add(`theme-${resolvedTheme}`);
+  document.body.dataset.themePreference = pref;
+  document.body.dataset.themeResolved = resolvedTheme;
+}
+
+function setThemePreference(themeId){
+  const nextTheme = normalizeThemePreference(themeId);
+  if (state.settings.theme === nextTheme) {
+    applyTheme();
+    renderSettings();
+    return;
   }
-  document.body.classList.toggle('theme-light', theme === 'light');
+  state.settings.theme = nextTheme;
+  applyTheme();
+  logChange(`Theme changed to ${themeOptionById(nextTheme).label}`);
+  commitState('theme_changed');
 }
 
 function setupWeatherTimer(){
@@ -1504,9 +1825,19 @@ function renderChangeLog(){
   updatePatchNotesOverflowAffordance();
 }
 
-window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
-  if (state.settings.theme === 'system') applyTheme();
-});
+const systemThemeQuery = typeof window.matchMedia === 'function'
+  ? window.matchMedia('(prefers-color-scheme: light)')
+  : null;
+const handleSystemThemeChange = () => {
+  if (normalizeThemePreference(state.settings.theme) !== 'system') return;
+  applyTheme();
+  renderThemeChoices();
+};
+if (systemThemeQuery?.addEventListener) {
+  systemThemeQuery.addEventListener('change', handleSystemThemeChange);
+} else if (systemThemeQuery?.addListener) {
+  systemThemeQuery.addListener(handleSystemThemeChange);
+}
 
 function formatRemaining(ms){
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -1576,13 +1907,16 @@ function playAlarmTone(){
 function updateAlarmStatus(){
   const el = document.getElementById('alarmStatus');
   if (!el) return;
+  el.classList.remove('is-idle', 'is-active', 'is-done');
   if (!alarmEndTs) {
     el.textContent = 'No active timer';
+    el.classList.add('is-idle');
     return;
   }
   const remaining = alarmEndTs - Date.now();
   if (remaining <= 0) {
     el.textContent = '⏰ Timer done! (repeating every 10s until canceled)';
+    el.classList.add('is-done');
     alarmEndTs = null;
     if (alarmTimer) { clearInterval(alarmTimer); alarmTimer = null; }
     playAlarmTone();
@@ -1591,6 +1925,7 @@ function updateAlarmStatus(){
     return;
   }
   el.textContent = `Timer running: ${formatRemaining(remaining)} remaining`;
+  el.classList.add('is-active');
 }
 
 function startAlarm(minutes){
@@ -1613,9 +1948,45 @@ function renderDateTime(){
   const el = document.getElementById('dateTimeWidget');
   if (!el) return;
   const nowDt = new Date();
+  const hour = nowDt.getHours();
+  const greeting = hour < 5 ? 'Late night' : hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : hour < 21 ? 'Good evening' : 'Night shift';
+  const moodClass = hour < 5 ? 'is-midnight' : hour < 12 ? 'is-morning' : hour < 17 ? 'is-afternoon' : hour < 21 ? 'is-evening' : 'is-night';
+  const timeParts = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  }).formatToParts(nowDt);
+  const timePart = (type) => timeParts.find((part) => part.type === type)?.value || '';
+  const hourMinute = `${timePart('hour')}:${timePart('minute')}`;
+  const seconds = timePart('second');
+  const meridiem = timePart('dayPeriod');
+  const weekdayLabel = nowDt.toLocaleDateString(undefined, { weekday: 'long' });
+  const fullDateLabel = nowDt.toLocaleDateString(undefined, {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  const timeZoneLabel = new Intl.DateTimeFormat('en-US', {
+    timeZone: LOCAL_TZ,
+    timeZoneName: 'short',
+  }).formatToParts(nowDt).find((part) => part.type === 'timeZoneName')?.value || 'Local';
   el.innerHTML = `
-    <div style="font-size:28px;font-weight:700;color:var(--text)">${nowDt.toLocaleTimeString()}</div>
-    <div style="margin-top:4px">${nowDt.toLocaleDateString(undefined,{weekday:'long', year:'numeric', month:'long', day:'numeric'})}</div>
+    <div class="date-time-hero ${moodClass}">
+      <div class="date-time-kicker-row">
+        <span class="date-time-kicker">${greeting}</span>
+        <span class="date-time-chip">${timeZoneLabel}</span>
+      </div>
+      <div class="date-time-clock">
+        <span class="date-time-hour-minute">${hourMinute}</span>
+        <span class="date-time-seconds">:${seconds}</span>
+        <span class="date-time-ampm">${meridiem}</span>
+      </div>
+      <div class="date-time-date-row">
+        <span class="date-time-weekday">${weekdayLabel}</span>
+        <span class="date-time-date">${fullDateLabel}</span>
+      </div>
+    </div>
   `;
   updateAlarmStatus();
 }
@@ -1996,6 +2367,8 @@ function renderCalendar(){
 
   const reminderDates = new Set(state.reminders.map((r)=>r.date));
   const diaryDates = diaryIndexState.datesWithEntries;
+  const reminderDayCount = reminderDates.size;
+  const diaryDayCount = diaryDates.size;
   const heads = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<div class="cal-cell cal-head">${d}</div>`).join('');
   let cells = '';
   for (let i=0;i<start;i++) cells += '<div class="cal-cell" style="opacity:.25">&nbsp;</div>';
@@ -2007,7 +2380,21 @@ function renderCalendar(){
     const hasDiary = diaryDates.has(key);
     cells += `<div class="cal-cell ${isToday?'cal-today':''} ${isSel?'selected':''} ${has?'has-reminder':''} ${hasDiary?'has-diary':''}" data-date="${key}">${d}</div>`;
   }
-  el.innerHTML = `<div class="note-meta">${nowDt.toLocaleDateString(undefined,{month:'long',year:'numeric'})}</div><div class="calendar-grid">${heads}${cells}</div>`;
+  el.innerHTML = `
+    <div class="calendar-v2-shell">
+      <div class="calendar-v2-head">
+        <div>
+          <div class="calendar-month-label">${nowDt.toLocaleDateString(undefined,{month:'long',year:'numeric'})}</div>
+          <div class="calendar-month-subtitle">Pick a day to manage reminders and spot journal activity.</div>
+        </div>
+        <div class="calendar-month-stats">
+          <span class="calendar-stat-pill">${reminderDayCount} reminder ${reminderDayCount === 1 ? 'day' : 'days'}</span>
+          <span class="calendar-stat-pill">${diaryDayCount} journal ${diaryDayCount === 1 ? 'day' : 'days'}</span>
+        </div>
+      </div>
+      <div class="calendar-grid">${heads}${cells}</div>
+    </div>
+  `;
 
   el.querySelectorAll('[data-date]').forEach((cell)=>{
     cell.addEventListener('click', ()=>{
@@ -2026,19 +2413,62 @@ function renderCalendarRemindersPanel(){
   const list = document.getElementById('calendarDayReminders');
   if (!label || !list) return;
   if (!selectedCalendarDate) {
-    label.textContent = 'Select a date';
-    list.innerHTML = '<div class="note-meta">No reminders.</div>';
+    label.innerHTML = `
+      <div class="calendar-agenda-title">Select a date</div>
+      <div class="calendar-agenda-subtitle">Choose any day above to see reminders and journal activity.</div>
+    `;
+    list.innerHTML = '<div class="calendar-empty-state">No reminders yet.</div>';
     return;
   }
 
-  label.textContent = `Selected: ${selectedCalendarDate}`;
+  const selectedDt = new Date(`${selectedCalendarDate}T12:00:00`);
+  const todayKey = dateKey(new Date());
+  const tomorrowDt = new Date();
+  tomorrowDt.setDate(tomorrowDt.getDate() + 1);
+  const tomorrowKey = dateKey(tomorrowDt);
   const items = state.reminders.filter((r)=>r.date===selectedCalendarDate).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
+  const hasDiary = diaryIndexState.datesWithEntries.has(selectedCalendarDate);
+  const dayLabel = selectedDt.toLocaleDateString(undefined, { weekday:'long', month:'long', day:'numeric' });
+  const yearLabel = selectedDt.toLocaleDateString(undefined, { year:'numeric' });
+  const relativeLabel = selectedCalendarDate === todayKey
+    ? 'Today'
+    : selectedCalendarDate === tomorrowKey
+      ? 'Tomorrow'
+      : selectedDt < new Date(`${todayKey}T00:00:00`)
+        ? 'Past date'
+        : 'Upcoming';
+  label.innerHTML = `
+    <div class="calendar-agenda-head">
+      <div>
+        <div class="calendar-agenda-kicker">${relativeLabel}</div>
+        <div class="calendar-agenda-title">${dayLabel}</div>
+        <div class="calendar-agenda-subtitle">${yearLabel}</div>
+      </div>
+      <div class="calendar-agenda-meta">
+        <span class="calendar-agenda-pill">${items.length} ${items.length === 1 ? 'reminder' : 'reminders'}</span>
+        ${hasDiary ? '<span class="calendar-agenda-pill">Journal entry</span>' : ''}
+      </div>
+    </div>
+  `;
   if (!items.length) {
-    list.innerHTML = '<div class="note-meta">No reminders for this date.</div>';
+    list.innerHTML = `
+      <div class="calendar-empty-state">
+        <strong>${hasDiary ? 'Quiet schedule, but there is journal activity.' : 'Nothing scheduled yet.'}</strong>
+        <span>${hasDiary ? 'You can still use the quick add form above to layer reminders onto this day.' : 'Use the quick add form above to drop a reminder onto this date.'}</span>
+      </div>
+    `;
     return;
   }
 
-  list.innerHTML = items.map((r)=>`<div class="change-log-item"><strong>${r.time || 'Anytime'}</strong> — ${escapeHtml(r.text)} <button class="btn note-delete" data-rem-del="${r.id}" style="padding:4px 8px;margin-left:8px">Delete</button></div>`).join('');
+  list.innerHTML = items.map((r)=>`
+    <div class="calendar-reminder-card">
+      <div class="calendar-reminder-copy">
+        <div class="calendar-reminder-time">${r.time || 'Anytime'}</div>
+        <div class="calendar-reminder-text">${escapeHtml(r.text)}</div>
+      </div>
+      <button class="btn note-delete calendar-reminder-delete" data-rem-del="${r.id}" type="button">Delete</button>
+    </div>
+  `).join('');
   list.querySelectorAll('[data-rem-del]').forEach((b)=>{
     b.addEventListener('click', ()=>{
       deleteWithUndo({
@@ -2063,6 +2493,25 @@ function renderTodayReminders(){
   el.innerHTML = items.map((r)=>`<div class="change-log-item"><strong>${r.time || 'Anytime'}</strong> — ${escapeHtml(r.text)}</div>`).join('');
 }
 
+function renderThemeChoices(){
+  const wrap = document.getElementById('themeChoiceGrid');
+  if (!wrap) return;
+  const activeTheme = normalizeThemePreference(state.settings.theme);
+  wrap.innerHTML = THEME_OPTIONS.map((theme) => {
+    const active = theme.id === activeTheme;
+    const swatches = theme.swatches
+      .map((color) => `<span class="theme-choice-swatch" style="background:${escapeHtml(color)}"></span>`)
+      .join('');
+    return `<button type="button" class="theme-choice${active ? ' is-active' : ''}" data-theme-choice="${escapeHtml(theme.id)}" aria-pressed="${active ? 'true' : 'false'}">
+      <span class="theme-choice-swatches" aria-hidden="true">${swatches}</span>
+      <span class="theme-choice-copy">
+        <strong>${escapeHtml(theme.label)}</strong>
+        <span>${escapeHtml(theme.description)}</span>
+      </span>
+    </button>`;
+  }).join('');
+}
+
 function renderSettings(){
   const theme = document.getElementById('settingTheme');
   const weather = document.getElementById('settingWeatherInterval');
@@ -2071,6 +2520,7 @@ function renderSettings(){
   const rssInterval = document.getElementById('settingRssInterval');
   renderChangeLog();
   if (theme) theme.value = state.settings.theme;
+  renderThemeChoices();
   if (weather) weather.value = String(state.settings.weatherIntervalMin);
   if (col) col.value = state.settings.defaultTaskColumn;
   if (fs) fs.checked = !!document.fullscreenElement;
@@ -2156,7 +2606,7 @@ async function renderWeather(options = {}){
       const h = highs[i] != null ? Math.round(highs[i]) : '--';
       const l = lows[i] != null ? Math.round(lows[i]) : '--';
       return `
-        <div class="forecast-item">
+        <div class="forecast-item date-forecast-item">
           <div class="forecast-day">${day}</div>
           <div class="forecast-icon">${iconForCode(code)}</div>
           <div class="forecast-cond">${c}</div>
@@ -2165,13 +2615,36 @@ async function renderWeather(options = {}){
       `;
     }).join('');
 
+    const locationLabel = `${place['place name']}, ${place['state abbreviation']}`;
     el.innerHTML = `
-      <div style="font-size:22px;font-weight:700;color:var(--text)">${Math.round(current.temperature_2m ?? 0)}°F</div>
-      <div>${desc} · ${place['place name']}, ${place['state abbreviation']}</div>
-      <div class="note-meta">Feels like ${Math.round(current.apparent_temperature ?? 0)}°F · Humidity ${current.relative_humidity_2m ?? '--'}%</div>
-      <div class="note-meta">Today: H ${hi != null ? Math.round(hi) : '--'}°F / L ${lo != null ? Math.round(lo) : '--'}°F</div>
-      <div style="margin-top:8px"><strong>3-Day Forecast</strong></div>
-      <div class="forecast-row">${forecast}</div>
+      <div class="date-weather-shell">
+        <div class="date-weather-current">
+          <div class="date-weather-temp">${Math.round(current.temperature_2m ?? 0)}°</div>
+          <div class="date-weather-summary">
+            <div class="date-weather-condition">${desc}</div>
+            <div class="date-weather-location">${locationLabel}</div>
+          </div>
+        </div>
+        <div class="date-weather-facts">
+          <div class="date-weather-fact">
+            <span>Feels like</span>
+            <strong>${Math.round(current.apparent_temperature ?? 0)}°F</strong>
+          </div>
+          <div class="date-weather-fact">
+            <span>Humidity</span>
+            <strong>${current.relative_humidity_2m ?? '--'}%</strong>
+          </div>
+          <div class="date-weather-fact">
+            <span>Today</span>
+            <strong>H ${hi != null ? Math.round(hi) : '--'}° / L ${lo != null ? Math.round(lo) : '--'}°</strong>
+          </div>
+        </div>
+        <div class="date-weather-forecast-head">
+          <strong>3-Day Forecast</strong>
+          <span>Quick look ahead</span>
+        </div>
+        <div class="forecast-row date-weather-forecast">${forecast}</div>
+      </div>
     `;
     clearPollingBackoff('weather');
     if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()}`;
@@ -2692,6 +3165,258 @@ function estDateYmdCompact(){
   return `${get('year')}${get('month')}${get('day')}`;
 }
 
+function normalizeNbaCompetitor(competitor){
+  const team = competitor?.team || {};
+  const overallRecord = Array.isArray(competitor?.records)
+    ? competitor.records.find((record) => /overall|total/i.test(String(record?.name || record?.abbreviation || '')))
+    : null;
+  const topPointsLeader = Array.isArray(competitor?.leaders)
+    ? competitor.leaders.find((leader) => String(leader?.name || '').toLowerCase().includes('point'))
+    : null;
+  const leaderEntry = topPointsLeader?.leaders?.[0] || null;
+  const leaderText = leaderEntry
+    ? `${leaderEntry.athlete?.shortName || leaderEntry.athlete?.displayName || 'Leader'} · ${leaderEntry.displayValue || ''}`.trim()
+    : '';
+  return {
+    id: String(team.id || competitor?.id || ''),
+    abbr: String(team.abbreviation || team.shortDisplayName || 'TEAM').trim().toUpperCase(),
+    name: String(team.shortDisplayName || team.displayName || team.name || 'Team').trim(),
+    displayName: String(team.displayName || team.shortDisplayName || 'Team').trim(),
+    score: Number.isFinite(Number(competitor?.score)) ? Number(competitor.score) : null,
+    logo: String(team.logo || '').trim(),
+    record: String(overallRecord?.summary || '').trim(),
+    winner: competitor?.winner === true,
+    leaderText,
+    homeAway: String(competitor?.homeAway || '').trim(),
+  };
+}
+
+function getNbaBroadcastLabel(competition){
+  const geoBroadcasts = Array.isArray(competition?.geoBroadcasts) ? competition.geoBroadcasts : [];
+  const national = geoBroadcasts.find((entry) => String(entry?.market?.type || '').toLowerCase() === 'national');
+  if (national?.media?.shortName) return String(national.media.shortName).trim();
+  const first = geoBroadcasts.find((entry) => entry?.media?.shortName);
+  if (first?.media?.shortName) return String(first.media.shortName).trim();
+  const broadcasts = Array.isArray(competition?.broadcasts) ? competition.broadcasts : [];
+  const broadcast = broadcasts.find((entry) => Array.isArray(entry?.names) && entry.names.length);
+  return broadcast?.names?.[0] ? String(broadcast.names[0]).trim() : '';
+}
+
+function parseNbaWinsFromRecord(recordText){
+  const match = String(recordText || '').trim().match(/^(\d+)-(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+function createNbaTag(label, tone = 'neutral'){
+  return { label: String(label || '').trim(), tone: String(tone || 'neutral').trim() || 'neutral' };
+}
+
+function normalizeNbaEvent(event, favoriteTeams = new Set()){
+  const competition = event?.competitions?.[0] || {};
+  const competitors = Array.isArray(competition?.competitors) ? competition.competitors : [];
+  const home = normalizeNbaCompetitor(competitors.find((team) => team?.homeAway === 'home'));
+  const away = normalizeNbaCompetitor(competitors.find((team) => team?.homeAway === 'away'));
+  const statusType = competition?.status?.type || event?.status?.type || {};
+  const stateKey = String(statusType?.state || '').toLowerCase();
+  const isLive = stateKey === 'in';
+  const isFinal = statusType?.completed === true;
+  const statusBucket = isLive ? 'live' : (isFinal ? 'final' : 'upcoming');
+  const scoreDiff = home.score != null && away.score != null ? Math.abs(home.score - away.score) : null;
+  const favorite = favoriteTeams.has(home.abbr) || favoriteTeams.has(away.abbr);
+  const headline = String(competition?.headlines?.[0]?.shortLinkText || competition?.headlines?.[0]?.description || '').trim();
+  const statusText = String(statusType?.shortDetail || statusType?.detail || statusType?.description || 'Scheduled').trim();
+  const period = Number(competition?.status?.period || event?.status?.period || 0);
+  const startDate = String(competition?.startDate || event?.date || '');
+  const startMs = startDate ? Date.parse(startDate) : NaN;
+  const minutesUntilTip = Number.isFinite(startMs) ? Math.round((startMs - Date.now()) / 60000) : null;
+  const links = Array.isArray(event?.links) ? event.links : [];
+  const getLink = (pattern) => links.find((link) => pattern.test(String(link?.text || '')) || (Array.isArray(link?.rel) && link.rel.some((rel) => pattern.test(String(rel || '')))))?.href || '';
+  const gamecastLink = getLink(/summary|live|gamecast/i);
+  const boxScoreLink = getLink(/box.?score/i);
+  const recapLink = getLink(/recap/i);
+  const playByPlayLink = getLink(/play.?by.?play|pbp/i);
+  const closeGame = isLive && scoreDiff != null && scoreDiff <= 6;
+  const crunchTime = isLive && period >= 4 && scoreDiff != null && scoreDiff <= 8;
+  const nailBiter = isFinal && scoreDiff != null && scoreDiff <= 5;
+  const overtime = /ot/i.test(statusText) || period > 4;
+  const startsSoon = !isLive && !isFinal && minutesUntilTip != null && minutesUntilTip >= 0 && minutesUntilTip <= 45;
+  const nationalTv = !!(Array.isArray(competition?.geoBroadcasts) && competition.geoBroadcasts.some((entry) => String(entry?.market?.type || '').toLowerCase() === 'national'));
+  const homeWins = parseNbaWinsFromRecord(home.record);
+  const awayWins = parseNbaWinsFromRecord(away.record);
+  const betterTeam = homeWins != null && awayWins != null
+    ? (homeWins > awayWins ? home : (awayWins > homeWins ? away : null))
+    : null;
+  const winner = home.winner ? home : (away.winner ? away : null);
+  const upsetFinal = isFinal
+    && !!winner
+    && !!betterTeam
+    && betterTeam.abbr !== winner.abbr
+    && Math.abs((homeWins || 0) - (awayWins || 0)) >= 8;
+  const tags = [];
+  if (favorite) tags.push(createNbaTag('My Team', 'favorite'));
+  if (overtime && isLive) tags.push(createNbaTag('OT', 'alert'));
+  else if (crunchTime) tags.push(createNbaTag('Crunch Time', 'alert'));
+  else if (closeGame) tags.push(createNbaTag('Close Game', 'live'));
+  else if (startsSoon) tags.push(createNbaTag('Starts Soon', 'info'));
+  else if (nailBiter) tags.push(createNbaTag('Tight Finish', 'neutral'));
+  if (upsetFinal) tags.push(createNbaTag('Upset', 'accent'));
+  if (nationalTv) tags.push(createNbaTag('National TV', 'neutral'));
+  return {
+    id: String(event?.id || ''),
+    shortName: String(event?.shortName || `${away.abbr} @ ${home.abbr}`).trim(),
+    statusBucket,
+    statusText,
+    startDate,
+    home,
+    away,
+    favorite,
+    scoreDiff,
+    headline,
+    broadcastLabel: getNbaBroadcastLabel(competition),
+    tags: tags.slice(0, 3),
+    actions: {
+      gamecast: gamecastLink,
+      boxScore: boxScoreLink,
+      recap: recapLink,
+      playByPlay: playByPlayLink,
+    },
+  };
+}
+
+function compareNbaGames(a, b){
+  const bucketScoreA = a.statusBucket === 'live' ? 0 : (a.statusBucket === 'upcoming' ? 1 : 2);
+  const bucketScoreB = b.statusBucket === 'live' ? 0 : (b.statusBucket === 'upcoming' ? 1 : 2);
+  if ((a.favorite ? 0 : 1) !== (b.favorite ? 0 : 1)) return (a.favorite ? 0 : 1) - (b.favorite ? 0 : 1);
+  if (bucketScoreA !== bucketScoreB) return bucketScoreA - bucketScoreB;
+  const closeScoreA = a.scoreDiff == null ? 99 : a.scoreDiff;
+  const closeScoreB = b.scoreDiff == null ? 99 : b.scoreDiff;
+  if (closeScoreA !== closeScoreB) return closeScoreA - closeScoreB;
+  return String(a.startDate || '').localeCompare(String(b.startDate || ''));
+}
+
+function pickFeaturedNbaGame(games, viewMode){
+  if (!games.length) return null;
+  if (viewMode === 'recap') return games.find((game) => game.statusBucket === 'final') || games[0];
+  if (viewMode === 'live') return games.find((game) => game.statusBucket === 'live') || games[0];
+  if (viewMode === 'my-teams') return games.find((game) => game.favorite && game.statusBucket === 'live')
+    || games.find((game) => game.favorite)
+    || games[0];
+  return games.find((game) => game.favorite && game.statusBucket === 'live')
+    || games.find((game) => game.statusBucket === 'live')
+    || games[0];
+}
+
+function filterNbaGamesByView(games, viewMode){
+  if (viewMode === 'my-teams') return games.filter((game) => game.favorite);
+  if (viewMode === 'live') return games.filter((game) => game.statusBucket === 'live');
+  if (viewMode === 'recap') return games.filter((game) => game.statusBucket === 'final');
+  return games;
+}
+
+function renderNbaFavoriteTeamOptions(selectedTeams){
+  const selected = new Set(selectedTeams);
+  const options = NBA_TEAM_OPTIONS.filter((team) => !selected.has(team.abbr));
+  return options.map((team) => `<option value="${escapeHtml(team.abbr)}">${escapeHtml(team.name)}</option>`).join('');
+}
+
+function renderNbaSummaryChips(games){
+  const liveCount = games.filter((game) => game.statusBucket === 'live').length;
+  const upcomingCount = games.filter((game) => game.statusBucket === 'upcoming').length;
+  const finalCount = games.filter((game) => game.statusBucket === 'final').length;
+  return `
+    <span class="nba-summary-chip nba-summary-chip--live">${liveCount} live</span>
+    <span class="nba-summary-chip">${upcomingCount} upcoming</span>
+    <span class="nba-summary-chip">${finalCount} final</span>
+  `;
+}
+
+function renderNbaControls(games){
+  const currentView = state.nba?.viewMode || 'live';
+  const favoriteTeams = state.nba?.favoriteTeams || [];
+  const favoriteChips = favoriteTeams.length
+    ? favoriteTeams.map((team) => `<button class="nba-favorite-chip" type="button" data-nba-favorite-remove="${escapeHtml(team)}">${escapeHtml(team)} <span aria-hidden="true">×</span></button>`).join('')
+    : '<span class="note-meta">No favorite teams yet.</span>';
+  const viewOptions = [
+    ['my-teams', 'My Teams'],
+    ['live', 'Live'],
+    ['all', 'All'],
+    ['recap', 'Recap'],
+  ].map(([value, label]) => `<button class="nba-view-tab${currentView === value ? ' is-active' : ''}" type="button" data-nba-view="${value}">${label}</button>`).join('');
+  const addOptions = renderNbaFavoriteTeamOptions(favoriteTeams);
+  return `
+    <div class="nba-v2-controls">
+      <div class="nba-v2-topline">
+        <div class="nba-v2-summary">${renderNbaSummaryChips(games)}</div>
+        <div class="nba-view-tabs">${viewOptions}</div>
+      </div>
+      <div class="nba-favorites-row">
+        <div class="nba-favorite-chips">${favoriteChips}</div>
+        <div class="nba-favorite-add">
+          <select id="nbaFavoriteTeamSelect">
+            <option value="">Add team...</option>
+            ${addOptions}
+          </select>
+          <button class="btn ghost" type="button" data-nba-favorite-add>Add</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderNbaActionLinks(game){
+  const actions = [];
+  if (game.actions.gamecast) actions.push(`<a class="btn ghost" href="${encodeURI(game.actions.gamecast)}" target="_blank" rel="noopener">Gamecast</a>`);
+  if (game.actions.boxScore) actions.push(`<a class="btn ghost" href="${encodeURI(game.actions.boxScore)}" target="_blank" rel="noopener">Box Score</a>`);
+  if (game.statusBucket === 'final' && game.actions.recap) actions.push(`<a class="btn ghost" href="${encodeURI(game.actions.recap)}" target="_blank" rel="noopener">Recap</a>`);
+  else if (game.statusBucket === 'live' && game.actions.playByPlay) actions.push(`<a class="btn ghost" href="${encodeURI(game.actions.playByPlay)}" target="_blank" rel="noopener">Play-by-Play</a>`);
+  return actions.slice(0, 3).join('');
+}
+
+function renderNbaTeamLine(team, emphasis = ''){
+  const score = team.score == null ? '—' : String(team.score);
+  return `
+    <div class="nba-team-line ${emphasis}">
+      <div class="nba-team-ident">
+        ${team.logo ? `<img class="nba-team-logo" src="${encodeURI(team.logo)}" alt="${escapeHtml(team.name)} logo" loading="lazy" />` : '<span class="nba-team-logo nba-team-logo--placeholder"></span>'}
+        <div>
+          <div class="nba-team-name">${escapeHtml(team.abbr)}</div>
+          <div class="nba-team-record">${escapeHtml(team.record || team.name)}</div>
+        </div>
+      </div>
+      <div class="nba-team-score">${escapeHtml(score)}</div>
+    </div>
+  `;
+}
+
+function renderNbaGameCard(game, { featured = false } = {}){
+  const badgeLabel = game.statusBucket === 'live' ? 'LIVE' : (game.statusBucket === 'final' ? 'FINAL' : 'UPCOMING');
+  const tags = game.tags.length
+    ? `<div class="nba-game-tags">${game.tags.map((tag) => `<span class="nba-game-tag nba-game-tag--${escapeHtml(tag.tone || 'neutral')}">${escapeHtml(tag.label || '')}</span>`).join('')}</div>`
+    : '';
+  const headline = game.headline ? `<div class="nba-game-headline">${escapeHtml(game.headline)}</div>` : '';
+  const metaBits = [game.statusText, game.broadcastLabel && `On ${game.broadcastLabel}`].filter(Boolean);
+  const leaderBits = [game.away.leaderText, game.home.leaderText].filter(Boolean).slice(0, 2);
+  return `
+    <article class="nba-game-card${featured ? ' nba-game-card--featured' : ''}">
+      <div class="nba-game-card-head">
+        <div>
+          <div class="nba-game-shortname">${escapeHtml(game.shortName)}</div>
+          <div class="nba-game-meta">${escapeHtml(metaBits.join(' · '))}</div>
+        </div>
+        <span class="badge nba-game-badge nba-game-badge--${game.statusBucket}">${badgeLabel}</span>
+      </div>
+      ${tags}
+      <div class="nba-scoreboard">
+        ${renderNbaTeamLine(game.away, game.away.winner ? 'is-winning' : '')}
+        ${renderNbaTeamLine(game.home, game.home.winner ? 'is-winning' : '')}
+      </div>
+      ${headline}
+      ${leaderBits.length ? `<div class="nba-game-leaders">${leaderBits.map((text) => `<div>${escapeHtml(text)}</div>`).join('')}</div>` : ''}
+      <div class="nba-game-actions">${renderNbaActionLinks(game)}</div>
+    </article>
+  `;
+}
+
 async function renderNbaScores(options = {}){
   const el = document.getElementById('nbaScoresWidget');
   if (!el) return;
@@ -2706,67 +3431,64 @@ async function renderNbaScores(options = {}){
 
   try {
     const dateKey = estDateYmdCompact();
-    const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${dateKey}`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      const err = new Error(`NBA upstream failed (${res.status})`);
-      err.status = res.status;
-      throw err;
+    let data = null;
+    if (options.useCached === true && nbaScoreboardCache.dateKey === dateKey && nbaScoreboardCache.data) {
+      data = nbaScoreboardCache.data;
+    } else {
+      const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${dateKey}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        const err = new Error(`NBA upstream failed (${res.status})`);
+        err.status = res.status;
+        throw err;
+      }
+      data = await res.json();
+      nbaScoreboardCache = {
+        dateKey,
+        fetchedAt: now(),
+        data,
+      };
     }
-    const data = await res.json();
+
     const events = Array.isArray(data?.events) ? data.events : [];
+    const favoriteTeams = new Set(state.nba?.favoriteTeams || []);
+    const normalizedGames = events.map((event) => normalizeNbaEvent(event, favoriteTeams))
+      .sort(compareNbaGames);
 
-    if (!events.length) {
-      el.innerHTML = '<div class="note-meta">No NBA games scheduled for today.</div>';
-      clearPollingBackoff('nba-scores');
-      if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()} (EST today)`;
-      return;
-    }
+    const filteredGames = filterNbaGamesByView(normalizedGames, state.nba?.viewMode || 'live');
+    const featuredGame = filteredGames.length ? pickFeaturedNbaGame(filteredGames, state.nba?.viewMode || 'live') : null;
+    const restGames = filteredGames.filter((game) => game.id !== featuredGame?.id);
+    const emptyMessage = events.length === 0
+      ? 'No NBA games scheduled for today.'
+      : ((state.nba?.viewMode === 'my-teams' && !(state.nba?.favoriteTeams || []).length)
+          ? 'Pick a few favorite teams to unlock a personal scoreboard.'
+          : `No games match the ${state.nba?.viewMode === 'live' ? 'Live' : state.nba?.viewMode === 'recap' ? 'Recap' : 'My Teams'} view right now.`);
 
-    const cards = events.map((event) => {
-      const comp = event?.competitions?.[0];
-      const teams = comp?.competitors || [];
-      const away = teams.find((t) => t?.homeAway === 'away');
-      const home = teams.find((t) => t?.homeAway === 'home');
-      const statusType = comp?.status?.type;
-      const statusText = comp?.status?.type?.shortDetail || comp?.status?.type?.description || 'Scheduled';
-
-      const awayName = away?.team?.abbreviation || away?.team?.shortDisplayName || 'Away';
-      const homeName = home?.team?.abbreviation || home?.team?.shortDisplayName || 'Home';
-      const awayScore = away?.score ?? '-';
-      const homeScore = home?.score ?? '-';
-
-      const isLive = statusType?.state === 'in';
-      const isFinal = statusType?.completed === true;
-      const badge = isLive ? 'LIVE' : (isFinal ? 'FINAL' : 'UPCOMING');
-
-      const espnLink =
-        event?.links?.find((l) => /box score|gamecast|recap/i.test(l?.text || ''))?.href ||
-        event?.links?.[0]?.href ||
-        comp?.links?.find((l) => /box score|gamecast|recap/i.test(l?.text || ''))?.href ||
-        comp?.links?.[0]?.href ||
-        '';
-
-      return `
-        <div class="change-log-item" style="margin-bottom:8px;">
-          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
-            <strong>${escapeHtml(awayName)} ${escapeHtml(String(awayScore))} - ${escapeHtml(homeName)} ${escapeHtml(String(homeScore))}</strong>
-            <span class="badge">${badge}</span>
+    const summaryMarkup = renderNbaControls(normalizedGames);
+    const featuredMarkup = featuredGame
+      ? `<section class="nba-featured-block">
+          <div class="nba-section-title">Featured Matchup</div>
+          ${renderNbaGameCard(featuredGame, { featured: true })}
+        </section>`
+      : '';
+    const listMarkup = restGames.length
+      ? `<section class="nba-games-block">
+          <div class="nba-section-title">${state.nba?.viewMode === 'recap' ? 'Game Recaps' : state.nba?.viewMode === 'my-teams' ? 'My Team Games' : state.nba?.viewMode === 'live' ? 'Live Games' : 'Full Slate'}</div>
+          <div class="nba-v2-list">
+            ${restGames.map((game) => renderNbaGameCard(game)).join('')}
           </div>
-          <div class="note-meta" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-            <span>${escapeHtml(statusText)}</span>
-            ${espnLink ? `<a class="btn ghost" href="${encodeURI(espnLink)}" target="_blank" rel="noopener">Box Score</a>` : ''}
-          </div>
-        </div>
-      `;
-    }).join('');
+        </section>`
+      : (featuredGame ? '' : `<div class="note-meta nba-empty-state">${escapeHtml(emptyMessage)}</div>`);
 
-    el.innerHTML = `<div class="scroll-box nba-scroll">${cards}</div>`;
+    el.innerHTML = `<div class="scroll-box nba-scroll nba-v2-shell">${summaryMarkup}${featuredMarkup}${listMarkup}</div>`;
     clearPollingBackoff('nba-scores');
-    if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()} (auto: every 15 min)`;
+    const liveCount = normalizedGames.filter((game) => game.statusBucket === 'live').length;
+    setPodStatusSignal('nba-scores', 'fresh', liveCount ? `${liveCount} live` : 'today');
+    if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()} (auto: every 1 min)`;
   } catch (error) {
     const backoffMs = registerPollingFailure('nba-scores', error, 'NBA feed temporarily unavailable');
-    el.textContent = 'NBA scores unavailable right now.';
+    el.innerHTML = `<div class="note-meta nba-empty-state">NBA scores unavailable right now.</div>`;
+    setPodStatusSignal('nba-scores', 'stale', `retry ${Math.ceil(backoffMs / 1000)}s`);
     if (ts) ts.textContent = `Update delayed: retry in ${Math.ceil(backoffMs / 1000)}s`;
   }
 }
@@ -3062,6 +3784,35 @@ async function fetchJsonWithTimeout(url, timeoutMs = 12000){
   }
 }
 
+async function postJsonWithTimeout(url, payload, timeoutMs = 12000){
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    let data = null;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {}
+    }
+    if (!res.ok) {
+      const err = new Error(String(data?.message || `HTTP ${res.status}`));
+      err.status = res.status;
+      err.payload = data;
+      throw err;
+    }
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function cryptoProviderError(provider, error){
   if (error && typeof error === 'object') {
     error.provider = provider;
@@ -3254,73 +4005,196 @@ function startCryptoRefreshCooldown(){
   cryptoRefreshCooldownTimer = setInterval(updateCryptoRefreshButton, 1000);
 }
 
+function formatCryptoCompactUsd(value){
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return '$0';
+  const abs = Math.abs(numeric);
+  if (abs < 1000) return formatUsdPrice(numeric);
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    notation: 'compact',
+    maximumFractionDigits: abs >= 1e9 ? 2 : 1,
+  }).format(numeric);
+}
+
+function formatCryptoSignedPercent(value, digits = 2){
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return '0.00%';
+  return `${numeric > 0 ? '+' : ''}${numeric.toFixed(digits)}%`;
+}
+
+function getCryptoToneClass(value, { positive = 'is-up', negative = 'is-down', zero = 'is-flat' } = {}){
+  const numeric = Number(value || 0);
+  if (numeric > 0) return positive;
+  if (numeric < 0) return negative;
+  return zero;
+}
+
+function buildCryptoAssetModel(coin, index){
+  const coinId = String(coin?.id || '').toLowerCase();
+  const holding = state.cryptoHoldings?.[coinId] || { quantity: 0, avgBuyPrice: 0 };
+  const quantity = Number(holding.quantity || 0);
+  const avgBuyPrice = Number(holding.avgBuyPrice || 0);
+  const currentPrice = Number(coin?.current_price || 0);
+  const marketCap = Number(coin?.market_cap || 0);
+  const changePct = Number(coin?.price_change_percentage_24h || 0);
+  const positionValue = quantity * currentPrice;
+  const costBasis = quantity * avgBuyPrice;
+  const pnl = positionValue - costBasis;
+  const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
+  const dailyMoveUsd = positionValue * (changePct / 100);
+  return {
+    index,
+    id: coinId,
+    name: String(coin?.name || coin?.id || 'Unknown').trim(),
+    symbol: String(coin?.symbol || '').trim().toUpperCase() || 'COIN',
+    currentPrice,
+    marketCap,
+    changePct,
+    quantity,
+    avgBuyPrice,
+    positionValue,
+    costBasis,
+    pnl,
+    pnlPct,
+    dailyMoveUsd,
+    hasPosition: quantity > 0,
+  };
+}
+
 function renderCryptoWidget(el, watch){
-  let totalValue = 0;
-  let totalCostBasis = 0;
+  const items = Array.isArray(watch) ? watch.map((coin, index) => buildCryptoAssetModel(coin, index)) : [];
+  const heldItems = items.filter((item) => item.hasPosition);
+  const watchOnlyItems = items.filter((item) => !item.hasPosition);
+  const totalValue = heldItems.reduce((sum, item) => sum + item.positionValue, 0);
+  const totalCostBasis = heldItems.reduce((sum, item) => sum + item.costBasis, 0);
+  const totalPnl = totalValue - totalCostBasis;
+  const totalPnlPct = totalCostBasis > 0 ? (totalPnl / totalCostBasis) * 100 : 0;
+  const totalDayDrift = heldItems.reduce((sum, item) => sum + item.dailyMoveUsd, 0);
+  const topMover = items.reduce((best, item) => {
+    if (!best) return item;
+    return Math.abs(item.changePct) > Math.abs(best.changePct) ? item : best;
+  }, null);
+  const largestHolding = heldItems.reduce((best, item) => {
+    if (!best) return item;
+    return item.positionValue > best.positionValue ? item : best;
+  }, null);
+  const upCount = items.filter((item) => item.changePct > 0).length;
+  const downCount = items.filter((item) => item.changePct < 0).length;
+  const flatCount = items.length - upCount - downCount;
 
-  const row = (c) => {
-    const change = Number(c.price_change_percentage_24h || 0);
-    const color = change >= 0 ? '#22c55e' : '#ef4444';
-    const coinId = String(c.id || '').toLowerCase();
-    const holding = state.cryptoHoldings?.[coinId] || { quantity: 0, avgBuyPrice: 0 };
-    const quantity = Number(holding.quantity || 0);
-    const avgBuyPrice = Number(holding.avgBuyPrice || 0);
-    const currentPrice = Number(c.current_price || 0);
-
-    const positionValue = quantity * currentPrice;
-    const costBasis = quantity * avgBuyPrice;
-    const pnl = positionValue - costBasis;
-    const pnlPct = costBasis > 0 ? (pnl / costBasis) * 100 : 0;
-
-    totalValue += positionValue;
-    totalCostBasis += costBasis;
-
-    const pnlColor = pnl >= 0 ? '#22c55e' : '#ef4444';
-
+  const renderAssetRow = (item) => {
+    const changeTone = getCryptoToneClass(item.changePct);
+    const pnlTone = getCryptoToneClass(item.pnl);
+    const positionSummary = item.hasPosition
+      ? `Position ${formatUsdPrice(item.positionValue)} · Cost ${formatUsdPrice(item.costBasis)} · 24h drift ${formatSignedUsd(item.dailyMoveUsd)}`
+      : 'No position set yet. Add qty and avg cost to track real P/L.';
+    const performanceSummary = item.hasPosition
+      ? `Unrealized ${formatSignedUsd(item.pnl)} (${formatCryptoSignedPercent(item.pnlPct)})`
+      : `24h move ${formatCryptoSignedPercent(item.changePct)}`;
     return `
-      <div class="change-log-item" style="margin-bottom:8px;">
-        <div class="row-between-wrap">
-          <strong>${escapeHtml((c.symbol || '').toUpperCase())} · ${formatUsdPrice(c.current_price)}</strong>
-          <span style="color:${color};font-weight:700;">${change.toFixed(2)}%</span>
+      <article class="crypto-asset-row${item.hasPosition ? ' crypto-asset-row--held' : ''}">
+        <div class="crypto-asset-head">
+          <div class="crypto-asset-identity">
+            <div class="crypto-asset-symbol">${escapeHtml(item.symbol)}</div>
+            <div>
+              <div class="crypto-asset-name">${escapeHtml(item.name)}</div>
+              <div class="crypto-asset-meta">
+                <span class="crypto-chip">${escapeHtml(item.hasPosition ? 'Held' : 'Watch')}</span>
+                <span class="crypto-chip">MCap ${escapeHtml(formatCryptoCompactUsd(item.marketCap))}</span>
+              </div>
+            </div>
+          </div>
+          <div class="crypto-asset-price-stack">
+            <div class="crypto-asset-price">${escapeHtml(formatUsdPrice(item.currentPrice))}</div>
+            <div class="crypto-asset-change ${changeTone}">${escapeHtml(formatCryptoSignedPercent(item.changePct))}</div>
+          </div>
         </div>
-        <div class="note-meta row-between-wrap" style="margin-top:4px;">
-          <span>${escapeHtml(c.name || c.id || '')} · MCap: $${Number(c.market_cap || 0).toLocaleString()}</span>
-          <button class="btn ghost" data-crypto-remove="${escapeHtml(c.id)}">Remove</button>
+        <div class="crypto-asset-body">
+          <div class="crypto-asset-summary">
+            <div class="crypto-asset-position">${escapeHtml(positionSummary)}</div>
+            <div class="crypto-asset-performance ${item.hasPosition ? pnlTone : changeTone}">${escapeHtml(performanceSummary)}</div>
+          </div>
+          <div class="crypto-asset-controls">
+            <label class="crypto-field">
+              <span>Qty</span>
+              <input data-crypto-qty="${escapeHtml(item.id)}" type="number" min="0" step="any" value="${Number.isFinite(item.quantity) ? item.quantity : 0}" />
+            </label>
+            <label class="crypto-field">
+              <span>Avg $</span>
+              <input data-crypto-avg="${escapeHtml(item.id)}" type="number" min="0" step="any" value="${Number.isFinite(item.avgBuyPrice) ? item.avgBuyPrice : 0}" />
+            </label>
+            <button class="btn ghost crypto-remove-btn" data-crypto-remove="${escapeHtml(item.id)}" type="button">Remove</button>
+          </div>
         </div>
-        <div class="row-wrap" style="margin-top:6px;gap:6px;">
-          <label class="note-meta">Qty <input data-crypto-qty="${escapeHtml(c.id)}" type="number" min="0" step="any" value="${Number.isFinite(quantity) ? quantity : 0}" style="width:110px;" /></label>
-          <label class="note-meta">Avg $ <input data-crypto-avg="${escapeHtml(c.id)}" type="number" min="0" step="any" value="${Number.isFinite(avgBuyPrice) ? avgBuyPrice : 0}" style="width:120px;" /></label>
-        </div>
-        <div class="note-meta" style="margin-top:6px;line-height:1.4;">
-          Position: ${formatUsdPrice(positionValue)} · Cost: ${formatUsdPrice(costBasis)}
-          <span style="color:${pnlColor};font-weight:700;"> · P/L: ${formatSignedUsd(pnl)} (${pnl > 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</span>
-        </div>
-      </div>
+      </article>
     `;
   };
 
-  const rowsHtml = watch.length ? watch.map((c) => row(c)).join('') : '<div class="note-meta">No watchlist coins yet.</div>';
+  const overviewMarkup = `
+    <section class="crypto-overview-grid">
+      <article class="crypto-overview-card crypto-overview-card--hero">
+        <div class="crypto-overview-label">Portfolio Value</div>
+        <div class="crypto-overview-value">${escapeHtml(formatUsdPrice(totalValue))}</div>
+        <div class="crypto-overview-meta">${heldItems.length ? `${heldItems.length} active position${heldItems.length === 1 ? '' : 's'}` : 'No active positions yet'}${largestHolding ? ` · Largest ${escapeHtml(largestHolding.symbol)} ${escapeHtml(formatUsdPrice(largestHolding.positionValue))}` : ''}</div>
+      </article>
+      <article class="crypto-overview-card">
+        <div class="crypto-overview-label">Unrealized P/L</div>
+        <div class="crypto-overview-value ${getCryptoToneClass(totalPnl)}">${escapeHtml(formatSignedUsd(totalPnl))}</div>
+        <div class="crypto-overview-meta">${escapeHtml(formatCryptoSignedPercent(totalPnlPct))} vs cost basis</div>
+      </article>
+      <article class="crypto-overview-card">
+        <div class="crypto-overview-label">24h Drift</div>
+        <div class="crypto-overview-value ${getCryptoToneClass(totalDayDrift)}">${escapeHtml(formatSignedUsd(totalDayDrift))}</div>
+        <div class="crypto-overview-meta">${heldItems.length ? 'Estimated move across held positions' : 'Activates once holdings are entered'}</div>
+      </article>
+      <article class="crypto-overview-card">
+        <div class="crypto-overview-label">Market Pulse</div>
+        <div class="crypto-overview-value">${topMover ? escapeHtml(`${topMover.symbol} ${formatCryptoSignedPercent(topMover.changePct)}`) : 'Quiet'}</div>
+        <div class="crypto-overview-meta">${items.length ? `${upCount} up · ${downCount} down${flatCount ? ` · ${flatCount} flat` : ''}` : 'Build a watchlist to see breadth'}</div>
+      </article>
+    </section>
+  `;
 
-  const totalPnl = totalValue - totalCostBasis;
-  const totalPnlPct = totalCostBasis > 0 ? (totalPnl / totalCostBasis) * 100 : 0;
-  const totalPnlColor = totalPnl >= 0 ? '#22c55e' : '#ef4444';
+  const heldSection = heldItems.length
+    ? `
+      <section class="crypto-section">
+        <div class="crypto-section-head">
+          <span>Held Positions</span>
+          <span>${heldItems.length}</span>
+        </div>
+        <div class="crypto-asset-list">${heldItems.map((item) => renderAssetRow(item)).join('')}</div>
+      </section>
+    `
+    : '';
+
+  const watchSection = `
+    <section class="crypto-section">
+      <div class="crypto-section-head">
+        <span>${heldItems.length ? 'Market Radar' : 'Watchlist'}</span>
+        <span>${watchOnlyItems.length}</span>
+      </div>
+      <div class="crypto-asset-list">${watchOnlyItems.length ? watchOnlyItems.map((item) => renderAssetRow(item)).join('') : '<div class="crypto-empty-state">No watch-only assets right now. Add a coin to start tracking the market.</div>'}</div>
+    </section>
+  `;
 
   el.innerHTML = `
-    <div class="row-wrap" style="margin-bottom:8px;">
-      <input id="cryptoAddInput" placeholder="Search coin (e.g. btc, ethereum, solana)" />
-      <button id="cryptoAddBtn" class="btn">Add</button>
-      <button id="cryptoDirRefreshBtn" class="btn ghost">Refresh List</button>
-    </div>
-    <div id="cryptoAddHint" class="note-meta"></div>
-    <div class="change-log-item mt8" style="margin-bottom:8px;">
-      <div><strong>💼 Portfolio</strong></div>
-      <div class="note-meta" style="line-height:1.4;margin-top:4px;">
-        Value: ${formatUsdPrice(totalValue)} · Cost: ${formatUsdPrice(totalCostBasis)}
-        <span style="color:${totalPnlColor};font-weight:700;"> · Unrealized: ${formatSignedUsd(totalPnl)} (${totalPnl > 0 ? '+' : ''}${totalPnlPct.toFixed(2)}%)</span>
+    <div class="scroll-box crypto-scroll crypto-v2-shell">
+      <div class="crypto-command-bar">
+        <div class="crypto-command-main">
+          <input id="cryptoAddInput" class="crypto-search-input" placeholder="Search coin by ticker, name, or id" />
+          <div class="crypto-command-actions">
+            <button id="cryptoAddBtn" class="btn" type="button">Add Coin</button>
+            <button id="cryptoDirRefreshBtn" class="btn ghost" type="button">Refresh Directory</button>
+          </div>
+        </div>
+        <div id="cryptoAddHint" class="crypto-add-hint note-meta"></div>
       </div>
+      ${overviewMarkup}
+      ${heldSection}
+      ${watchSection}
     </div>
-    <div class="mt8"><strong>👀 Watchlist</strong></div>
-    <div>${rowsHtml}</div>
   `;
 
   const addInput = document.getElementById('cryptoAddInput');
@@ -3330,7 +4204,7 @@ function renderCryptoWidget(el, watch){
     if (!hint) return;
     const val = (addInput?.value || '').trim().toLowerCase();
     if (!val) {
-      hint.textContent = 'Tip: add by ticker, name, or id.';
+      hint.textContent = 'Search supports ticker, project name, or provider id.';
       return;
     }
 
@@ -3370,8 +4244,8 @@ function renderCryptoWidget(el, watch){
     const btn = document.getElementById('cryptoDirRefreshBtn');
     if (btn) btn.textContent = 'Refreshing...';
     await getCoinDirectory(true);
-    if (btn) btn.textContent = 'Refresh List';
-    if (hint) hint.textContent = `Coin list refreshed (${coinDirectory.length.toLocaleString()} coins).`;
+    if (btn) btn.textContent = 'Refresh Directory';
+    if (hint) hint.textContent = `Coin directory refreshed (${coinDirectory.length.toLocaleString()} assets).`;
   });
 
   el.querySelectorAll('[data-crypto-remove]').forEach((btn) => {
@@ -3433,7 +4307,7 @@ async function renderCrypto(options = {}){
       renderCryptoWidget(el, cached.watch);
       const providerLabel = CRYPTO_PROVIDER_LABELS[cached.provider] || CRYPTO_PROVIDER_LABELS[activeCryptoProvider];
       setPodStatusSignal('crypto', 'stale', `retry ${Math.ceil(backoffLeftMs / 1000)}s`);
-      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${Math.ceil(backoffLeftMs / 1000)}s backoff) · Data: ${providerLabel} · ${formatLastSuccessMeta(cryptoLastSuccessAt, cryptoLastSuccessProvider)}`;
+      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale snapshot (${Math.ceil(backoffLeftMs / 1000)}s backoff) · Data: ${providerLabel} · ${formatLastSuccessMeta(cryptoLastSuccessAt, cryptoLastSuccessProvider)}`;
       return;
     }
   }
@@ -3466,7 +4340,7 @@ async function renderCrypto(options = {}){
     const previousFailures = Array.isArray(errors) ? errors.length : 0;
     const failureNote = previousFailures > 0 ? ` · recovered after ${previousFailures} provider error${previousFailures > 1 ? 's' : ''}` : '';
     setPodStatusSignal('crypto', 'fresh');
-    if (ts) ts.textContent = `Updated: ${new Date(updatedAt).toLocaleTimeString()} (watchlist + portfolio · auto: every 15 min) · Data: ${providerLabel}${fallbackNote}${retryNote}${failureNote} · ${formatLastSuccessMeta(cryptoLastSuccessAt, cryptoLastSuccessProvider)}`;
+    if (ts) ts.textContent = `Updated: ${new Date(updatedAt).toLocaleTimeString()} (portfolio + radar · auto: every 15 min) · Data: ${providerLabel}${fallbackNote}${retryNote}${failureNote} · ${formatLastSuccessMeta(cryptoLastSuccessAt, cryptoLastSuccessProvider)}`;
   } catch (error) {
     cryptoFailureCount += 1;
     const backoffMs = Math.min(CRYPTO_FAILURE_BACKOFF_BASE_MS * (2 ** (cryptoFailureCount - 1)), CRYPTO_FAILURE_BACKOFF_MAX_MS);
@@ -3487,7 +4361,7 @@ async function renderCrypto(options = {}){
       renderCryptoWidget(el, cached.watch);
       const providerLabel = CRYPTO_PROVIDER_LABELS[cached.provider] || CRYPTO_PROVIDER_LABELS[activeCryptoProvider];
       setPodStatusSignal('crypto', 'stale', `retry ${Math.ceil(backoffMs / 1000)}s`);
-      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale cache (${reasonDetail}; retry in ${Math.ceil(backoffMs / 1000)}s) · Data: ${providerLabel} · ${formatLastSuccessMeta(cryptoLastSuccessAt || cached.updatedAt, cryptoLastSuccessProvider || cached.provider)}`;
+      if (ts) ts.textContent = `Updated: ${new Date(cached.updatedAt).toLocaleTimeString()} · stale snapshot (${reasonDetail}; retry in ${Math.ceil(backoffMs / 1000)}s) · Data: ${providerLabel} · ${formatLastSuccessMeta(cryptoLastSuccessAt || cached.updatedAt, cryptoLastSuccessProvider || cached.provider)}`;
       return;
     }
 
@@ -3566,6 +4440,959 @@ function mountRssSettingsFeeds(){
   });
 }
 
+function hasFollowerMetricValue(value){
+  return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+}
+
+function formatFollowerMetricValue(value){
+  if (!hasFollowerMetricValue(value)) return 'n/a';
+  const num = Number(value);
+  const prefix = num > 0 ? '+' : '';
+  return prefix + new Intl.NumberFormat().format(num);
+}
+
+function formatFollowerAge(ageMs){
+  if (!Number.isFinite(Number(ageMs))) return 'unknown';
+  const mins = Math.max(0, Math.floor(Number(ageMs) / 60000));
+  if (mins < 1) return '0m ago';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins ? `${hours}h ${remMins}m ago` : `${hours}h ago`;
+}
+
+const socialAnalyticsRuntime = {
+  facebookHistory: [],
+  communityHistory: [],
+  instagramHistory: [],
+  tiktokHistory: [],
+  contentByNetwork: {
+    facebook: {
+      ok: false,
+      profile: { id: '', name: '', url: '' },
+      fetchedAt: '',
+      source: '',
+      insights: null,
+      summary: null,
+      items: [],
+      status: { staleLevel: 'critical', ageMs: null, lastError: '' },
+    },
+    instagram: {
+      ok: false,
+      profile: { handle: '', name: '', url: '' },
+      fetchedAt: '',
+      source: '',
+      insights: null,
+      summary: null,
+      items: [],
+      status: { staleLevel: 'critical', ageMs: null, lastError: '' },
+    },
+  },
+  rangeByNetwork: {
+    facebook: '7d',
+    community: '30d',
+    instagram: '7d',
+    tiktok: '7d',
+  },
+};
+
+function formatDurationCompact(durationMs){
+  if (!Number.isFinite(Number(durationMs)) || Number(durationMs) <= 0) return 'n/a';
+  const mins = Math.max(1, Math.round(Number(durationMs) / 60000));
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins ? `${hours}h ${remMins}m` : `${hours}h`;
+}
+
+function formatFollowerTimestamp(value){
+  const ts = Date.parse(String(value || ''));
+  if (!Number.isFinite(ts)) return 'n/a';
+  return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function normalizeFollowerHistory(history, valueKey = 'followersCount'){
+  return (Array.isArray(history) ? history : [])
+    .map((entry) => {
+      const value = Number(entry?.[valueKey]);
+      const fetchedAt = String(entry?.fetchedAt || '');
+      const ts = Date.parse(fetchedAt);
+      if (!Number.isFinite(value) || !Number.isFinite(ts)) return null;
+      return { value, fetchedAt, ts };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.ts - b.ts);
+}
+
+function averageFollowerInterval(history){
+  if (!Array.isArray(history) || history.length < 2) return null;
+  let totalMs = 0;
+  for (let i = 1; i < history.length; i += 1) totalMs += history[i].ts - history[i - 1].ts;
+  return totalMs > 0 ? totalMs / (history.length - 1) : null;
+}
+
+function buildFollowerSparkline(history, options = {}){
+  const points = Array.isArray(history) ? history : [];
+  if (!points.length) return '';
+  const width = Math.max(240, Number(options.width) || 640);
+  const height = Math.max(120, Number(options.height) || 220);
+  const padX = 16;
+  const padY = 16;
+  const innerWidth = width - (padX * 2);
+  const innerHeight = height - (padY * 2);
+  const values = points.map((point) => point.value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = Math.max(1, max - min);
+  const coords = points.map((point, index) => {
+    const x = points.length === 1 ? width / 2 : padX + ((innerWidth * index) / (points.length - 1));
+    const y = padY + innerHeight - (((point.value - min) / range) * innerHeight);
+    return [x, y];
+  });
+  const polyline = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const area = `${padX},${height - padY} ${polyline} ${width - padX},${height - padY}`;
+  const last = coords[coords.length - 1];
+  return `<svg viewBox="0 0 ${width} ${height}" class="social-analytics-chart" role="img" aria-label="Instagram follower trend">
+    <line x1="${padX}" y1="${height - padY}" x2="${width - padX}" y2="${height - padY}" class="social-analytics-chart-axis"></line>
+    <line x1="${padX}" y1="${padY}" x2="${padX}" y2="${height - padY}" class="social-analytics-chart-axis"></line>
+    <polygon points="${area}" class="social-analytics-chart-area"></polygon>
+    <polyline points="${polyline}" class="social-analytics-chart-line"></polyline>
+    <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="4" class="social-analytics-chart-dot"></circle>
+  </svg>`;
+}
+
+const SOCIAL_ANALYTICS_RANGE_WINDOWS = {
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+  all: 0,
+};
+
+function getSocialAnalyticsRange(network){
+  const key = String(network || '').trim().toLowerCase() || 'instagram';
+  return socialAnalyticsRuntime.rangeByNetwork[key] || '7d';
+}
+
+function setSocialAnalyticsRange(network, rangeKey){
+  const key = String(network || '').trim().toLowerCase() || 'instagram';
+  const next = Object.prototype.hasOwnProperty.call(SOCIAL_ANALYTICS_RANGE_WINDOWS, rangeKey) ? rangeKey : '7d';
+  socialAnalyticsRuntime.rangeByNetwork[key] = next;
+}
+
+function filterFollowerHistoryByRange(history, rangeKey){
+  const points = Array.isArray(history) ? history : [];
+  if (!points.length) return points;
+  const windowMs = SOCIAL_ANALYTICS_RANGE_WINDOWS[rangeKey];
+  if (!windowMs) return points;
+  const cutoff = points[points.length - 1].ts - windowMs;
+  const filtered = points.filter((entry) => entry.ts >= cutoff);
+  return filtered.length >= 2 ? filtered : points.slice(-Math.min(points.length, 2));
+}
+
+function buildFollowerPointDiffs(history){
+  const points = Array.isArray(history) ? history : [];
+  const diffs = [];
+  for (let i = 1; i < points.length; i += 1) {
+    const previous = points[i - 1];
+    const current = points[i];
+    diffs.push({
+      delta: current.value - previous.value,
+      startTs: previous.ts,
+      endTs: current.ts,
+      durationMs: current.ts - previous.ts,
+      startValue: previous.value,
+      endValue: current.value,
+    });
+  }
+  return diffs;
+}
+
+function formatFollowerRatePerHour(value){
+  if (!Number.isFinite(Number(value))) return 'n/a';
+  const num = Number(value);
+  const prefix = num > 0 ? '+' : '';
+  return `${prefix}${num.toFixed(Math.abs(num) >= 10 ? 0 : 1)}/h`;
+}
+
+function computeFollowerWindowStats(history){
+  const points = Array.isArray(history) ? history : [];
+  const diffs = buildFollowerPointDiffs(points);
+  if (!points.length) {
+    return {
+      net: null,
+      spanMs: null,
+      avgPerHour: null,
+      bestGain: null,
+      worstDrop: null,
+      momentum: null,
+      sampleCount: 0,
+      startValue: null,
+      endValue: null,
+    };
+  }
+  const startValue = points[0].value;
+  const endValue = points[points.length - 1].value;
+  const spanMs = points.length > 1 ? points[points.length - 1].ts - points[0].ts : null;
+  const net = Number.isFinite(startValue) && Number.isFinite(endValue) ? endValue - startValue : null;
+  const avgPerHour = Number.isFinite(net) && Number.isFinite(spanMs) && spanMs > 0 ? (net / spanMs) * (60 * 60 * 1000) : null;
+  const bestGain = diffs.length ? Math.max(...diffs.map((entry) => entry.delta)) : null;
+  const worstDrop = diffs.length ? Math.min(...diffs.map((entry) => entry.delta)) : null;
+  const midpoint = Math.floor(diffs.length / 2);
+  const firstHalf = midpoint > 0 ? diffs.slice(0, midpoint) : [];
+  const secondHalf = diffs.length > midpoint ? diffs.slice(midpoint) : [];
+  const toRate = (items) => {
+    const totalDelta = items.reduce((sum, item) => sum + item.delta, 0);
+    const totalMs = items.reduce((sum, item) => sum + item.durationMs, 0);
+    return totalMs > 0 ? (totalDelta / totalMs) * (60 * 60 * 1000) : null;
+  };
+  const firstRate = toRate(firstHalf);
+  const secondRate = toRate(secondHalf);
+  const momentum = Number.isFinite(firstRate) && Number.isFinite(secondRate) ? secondRate - firstRate : null;
+  return { net, spanMs, avgPerHour, bestGain, worstDrop, momentum, sampleCount: points.length, startValue, endValue };
+}
+
+function buildFollowerDailyRollups(history){
+  const points = Array.isArray(history) ? history : [];
+  const grouped = new Map();
+  for (const point of points) {
+    const date = new Date(point.ts);
+    const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    if (!grouped.has(dayKey)) grouped.set(dayKey, []);
+    grouped.get(dayKey).push(point);
+  }
+  return Array.from(grouped.entries()).map(([dayKey, items]) => {
+    const first = items[0];
+    const last = items[items.length - 1];
+    const high = Math.max(...items.map((item) => item.value));
+    const low = Math.min(...items.map((item) => item.value));
+    return {
+      dayKey,
+      label: new Date(first.ts).toLocaleDateString([], { month: 'short', day: 'numeric' }),
+      open: first.value,
+      close: last.value,
+      net: last.value - first.value,
+      high,
+      low,
+      samples: items.length,
+    };
+  }).sort((a, b) => a.dayKey.localeCompare(b.dayKey));
+}
+
+function normalizeSocialContentItems(items){
+  return (Array.isArray(items) ? items : [])
+    .map((item) => {
+      const code = String(item?.code || '').trim();
+      if (!code) return null;
+      const likeCount = item?.likeCount != null && Number.isFinite(Number(item.likeCount)) ? Number(item.likeCount) : null;
+      const commentCount = item?.commentCount != null && Number.isFinite(Number(item.commentCount)) ? Number(item.commentCount) : null;
+      const shareCount = item?.shareCount != null && Number.isFinite(Number(item.shareCount))
+        ? Number(item.shareCount)
+        : (item?.repostCount != null && Number.isFinite(Number(item.repostCount)) ? Number(item.repostCount) : null);
+      const saveCount = item?.saveCount != null && Number.isFinite(Number(item.saveCount)) ? Number(item.saveCount) : null;
+      const reachCount = item?.reachCount != null && Number.isFinite(Number(item.reachCount)) ? Number(item.reachCount) : null;
+      const repostCount = shareCount;
+      const viewCount = item?.viewCount != null && Number.isFinite(Number(item.viewCount)) ? Number(item.viewCount) : null;
+      const interactionCount = Number.isFinite(Number(item?.interactionCount))
+        ? Number(item.interactionCount)
+        : (likeCount || 0) + (commentCount || 0) + (shareCount || 0) + (saveCount || 0);
+      return {
+        code,
+        permalink: String(item?.permalink || '').trim(),
+        caption: String(item?.caption || '').replace(/\s+/g, ' ').trim(),
+        takenAt: String(item?.takenAt || '').trim(),
+        productType: String(item?.productType || '').trim(),
+        likeCount,
+        commentCount,
+        shareCount,
+        saveCount,
+        reachCount,
+        repostCount,
+        viewCount,
+        interactionCount,
+      };
+    })
+    .filter(Boolean);
+}
+
+function formatSocialMetricValue(value){
+  return Number.isFinite(Number(value)) ? new Intl.NumberFormat().format(Number(value)) : 'n/a';
+}
+
+function formatSocialContentType(item){
+  const type = String(item?.productType || '').trim().toLowerCase();
+  if (type === 'clips') return 'Reel';
+  if (type === 'carousel_container') return 'Carousel';
+  if (type) return type.replace(/_/g, ' ');
+  return 'Post';
+}
+
+function trimSocialCaption(text, maxLen = 160){
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return 'No caption';
+  if (clean.length <= maxLen) return clean;
+  return `${clean.slice(0, Math.max(24, maxLen - 1)).trimEnd()}...`;
+}
+
+function getSocialContentDataset(network){
+  const key = String(network || '').trim().toLowerCase();
+  if (key === 'facebook') {
+    const payload = socialAnalyticsRuntime.contentByNetwork.facebook || {};
+    const source = String(payload.source || '');
+    const official = /graph_api/i.test(source);
+    return {
+      supported: true,
+      label: 'Recent post performance',
+      note: official
+        ? 'Ranked by official Facebook Page interactions from the connected Meta page.'
+        : 'Facebook post metrics will appear here after the Graph connection succeeds.',
+      profile: payload.profile || { id: '', name: '', url: '' },
+      source,
+      fetchedAt: String(payload.fetchedAt || ''),
+      insights: payload.insights || null,
+      summary: payload.summary || null,
+      status: payload.status || { staleLevel: 'critical', ageMs: null, lastError: '' },
+      items: normalizeSocialContentItems(payload.items),
+    };
+  }
+  if (key === 'instagram') {
+    const payload = socialAnalyticsRuntime.contentByNetwork.instagram || {};
+    const source = String(payload.source || '');
+    const official = /graph_api/i.test(source);
+    return {
+      supported: true,
+      label: 'Recent post performance',
+      note: official
+        ? 'Ranked by official Meta total interactions from the connected professional account.'
+        : 'Ranked by visible interactions from the authenticated Instagram feed payload.',
+      profile: payload.profile || { handle: '', name: '', url: '' },
+      source,
+      fetchedAt: String(payload.fetchedAt || ''),
+      insights: payload.insights || null,
+      summary: payload.summary || null,
+      status: payload.status || { staleLevel: 'critical', ageMs: null, lastError: '' },
+      items: normalizeSocialContentItems(payload.items),
+    };
+  }
+  return {
+    supported: false,
+    label: 'Recent post performance',
+    note: 'Post-level stats are wired for Instagram first.',
+    profile: { handle: '', name: '', url: '' },
+    source: '',
+    fetchedAt: '',
+    insights: null,
+    summary: null,
+    status: { staleLevel: 'critical', ageMs: null, lastError: '' },
+    items: [],
+  };
+}
+
+function summarizeSocialFollowersStatus(networks){
+  let fresh = 0;
+  let stale = 0;
+  let issue = 0;
+  for (const network of networks) {
+    const level = String(network?.staleLevel || 'critical');
+    if (level === 'fresh') fresh += 1;
+    else if (level === 'stale') stale += 1;
+    else issue += 1;
+  }
+  if (!networks.length) return { mode: 'neutral', detail: 'idle' };
+  if (!stale && !issue) return { mode: 'fresh', detail: `${fresh} live` };
+  if (issue && !fresh && !stale) return { mode: 'error', detail: 'all blocked' };
+  if (issue) return { mode: 'degraded', detail: `${fresh} live · ${issue} issue${issue === 1 ? '' : 's'}` };
+  return { mode: 'stale', detail: `${fresh} live · ${stale} stale` };
+}
+
+const FACEBOOK_FOLLOWER_FALLBACK_SOURCES = new Set([
+  'public_scrape_estimate',
+  'facebook_page_playwright_public',
+  'facebook_session_playwright',
+]);
+
+function formatFacebookFollowerSourceLabel(source){
+  const value = String(source || '').trim();
+  if (!value) return 'unknown';
+  if (FACEBOOK_FOLLOWER_FALLBACK_SOURCES.has(value)) return value;
+  return value;
+}
+
+function renderSocialFollowersTile(config){
+  const {
+    kind,
+    forceRollingLabels,
+    icon,
+    label,
+    audienceLabel,
+    count,
+    delta,
+    rollingDelta1h,
+    rollingDelta24h,
+    source,
+    staleLevel,
+    ageMs,
+    identityLabel,
+    href,
+    analyticsKey,
+    setupRequired,
+    lastError,
+  } = config;
+  const stale = String(staleLevel || 'critical');
+  const tone = stale === 'fresh' ? 'fresh' : (stale === 'stale' ? 'stale' : 'issue');
+  const statusLabel = kind === 'community' ? 'Open' : (stale === 'fresh' ? 'Live' : (stale === 'stale' ? 'Stale' : 'Issue'));
+  const countText = hasFollowerMetricValue(count) ? new Intl.NumberFormat().format(Number(count)) : 'n/a';
+  const deltaVal = hasFollowerMetricValue(delta) ? Number(delta) : null;
+  const deltaClass = deltaVal == null ? 'followers-delta--neutral' : (deltaVal > 0 ? 'followers-delta--up' : (deltaVal < 0 ? 'followers-delta--down' : 'followers-delta--neutral'));
+  const deltaText = deltaVal == null ? 'Δ n/a' : `Δ ${formatFollowerMetricValue(deltaVal)}`;
+  const useRollingLabels = !!forceRollingLabels || hasFollowerMetricValue(rollingDelta1h) || hasFollowerMetricValue(rollingDelta24h);
+  const metricPrimaryLabel = useRollingLabels ? '1h' : 'Change';
+  const metricPrimaryValue = hasFollowerMetricValue(rollingDelta1h)
+    ? formatFollowerMetricValue(rollingDelta1h)
+    : (useRollingLabels ? 'n/a' : formatFollowerMetricValue(deltaVal));
+  const metricSecondaryLabel = useRollingLabels ? '24h' : 'Updated';
+  const metricSecondaryValue = hasFollowerMetricValue(rollingDelta24h)
+    ? formatFollowerMetricValue(rollingDelta24h)
+    : (useRollingLabels ? 'n/a' : formatFollowerAge(ageMs));
+  const analyticsButton = analyticsKey
+    ? `<button class="social-followers-analytics-btn" type="button" data-social-analytics-open="${escapeHtml(String(analyticsKey))}">Analytics</button>`
+    : '';
+
+  if (setupRequired && !hasFollowerMetricValue(count)) {
+    return `<article class="social-followers-tile social-followers-tile--${tone}">
+      <div class="social-followers-tile-head">
+        <div class="social-followers-tile-title"><span>${icon}</span><span>${escapeHtml(label)}</span></div>
+        <div class="social-followers-tile-actions">${analyticsButton}<span class="badge social-followers-tile-badge social-followers-tile-badge--${tone}">${statusLabel}</span></div>
+      </div>
+      <div class="note-meta">Setup required for ${escapeHtml(label.toLowerCase())} tracking.</div>
+      ${lastError ? `<div class="note-meta mt6">${escapeHtml(lastError)}</div>` : ''}
+    </article>`;
+  }
+
+  if (kind === 'community' && !hasFollowerMetricValue(count)) {
+    const groupHref = String(href || '').trim();
+    return `<article class="social-followers-tile social-followers-tile--${tone}">
+      <div class="social-followers-tile-head">
+        <div class="social-followers-tile-title"><span>${icon}</span><span>${escapeHtml(label)}</span></div>
+        <div class="social-followers-tile-actions">${analyticsButton}<span class="badge social-followers-tile-badge social-followers-tile-badge--${tone}">${statusLabel}</span></div>
+      </div>
+      <div class="social-followers-tile-subtitle">${escapeHtml(audienceLabel)}</div>
+      <div class="social-followers-tile-count social-followers-tile-count--label">Blast From the Ads</div>
+      <div class="note-meta">Community member counts are not publicly exposed while logged out.</div>
+      <div class="social-followers-tile-meta">${escapeHtml(identityLabel || 'Facebook Group')}${groupHref ? ` <a class="social-followers-link" href="${escapeHtml(groupHref)}" target="_blank" rel="noopener">Open group</a>` : ''}</div>
+    </article>`;
+  }
+
+  return `<article class="social-followers-tile social-followers-tile--${tone}">
+    <div class="social-followers-tile-head">
+      <div class="social-followers-tile-title"><span>${icon}</span><span>${escapeHtml(label)}</span></div>
+      <div class="social-followers-tile-actions">${analyticsButton}<span class="badge social-followers-tile-badge social-followers-tile-badge--${tone}">${statusLabel}</span></div>
+    </div>
+    <div class="social-followers-tile-subtitle">${escapeHtml(audienceLabel)}</div>
+    <div class="social-followers-tile-count">${countText}</div>
+    <div class="followers-delta ${deltaClass}">${deltaText}</div>
+    <div class="social-followers-tile-metrics">
+      <div class="social-followers-tile-metric">
+        <span>${escapeHtml(metricPrimaryLabel)}</span>
+        <strong>${escapeHtml(metricPrimaryValue)}</strong>
+      </div>
+      <div class="social-followers-tile-metric">
+        <span>${escapeHtml(metricSecondaryLabel)}</span>
+        <strong>${escapeHtml(metricSecondaryValue)}</strong>
+      </div>
+    </div>
+    <div class="social-followers-tile-meta">${escapeHtml(identityLabel || 'Unknown')} <span class="badge">${escapeHtml(source || 'fallback')}</span>${href ? ` <a class="social-followers-link" href="${escapeHtml(String(href))}" target="_blank" rel="noopener">Open</a>` : ''}</div>
+  </article>`;
+}
+
+function renderSocialFollowersPod(options = {}){
+  const el = document.getElementById('socialFollowersWidget');
+  const meta = document.getElementById('socialFollowersUpdatedAt');
+  if (!el || !meta) return;
+
+  const loaders = options.skipFetch
+    ? [Promise.resolve(), Promise.resolve(), Promise.resolve(), Promise.resolve()]
+    : [
+      fetchFacebookFollowers(options),
+      fetchFacebookGroupMembers(options),
+      fetchInstagramFollowers(options),
+      fetchTikTokFollowers(options),
+    ];
+
+  Promise.allSettled(loaders).then(() => {
+    const facebook = state.facebookFollowers || {};
+    const community = state.facebookGroupMembers || {};
+    const instagram = state.instagramFollowers || {};
+    const tiktok = state.tiktokFollowers || {};
+    const networks = [
+      {
+        key: 'facebook',
+        icon: '📘',
+        label: 'Facebook',
+        audienceLabel: 'Followers',
+        count: hasFollowerMetricValue(facebook.followersCount) ? Number(facebook.followersCount) : (hasFollowerMetricValue(facebook.fanCount) ? Number(facebook.fanCount) : null),
+        delta: facebook.delta,
+        rollingDelta1h: facebook.rollingDelta1h,
+        rollingDelta24h: facebook.rollingDelta24h,
+        source: formatFacebookFollowerSourceLabel(facebook.source),
+        staleLevel: facebook.staleLevel,
+        ageMs: facebook.ageMs,
+        identityLabel: facebook.pageName || facebook.pageId || 'Facebook',
+        analyticsKey: 'facebook',
+        lastError: facebook.lastError,
+      },
+      {
+        key: 'instagram',
+        icon: '📸',
+        label: 'Instagram',
+        audienceLabel: 'Followers',
+        count: instagram.followersCount,
+        delta: instagram.delta,
+        rollingDelta1h: instagram.rollingDelta1h,
+        rollingDelta24h: instagram.rollingDelta24h,
+        source: instagram.source,
+        staleLevel: instagram.staleLevel,
+        ageMs: instagram.ageMs,
+        identityLabel: instagram.profileName || (instagram.profileHandle ? `@${instagram.profileHandle}` : 'Instagram'),
+        analyticsKey: 'instagram',
+        lastError: instagram.lastError,
+      },
+      {
+        key: 'tiktok',
+        icon: '🎵',
+        label: 'TikTok',
+        audienceLabel: 'Followers',
+        count: tiktok.followersCount,
+        delta: tiktok.delta,
+        forceRollingLabels: true,
+        rollingDelta1h: tiktok.rollingDelta1h,
+        rollingDelta24h: tiktok.rollingDelta24h,
+        source: tiktok.source || 'tiktok_public_scrape_estimate',
+        staleLevel: tiktok.staleLevel,
+        ageMs: tiktok.ageMs,
+        identityLabel: tiktok.profileName || (tiktok.profileHandle ? `@${tiktok.profileHandle}` : 'TikTok'),
+        analyticsKey: 'tiktok',
+        setupRequired: !!tiktok.setupRequired,
+        lastError: tiktok.lastError,
+      },
+      {
+        key: 'community',
+        kind: 'community',
+        icon: '👥',
+        label: 'Community',
+        audienceLabel: 'Members',
+        count: community.membersCount,
+        delta: community.delta,
+        forceRollingLabels: true,
+        rollingDelta1h: community.rollingDelta1h,
+        rollingDelta24h: community.rollingDelta24h,
+        source: community.source || 'facebook_group_playwright',
+        staleLevel: community.staleLevel || 'fresh',
+        ageMs: community.ageMs,
+        identityLabel: community.groupName || 'Blast From the Ads Community',
+        href: community.groupUrl || 'https://www.facebook.com/groups/blastfromtheads',
+        analyticsKey: 'community',
+        setupRequired: !!community.setupRequired,
+        lastError: community.lastError,
+      },
+    ];
+
+    const statusSummary = summarizeSocialFollowersStatus(networks);
+    setPodStatusSignal(MERGED_SOCIAL_FOLLOWERS_POD_ID, statusSummary.mode, statusSummary.detail);
+    el.innerHTML = `<div class="social-followers-grid">${networks.map(renderSocialFollowersTile).join('')}</div>`;
+
+    const lastFetched = networks
+      .map((network) => Date.parse(
+        network.key === 'facebook' ? facebook.fetchedAt
+          : network.key === 'community' ? community.fetchedAt
+          : network.key === 'instagram' ? instagram.fetchedAt
+          : network.key === 'tiktok' ? tiktok.fetchedAt
+          : ''
+      ))
+      .filter((value) => Number.isFinite(value));
+    const lastFetchedText = lastFetched.length ? new Date(Math.max(...lastFetched)).toLocaleTimeString() : 'n/a';
+    meta.textContent = `Last grid refresh: ${lastFetchedText} · Auto refresh checks every minute.`;
+    const analyticsDialog = document.getElementById('socialAnalyticsDialog');
+    if (analyticsDialog?.open) renderInstagramAnalyticsDialog();
+  });
+}
+
+function getSocialAnalyticsDataset(network){
+  const key = String(network || '').trim().toLowerCase();
+  if (key === 'facebook') {
+    const fb = state.facebookFollowers || {};
+    const fbContent = socialAnalyticsRuntime.contentByNetwork.facebook || {};
+    return {
+      key,
+      title: fb.pageName || 'Facebook Analytics',
+      subtitle: fb.pageId || 'Facebook followers',
+      sourceLabel: String(fb.source || 'facebook_page_playwright_public'),
+      profileUrl: String(fbContent?.profile?.url || ''),
+      currentValue: hasFollowerMetricValue(fb.followersCount) ? Number(fb.followersCount) : (hasFollowerMetricValue(fb.fanCount) ? Number(fb.fanCount) : null),
+      currentLabel: 'followers',
+      ageMs: fb.ageMs,
+      rollingDelta1h: fb.rollingDelta1h,
+      rollingDelta24h: fb.rollingDelta24h,
+      history: normalizeFollowerHistory(socialAnalyticsRuntime.facebookHistory, 'followersCount'),
+      emptyMessage: 'No Facebook analytics data yet.',
+    };
+  }
+  if (key === 'tiktok') {
+    const tt = state.tiktokFollowers || {};
+    const handle = String(tt.profileHandle || '').trim();
+    return {
+      key,
+      title: tt.profileName || (handle ? `@${handle}` : 'TikTok Analytics'),
+      subtitle: handle ? `@${handle}` : 'TikTok followers',
+      sourceLabel: String(tt.source || 'tiktok_public_scrape_estimate'),
+      profileUrl: String(tt.profileUrl || ''),
+      currentValue: hasFollowerMetricValue(tt.followersCount) ? Number(tt.followersCount) : null,
+      currentLabel: 'followers',
+      ageMs: tt.ageMs,
+      rollingDelta1h: tt.rollingDelta1h,
+      rollingDelta24h: tt.rollingDelta24h,
+      history: normalizeFollowerHistory(socialAnalyticsRuntime.tiktokHistory, 'followersCount'),
+      emptyMessage: 'No TikTok analytics data yet.',
+    };
+  }
+  if (key === 'community') {
+    const group = state.facebookGroupMembers || {};
+    return {
+      key,
+      title: group.groupName || 'Community Analytics',
+      subtitle: 'Blast From the Ads Community',
+      sourceLabel: String(group.source || 'facebook_group_playwright'),
+      profileUrl: String(group.groupUrl || 'https://www.facebook.com/groups/blastfromtheads'),
+      currentValue: hasFollowerMetricValue(group.membersCount) ? Number(group.membersCount) : null,
+      currentLabel: 'members',
+      ageMs: group.ageMs,
+      rollingDelta1h: group.rollingDelta1h,
+      rollingDelta24h: group.rollingDelta24h,
+      history: normalizeFollowerHistory(socialAnalyticsRuntime.communityHistory, 'membersCount'),
+      emptyMessage: 'No community analytics data yet.',
+    };
+  }
+  const ig = state.instagramFollowers || {};
+  const handle = String(ig.profileHandle || '').trim();
+  return {
+    key: 'instagram',
+    title: ig.profileName || (handle ? `@${handle}` : 'Instagram Analytics'),
+    subtitle: handle ? `@${handle}` : 'Instagram followers',
+    sourceLabel: String(ig.source || 'instagram_profile_session'),
+    profileUrl: handle ? `https://www.instagram.com/${encodeURIComponent(handle)}/` : '',
+    currentValue: hasFollowerMetricValue(ig.followersCount) ? Number(ig.followersCount) : null,
+    currentLabel: 'followers',
+    ageMs: ig.ageMs,
+    rollingDelta1h: ig.rollingDelta1h,
+    rollingDelta24h: ig.rollingDelta24h,
+    history: normalizeFollowerHistory(socialAnalyticsRuntime.instagramHistory, 'followersCount'),
+    emptyMessage: 'No Instagram analytics data yet.',
+  };
+}
+
+function renderInstagramAnalyticsDialog(){
+  const dialog = document.getElementById('socialAnalyticsDialog');
+  const title = document.getElementById('socialAnalyticsDialogTitle');
+  const meta = document.getElementById('socialAnalyticsDialogMeta');
+  const body = document.getElementById('socialAnalyticsDialogBody');
+  if (!dialog || !title || !meta || !body) return;
+
+  const analytics = getSocialAnalyticsDataset(dialog.dataset.network || 'instagram');
+  const activeRange = getSocialAnalyticsRange(analytics.key);
+  const visibleHistory = filterFollowerHistoryByRange(analytics.history, activeRange);
+  const windowStats = computeFollowerWindowStats(visibleHistory);
+  const dailyRollups = buildFollowerDailyRollups(visibleHistory).slice(-7).reverse();
+  const latestCount = Number.isFinite(analytics.currentValue) ? Number(analytics.currentValue) : null;
+  const visibleHigh = visibleHistory.length ? Math.max(...visibleHistory.map((entry) => entry.value)) : null;
+  const visibleLow = visibleHistory.length ? Math.min(...visibleHistory.map((entry) => entry.value)) : null;
+  const avgIntervalMs = averageFollowerInterval(visibleHistory);
+  const contentAnalytics = getSocialContentDataset(analytics.key);
+  const contentItems = contentAnalytics.items
+    .slice()
+    .sort((a, b) => (b.interactionCount || 0) - (a.interactionCount || 0))
+    .slice(0, 8);
+  const contentSummary = contentAnalytics.summary || null;
+  const contentInsights = contentAnalytics.insights && typeof contentAnalytics.insights === 'object' ? contentAnalytics.insights : null;
+  title.textContent = analytics.title;
+  meta.innerHTML = `<span>${escapeHtml(analytics.subtitle)}</span> <span class="badge">${escapeHtml(analytics.sourceLabel)}</span>${analytics.profileUrl ? ` <a class="social-followers-link" href="${escapeHtml(analytics.profileUrl)}" target="_blank" rel="noopener">Open</a>` : ''}`;
+
+  if (latestCount == null) {
+    body.innerHTML = `<div class="note-meta">${escapeHtml(analytics.emptyMessage)}</div>`;
+    return;
+  }
+
+  const recentRows = visibleHistory.slice(-12).reverse().map((entry, index, rows) => {
+    const previous = rows[index + 1];
+    const delta = previous ? entry.value - previous.value : null;
+    return `<div class="social-analytics-row">
+      <span>${escapeHtml(formatFollowerTimestamp(entry.fetchedAt))}</span>
+      <strong>${new Intl.NumberFormat().format(entry.value)}</strong>
+      <span>${escapeHtml(formatFollowerMetricValue(delta))}</span>
+    </div>`;
+  }).join('');
+
+  const rangePills = Object.keys(SOCIAL_ANALYTICS_RANGE_WINDOWS).map((rangeKey) => {
+    const active = rangeKey === activeRange;
+    return `<button type="button" class="social-analytics-range-pill${active ? ' is-active' : ''}" data-social-analytics-range="${escapeHtml(rangeKey)}">${escapeHtml(rangeKey)}</button>`;
+  }).join('');
+
+  const dailyRows = dailyRollups.map((entry) => `<div class="social-analytics-row">
+      <span>${escapeHtml(entry.label)} <span class="note-meta">(${entry.samples} pts)</span></span>
+      <strong>${escapeHtml(formatFollowerMetricValue(entry.net))}</strong>
+      <span>${new Intl.NumberFormat().format(entry.close)}</span>
+    </div>`).join('');
+
+  const contentRows = contentItems.map((item, index) => {
+    const shareCount = item.shareCount != null ? item.shareCount : item.repostCount;
+    const primaryReactionLabel = analytics.key === 'facebook' ? 'Reactions' : 'Likes';
+    return `<div class="social-analytics-content-item">
+      <div class="social-analytics-content-item-head">
+        <div>
+          <span class="social-analytics-kicker">#${index + 1} · ${escapeHtml(formatSocialContentType(item))}</span>
+          <strong>${escapeHtml(trimSocialCaption(item.caption, 132))}</strong>
+        </div>
+        ${item.permalink ? `<a class="social-followers-link" href="${escapeHtml(item.permalink)}" target="_blank" rel="noopener">Open</a>` : ''}
+      </div>
+      <div class="social-analytics-content-metrics">
+        <span>Posted ${escapeHtml(formatFollowerTimestamp(item.takenAt))}</span>
+        <span>Interactions ${escapeHtml(formatSocialMetricValue(item.interactionCount))}</span>
+        <span>${escapeHtml(primaryReactionLabel)} ${escapeHtml(formatSocialMetricValue(item.likeCount))}</span>
+        <span>Comments ${escapeHtml(formatSocialMetricValue(item.commentCount))}</span>
+        ${shareCount != null ? `<span>Shares ${escapeHtml(formatSocialMetricValue(shareCount))}</span>` : ''}
+        ${item.saveCount != null ? `<span>Saves ${escapeHtml(formatSocialMetricValue(item.saveCount))}</span>` : ''}
+        ${item.reachCount != null ? `<span>Reach ${escapeHtml(formatSocialMetricValue(item.reachCount))}</span>` : ''}
+        ${item.viewCount != null ? `<span>Views ${escapeHtml(formatSocialMetricValue(item.viewCount))}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  const summaryReactionLabel = analytics.key === 'facebook' ? 'Reactions' : 'Likes';
+  const insightEntries = contentInsights ? [
+    ['Followers', contentInsights.followersCount],
+    ['Views', contentInsights.views],
+    ['Reach', contentInsights.reach],
+    ['Engaged', contentInsights.accountsEngaged],
+    ['Interactions', contentInsights.totalInteractions],
+    [summaryReactionLabel, contentInsights.likes],
+    ['Comments', contentInsights.comments],
+    ['Shares', contentInsights.shares],
+    ['Saves', contentInsights.saves],
+    ['Replies', contentInsights.replies],
+  ].filter(([, value]) => Number.isFinite(Number(value))) : [];
+  const insightsHeading = analytics.key === 'facebook' ? 'Page post snapshot' : 'Account insight snapshot';
+  const insightsNote = analytics.key === 'facebook'
+    ? 'Official Meta metrics aggregated from recent Facebook Page posts.'
+    : 'Official Meta insights from the connected Instagram professional account.';
+
+  const insightsPanel = insightEntries.length
+    ? `<section class="social-analytics-panel">
+        <div class="social-analytics-panel-head">
+          <div>
+            <span class="social-analytics-kicker">${escapeHtml(insightsHeading)}</span>
+            <strong>Last ${escapeHtml(String(contentInsights?.rangeDays || 7))} days</strong>
+          </div>
+          <div class="social-analytics-chart-meta">
+            ${contentInsights?.since ? `<span>${escapeHtml(formatFollowerTimestamp(contentInsights.since))}</span>` : ''}
+            ${contentInsights?.until ? `<span>${escapeHtml(formatFollowerTimestamp(contentInsights.until))}</span>` : ''}
+          </div>
+        </div>
+        <div class="note-meta">${escapeHtml(insightsNote)}</div>
+        <div class="social-analytics-content-summary">
+          ${insightEntries.map(([label, value]) => `<span>${escapeHtml(label)} <strong>${escapeHtml(formatSocialMetricValue(value))}</strong></span>`).join('')}
+        </div>
+      </section>`
+    : ((contentAnalytics.supported && contentAnalytics.status?.lastError && /graph|token|meta/i.test(String(contentAnalytics.status.lastError || '')))
+      ? `<section class="social-analytics-panel">
+          <div class="social-analytics-panel-head">
+            <div>
+              <span class="social-analytics-kicker">${escapeHtml(insightsHeading)}</span>
+              <strong>Official insights unavailable</strong>
+            </div>
+          </div>
+          <div class="note-meta">${escapeHtml(String(contentAnalytics.status.lastError || '').slice(0, 260))}</div>
+        </section>`
+    : '');
+
+  const contentPanel = !contentAnalytics.supported
+    ? `<section class="social-analytics-panel">
+        <div class="social-analytics-panel-head">
+          <div>
+            <span class="social-analytics-kicker">${escapeHtml(contentAnalytics.label)}</span>
+            <strong>Coming online</strong>
+          </div>
+        </div>
+        <div class="note-meta">${escapeHtml(contentAnalytics.note)}</div>
+      </section>`
+    : `<section class="social-analytics-panel">
+        <div class="social-analytics-panel-head">
+          <div>
+            <span class="social-analytics-kicker">${escapeHtml(contentAnalytics.label)}</span>
+            <strong>${contentSummary?.itemCount ? `${contentSummary.itemCount} recent posts sampled` : 'No recent posts yet'}</strong>
+          </div>
+          <div class="social-analytics-chart-meta">
+            ${contentAnalytics.source ? `<span>${escapeHtml(contentAnalytics.source)}</span>` : ''}
+            ${contentAnalytics.fetchedAt ? `<span>${escapeHtml(formatFollowerTimestamp(contentAnalytics.fetchedAt))}</span>` : ''}
+          </div>
+        </div>
+        <div class="note-meta">${escapeHtml(contentAnalytics.note)}</div>
+        ${contentSummary?.itemCount ? `<div class="social-analytics-content-summary">
+          <span>Avg interactions <strong>${escapeHtml(formatSocialMetricValue(contentSummary.avgInteractions))}</strong></span>
+          <span>Avg ${escapeHtml(summaryReactionLabel.toLowerCase())} <strong>${escapeHtml(formatSocialMetricValue(contentSummary.avgLikes))}</strong></span>
+          <span>Avg comments <strong>${escapeHtml(formatSocialMetricValue(contentSummary.avgComments))}</strong></span>
+          ${contentSummary?.avgShares != null ? `<span>Avg shares <strong>${escapeHtml(formatSocialMetricValue(contentSummary.avgShares))}</strong></span>` : ''}
+          <span>Best post <strong>${escapeHtml(formatSocialMetricValue(contentSummary.topInteractionCount))}</strong></span>
+        </div>` : ''}
+        ${contentRows || `<div class="note-meta">${escapeHtml(contentAnalytics.status?.lastError || 'No content metrics available yet.')}</div>`}
+      </section>`;
+
+  body.innerHTML = `
+    <section class="social-analytics-panel social-analytics-range-panel">
+      <div class="social-analytics-panel-head">
+        <div>
+          <span class="social-analytics-kicker">Window</span>
+          <strong>${escapeHtml(activeRange)}</strong>
+        </div>
+      </div>
+      <div class="social-analytics-range-pills">${rangePills}</div>
+    </section>
+    <div class="social-analytics-summary-grid">
+      <section class="social-analytics-panel">
+        <span class="social-analytics-kicker">Current ${escapeHtml(analytics.currentLabel)}</span>
+        <strong>${new Intl.NumberFormat().format(latestCount)}</strong>
+        <div class="note-meta">${escapeHtml(formatFollowerAge(analytics.ageMs))}</div>
+      </section>
+      <section class="social-analytics-panel">
+        <span class="social-analytics-kicker">Net change</span>
+        <strong>${escapeHtml(formatFollowerMetricValue(analytics.rollingDelta1h))}</strong>
+        <div class="note-meta">Past 1h</div>
+      </section>
+      <section class="social-analytics-panel">
+        <span class="social-analytics-kicker">Net change</span>
+        <strong>${escapeHtml(formatFollowerMetricValue(analytics.rollingDelta24h))}</strong>
+        <div class="note-meta">Past 24h</div>
+      </section>
+      <section class="social-analytics-panel">
+        <span class="social-analytics-kicker">Capture cadence</span>
+        <strong>${escapeHtml(formatDurationCompact(avgIntervalMs))}</strong>
+        <div class="note-meta">${visibleHistory.length} samples in view</div>
+      </section>
+      <section class="social-analytics-panel">
+        <span class="social-analytics-kicker">Window net</span>
+        <strong>${escapeHtml(formatFollowerMetricValue(windowStats.net))}</strong>
+        <div class="note-meta">${escapeHtml(formatDurationCompact(windowStats.spanMs))}</div>
+      </section>
+      <section class="social-analytics-panel">
+        <span class="social-analytics-kicker">Average pace</span>
+        <strong>${escapeHtml(formatFollowerRatePerHour(windowStats.avgPerHour))}</strong>
+        <div class="note-meta">Across the active window</div>
+      </section>
+      <section class="social-analytics-panel">
+        <span class="social-analytics-kicker">Best jump</span>
+        <strong>${escapeHtml(formatFollowerMetricValue(windowStats.bestGain))}</strong>
+        <div class="note-meta">Largest positive sample delta</div>
+      </section>
+      <section class="social-analytics-panel">
+        <span class="social-analytics-kicker">Worst dip</span>
+        <strong>${escapeHtml(formatFollowerMetricValue(windowStats.worstDrop))}</strong>
+        <div class="note-meta">Largest negative sample delta</div>
+      </section>
+      <section class="social-analytics-panel">
+        <span class="social-analytics-kicker">Momentum</span>
+        <strong>${escapeHtml(formatFollowerRatePerHour(windowStats.momentum))}</strong>
+        <div class="note-meta">Recent pace vs earlier pace</div>
+      </section>
+    </div>
+    <section class="social-analytics-panel social-analytics-chart-panel">
+      <div class="social-analytics-panel-head">
+        <div>
+          <span class="social-analytics-kicker">Follower trend</span>
+          <strong>${escapeHtml(formatFollowerMetricValue(windowStats.net))}</strong>
+        </div>
+        <div class="social-analytics-chart-meta">
+          <span>Window ${escapeHtml(formatDurationCompact(windowStats.spanMs))}</span>
+          <span>High ${Number.isFinite(visibleHigh) ? new Intl.NumberFormat().format(visibleHigh) : 'n/a'}</span>
+          <span>Low ${Number.isFinite(visibleLow) ? new Intl.NumberFormat().format(visibleLow) : 'n/a'}</span>
+        </div>
+      </div>
+      ${visibleHistory.length > 1
+        ? buildFollowerSparkline(visibleHistory)
+        : '<div class="note-meta">More snapshots will fill this chart in.</div>'}
+      <div class="social-analytics-range">
+        <span>${escapeHtml(visibleHistory.length ? formatFollowerTimestamp(visibleHistory[0].fetchedAt) : 'n/a')}</span>
+        <span>${escapeHtml(visibleHistory.length ? formatFollowerTimestamp(visibleHistory[visibleHistory.length - 1].fetchedAt) : 'n/a')}</span>
+      </div>
+    </section>
+    ${insightsPanel}
+    ${contentPanel}
+    <section class="social-analytics-panel">
+      <div class="social-analytics-panel-head">
+        <div>
+          <span class="social-analytics-kicker">Recent snapshots</span>
+          <strong>Latest 12 points</strong>
+        </div>
+      </div>
+      <div class="social-analytics-table">
+        <div class="social-analytics-row social-analytics-row--head">
+          <span>Captured</span>
+          <span>Followers</span>
+          <span>Δ</span>
+        </div>
+        ${recentRows || '<div class="note-meta">No snapshots yet.</div>'}
+      </div>
+    </section>
+    <section class="social-analytics-panel">
+      <div class="social-analytics-panel-head">
+        <div>
+          <span class="social-analytics-kicker">Daily rollup</span>
+          <strong>Latest 7 days in range</strong>
+        </div>
+      </div>
+      <div class="social-analytics-table">
+        <div class="social-analytics-row social-analytics-row--head">
+          <span>Day</span>
+          <span>Net</span>
+          <span>Close</span>
+        </div>
+        ${dailyRows || '<div class="note-meta">Not enough history for daily rollups yet.</div>'}
+      </div>
+    </section>`;
+}
+
+async function openSocialAnalyticsDialog(network){
+  const key = String(network || '').trim().toLowerCase();
+  if (key === 'facebook') await Promise.allSettled([fetchFacebookFollowers(), fetchFacebookContent()]);
+  else if (key === 'tiktok') await fetchTikTokFollowers();
+  else if (key === 'community') await fetchFacebookGroupMembers();
+  else await Promise.allSettled([fetchInstagramFollowers(), fetchInstagramContent()]);
+  const dialog = document.getElementById('socialAnalyticsDialog');
+  if (!dialog) return;
+  dialog.dataset.network = key;
+  renderInstagramAnalyticsDialog();
+  if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
+}
+
+async function refreshSocialAnalyticsDialog(){
+  const dialog = document.getElementById('socialAnalyticsDialog');
+  const key = String(dialog?.dataset?.network || '').trim().toLowerCase();
+  const btn = document.getElementById('socialAnalyticsRefreshBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Refreshing...';
+  }
+  try {
+    if (key === 'facebook') await Promise.allSettled([fetchFacebookFollowers({ manual: true }), fetchFacebookContent({ manual: true })]);
+    else if (key === 'tiktok') await fetchTikTokFollowers({ manual: true });
+    else if (key === 'community') await fetchFacebookGroupMembers({ manual: true });
+    else await Promise.allSettled([fetchInstagramFollowers({ manual: true }), fetchInstagramContent({ manual: true })]);
+    renderSocialFollowersPod({ skipFetch: true });
+    renderInstagramAnalyticsDialog();
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Refresh';
+    }
+  }
+}
+
 async function fetchFacebookFollowers(options = {}){
   state.facebookFollowers = state.facebookFollowers && typeof state.facebookFollowers === 'object' ? state.facebookFollowers : { followersCount: null, fanCount: null, delta: null, rollingDelta1h: null, rollingDelta24h: null, pageName: '', pageId: '', fetchedAt: '', source: '', staleLevel: 'fresh', ageMs: null, lastError: '', loading: false };
   const manual = !!options.manual;
@@ -3590,6 +5417,7 @@ async function fetchFacebookFollowers(options = {}){
     state.facebookFollowers.staleLevel = String(payload?.status?.staleLevel || 'critical');
     state.facebookFollowers.ageMs = Number.isFinite(Number(payload?.status?.ageMs)) ? Number(payload.status.ageMs) : null;
     state.facebookFollowers.lastError = String(payload?.status?.lastError || '').slice(0, 300);
+    socialAnalyticsRuntime.facebookHistory = Array.isArray(payload?.history) ? payload.history.slice() : [];
     clearPollingBackoff('facebook-followers');
   } catch (error) {
     const backoff = registerPollingFailure('facebook-followers', error, 'Facebook followers unavailable');
@@ -3600,6 +5428,84 @@ async function fetchFacebookFollowers(options = {}){
     state.facebookFollowers.loading = false;
   }
   return state.facebookFollowers;
+}
+
+async function fetchFacebookContent(options = {}){
+  const manual = !!options.manual;
+  const endpoint = manual ? '/api/facebook-content/refresh?source=manual' : '/api/facebook-content';
+  const method = manual ? 'POST' : 'GET';
+  try {
+    const res = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' } });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok && !payload?.status) throw new Error(payload?.message || payload?.error || 'facebook content fetch failed');
+    socialAnalyticsRuntime.contentByNetwork.facebook = {
+      ok: !!payload?.ok,
+      profile: {
+        id: String(payload?.profile?.id || state.facebookFollowers?.pageId || ''),
+        name: String(payload?.profile?.name || state.facebookFollowers?.pageName || ''),
+        url: String(payload?.profile?.url || ''),
+      },
+      fetchedAt: String(payload?.fetchedAt || ''),
+      source: String(payload?.source || ''),
+      insights: payload?.insights || null,
+      summary: payload?.summary || null,
+      items: Array.isArray(payload?.items) ? payload.items.slice() : [],
+      status: {
+        staleLevel: String(payload?.status?.staleLevel || 'critical'),
+        ageMs: Number.isFinite(Number(payload?.status?.ageMs)) ? Number(payload.status.ageMs) : null,
+        lastError: String(payload?.status?.lastError || '').slice(0, 300),
+      },
+    };
+  } catch (error) {
+    const current = socialAnalyticsRuntime.contentByNetwork.facebook || {};
+    socialAnalyticsRuntime.contentByNetwork.facebook = {
+      ok: !!current.ok,
+      profile: current.profile || { id: '', name: '', url: '' },
+      fetchedAt: String(current.fetchedAt || ''),
+      source: String(current.source || ''),
+      insights: current.insights || null,
+      summary: current.summary || null,
+      items: Array.isArray(current.items) ? current.items.slice() : [],
+      status: {
+        staleLevel: String(current?.status?.staleLevel || 'critical'),
+        ageMs: Number.isFinite(Number(current?.status?.ageMs)) ? Number(current.status.ageMs) : null,
+        lastError: String(error?.message || error || 'fetch_failed').slice(0, 300),
+      },
+    };
+  }
+  return socialAnalyticsRuntime.contentByNetwork.facebook;
+}
+
+async function fetchFacebookGroupMembers(options = {}){
+  state.facebookGroupMembers = state.facebookGroupMembers && typeof state.facebookGroupMembers === 'object' ? state.facebookGroupMembers : { membersCount: null, delta: null, rollingDelta1h: null, rollingDelta24h: null, groupName: 'Blast From the Ads Community', groupUrl: 'https://www.facebook.com/groups/blastfromtheads', fetchedAt: '', source: '', staleLevel: 'fresh', ageMs: null, setupRequired: false, lastError: '', loading: false };
+  const manual = !!options.manual;
+  const endpoint = manual ? '/api/facebook-group-members/refresh?source=manual' : '/api/facebook-group-members';
+  const method = manual ? 'POST' : 'GET';
+  state.facebookGroupMembers.loading = true;
+  try {
+    const res = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' } });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok && !payload?.status) throw new Error(payload?.error || payload?.message || 'facebook group members fetch failed');
+    state.facebookGroupMembers.membersCount = Number.isFinite(Number(payload?.latest?.membersCount)) ? Number(payload.latest.membersCount) : null;
+    state.facebookGroupMembers.delta = Number.isFinite(Number(payload?.latest?.delta)) ? Number(payload.latest.delta) : null;
+    state.facebookGroupMembers.rollingDelta1h = Number.isFinite(Number(payload?.latest?.rollingDelta1h)) ? Number(payload.latest.rollingDelta1h) : null;
+    state.facebookGroupMembers.rollingDelta24h = Number.isFinite(Number(payload?.latest?.rollingDelta24h)) ? Number(payload.latest.rollingDelta24h) : null;
+    state.facebookGroupMembers.groupName = String(payload?.group?.name || 'Blast From the Ads Community');
+    state.facebookGroupMembers.groupUrl = String(payload?.group?.url || 'https://www.facebook.com/groups/blastfromtheads');
+    state.facebookGroupMembers.fetchedAt = String(payload?.latest?.fetchedAt || payload?.status?.lastSuccessAt || '');
+    state.facebookGroupMembers.source = String(payload?.latest?.source || '');
+    state.facebookGroupMembers.staleLevel = String(payload?.status?.staleLevel || 'critical');
+    state.facebookGroupMembers.ageMs = Number.isFinite(Number(payload?.status?.ageMs)) ? Number(payload.status.ageMs) : null;
+    state.facebookGroupMembers.setupRequired = !!payload?.status?.setupRequired;
+    state.facebookGroupMembers.lastError = String(payload?.status?.lastError || '').slice(0, 300);
+    socialAnalyticsRuntime.communityHistory = Array.isArray(payload?.history) ? payload.history.slice() : [];
+  } catch (error) {
+    state.facebookGroupMembers.lastError = String(error?.message || error || 'fetch_failed').slice(0, 300);
+    if (!state.facebookGroupMembers.staleLevel) state.facebookGroupMembers.staleLevel = 'critical';
+  } finally {
+    state.facebookGroupMembers.loading = false;
+  }
+  return state.facebookGroupMembers;
 }
 
 function renderFacebookFollowersPod(options = {}){
@@ -3622,8 +5528,7 @@ function renderFacebookFollowersPod(options = {}){
       return;
     }
 
-    const source = String(ff.source || '').toLowerCase();
-    const sourceLabel = source === 'public_scrape_estimate' ? 'public_scrape_estimate' : 'graph_api';
+    const sourceLabel = formatFacebookFollowerSourceLabel(ff.source);
     const deltaVal = Number.isFinite(Number(ff.delta)) ? Number(ff.delta) : null;
     const deltaClass = deltaVal == null ? 'followers-delta--neutral' : (deltaVal > 0 ? 'followers-delta--up' : (deltaVal < 0 ? 'followers-delta--down' : 'followers-delta--neutral'));
     const deltaPrefix = deltaVal != null && deltaVal > 0 ? '+' : '';
@@ -3672,6 +5577,7 @@ async function fetchInstagramFollowers(options = {}){
     state.instagramFollowers.staleLevel = String(payload?.status?.staleLevel || 'critical');
     state.instagramFollowers.ageMs = Number.isFinite(Number(payload?.status?.ageMs)) ? Number(payload.status.ageMs) : null;
     state.instagramFollowers.lastError = String(payload?.status?.lastError || '').slice(0, 300);
+    socialAnalyticsRuntime.instagramHistory = Array.isArray(payload?.history) ? payload.history.slice() : [];
     clearPollingBackoff('instagram-followers');
   } catch (error) {
     const backoff = registerPollingFailure('instagram-followers', error, 'Instagram followers unavailable');
@@ -3682,6 +5588,52 @@ async function fetchInstagramFollowers(options = {}){
     state.instagramFollowers.loading = false;
   }
   return state.instagramFollowers;
+}
+
+async function fetchInstagramContent(options = {}){
+  const manual = !!options.manual;
+  const endpoint = manual ? '/api/instagram-content/refresh?source=manual' : '/api/instagram-content';
+  const method = manual ? 'POST' : 'GET';
+  try {
+    const res = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' } });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok && !payload?.status) throw new Error(payload?.message || payload?.error || 'instagram content fetch failed');
+    socialAnalyticsRuntime.contentByNetwork.instagram = {
+      ok: !!payload?.ok,
+      profile: {
+        handle: String(payload?.profile?.handle || state.instagramFollowers?.profileHandle || ''),
+        name: String(payload?.profile?.name || state.instagramFollowers?.profileName || ''),
+        url: String(payload?.profile?.url || (state.instagramFollowers?.profileHandle ? `https://www.instagram.com/${state.instagramFollowers.profileHandle}/` : '')),
+      },
+      fetchedAt: String(payload?.fetchedAt || ''),
+      source: String(payload?.source || ''),
+      insights: payload?.insights || null,
+      summary: payload?.summary || null,
+      items: Array.isArray(payload?.items) ? payload.items.slice() : [],
+      status: {
+        staleLevel: String(payload?.status?.staleLevel || 'critical'),
+        ageMs: Number.isFinite(Number(payload?.status?.ageMs)) ? Number(payload.status.ageMs) : null,
+        lastError: String(payload?.status?.lastError || '').slice(0, 300),
+      },
+    };
+  } catch (error) {
+    const current = socialAnalyticsRuntime.contentByNetwork.instagram || {};
+    socialAnalyticsRuntime.contentByNetwork.instagram = {
+      ok: !!current.ok,
+      profile: current.profile || { handle: '', name: '', url: '' },
+      fetchedAt: String(current.fetchedAt || ''),
+      source: String(current.source || ''),
+      insights: current.insights || null,
+      summary: current.summary || null,
+      items: Array.isArray(current.items) ? current.items.slice() : [],
+      status: {
+        staleLevel: String(current?.status?.staleLevel || 'critical'),
+        ageMs: Number.isFinite(Number(current?.status?.ageMs)) ? Number(current.status.ageMs) : null,
+        lastError: String(error?.message || error || 'fetch_failed').slice(0, 300),
+      },
+    };
+  }
+  return socialAnalyticsRuntime.contentByNetwork.instagram;
 }
 
 function renderInstagramFollowersPod(options = {}){
@@ -3726,7 +5678,7 @@ function renderInstagramFollowersPod(options = {}){
 }
 
 async function fetchTikTokFollowers(options = {}){
-  state.tiktokFollowers = state.tiktokFollowers && typeof state.tiktokFollowers === 'object' ? state.tiktokFollowers : { followersCount: null, delta: null, profileName: '', profileHandle: '', profileUrl: '', fetchedAt: '', source: '', staleLevel: 'fresh', ageMs: null, setupRequired: false, lastError: '', loading: false };
+  state.tiktokFollowers = state.tiktokFollowers && typeof state.tiktokFollowers === 'object' ? state.tiktokFollowers : { followersCount: null, delta: null, rollingDelta1h: null, rollingDelta24h: null, profileName: '', profileHandle: '', profileUrl: '', fetchedAt: '', source: '', staleLevel: 'fresh', ageMs: null, setupRequired: false, lastError: '', loading: false };
   const manual = !!options.manual;
   const endpoint = manual ? '/api/tiktok-followers/refresh?source=manual' : '/api/tiktok-followers';
   const method = manual ? 'POST' : 'GET';
@@ -3739,6 +5691,8 @@ async function fetchTikTokFollowers(options = {}){
     if (!res.ok && !payload?.status) throw new Error(payload?.error || payload?.message || 'tiktok followers fetch failed');
     state.tiktokFollowers.followersCount = Number.isFinite(Number(payload?.latest?.followersCount)) ? Number(payload.latest.followersCount) : null;
     state.tiktokFollowers.delta = Number.isFinite(Number(payload?.latest?.delta)) ? Number(payload.latest.delta) : null;
+    state.tiktokFollowers.rollingDelta1h = Number.isFinite(Number(payload?.latest?.rollingDelta1h)) ? Number(payload.latest.rollingDelta1h) : null;
+    state.tiktokFollowers.rollingDelta24h = Number.isFinite(Number(payload?.latest?.rollingDelta24h)) ? Number(payload.latest.rollingDelta24h) : null;
     state.tiktokFollowers.profileName = String(payload?.profile?.name || 'TikTok');
     state.tiktokFollowers.profileHandle = String(payload?.profile?.handle || '');
     state.tiktokFollowers.profileUrl = String(payload?.profile?.url || '');
@@ -3748,6 +5702,7 @@ async function fetchTikTokFollowers(options = {}){
     state.tiktokFollowers.ageMs = Number.isFinite(Number(payload?.status?.ageMs)) ? Number(payload.status.ageMs) : null;
     state.tiktokFollowers.setupRequired = !!payload?.status?.setupRequired;
     state.tiktokFollowers.lastError = String(payload?.status?.lastError || '').slice(0, 300);
+    socialAnalyticsRuntime.tiktokHistory = Array.isArray(payload?.history) ? payload.history.slice() : [];
     clearPollingBackoff('tiktok-followers');
   } catch (error) {
     const backoff = registerPollingFailure('tiktok-followers', error, 'TikTok followers unavailable');
@@ -3788,9 +5743,18 @@ function renderTikTokFollowersPod(options = {}){
     const deltaClass = deltaVal == null ? 'followers-delta--neutral' : (deltaVal > 0 ? 'followers-delta--up' : (deltaVal < 0 ? 'followers-delta--down' : 'followers-delta--neutral'));
     const deltaPrefix = deltaVal != null && deltaVal > 0 ? '+' : '';
     const deltaText = deltaVal == null ? 'Δ n/a' : ('Δ ' + deltaPrefix + new Intl.NumberFormat().format(deltaVal));
+    const rolling1h = Number.isFinite(Number(tt.rollingDelta1h)) ? Number(tt.rollingDelta1h) : null;
+    const rolling24h = Number.isFinite(Number(tt.rollingDelta24h)) ? Number(tt.rollingDelta24h) : null;
+    const rolling1hPrefix = rolling1h != null && rolling1h > 0 ? '+' : '';
+    const rolling24hPrefix = rolling24h != null && rolling24h > 0 ? '+' : '';
+    const formatRolling = (value, prefix) => value == null ? 'n/a' : (prefix + new Intl.NumberFormat().format(value));
     const profileLabel = tt.profileName || (tt.profileHandle ? ('@' + tt.profileHandle) : 'Unknown');
     el.innerHTML = '<div class="followers-count">' + new Intl.NumberFormat().format(count) + '</div>' +
       '<div class="followers-delta ' + deltaClass + '">' + deltaText + '</div>' +
+      '<div class="followers-metrics-grid">' +
+        '<div class="followers-metric"><div class="followers-metric-label">New followers · 1h</div><div class="followers-metric-value">' + formatRolling(rolling1h, rolling1hPrefix) + '</div></div>' +
+        '<div class="followers-metric"><div class="followers-metric-label">New followers · 24h</div><div class="followers-metric-value">' + formatRolling(rolling24h, rolling24hPrefix) + '</div></div>' +
+      '</div>' +
       '<div class="note-meta">Profile: ' + escapeHtml(profileLabel) + ' <span class="badge">' + escapeHtml(tt.source || 'tiktok_public_scrape_estimate') + '</span></div>' +
       (tt.lastError ? ('<div class="note-meta">Last error: ' + escapeHtml(tt.lastError) + '</div>') : '');
 
@@ -3872,6 +5836,854 @@ function renderYouTubeSubscribersPod(options = {}){
   });
 }
 
+function updateEbayTrafficRefreshButton(){
+  const btn = document.getElementById('ebayTrafficRefreshBtn');
+  if (!btn) return;
+  btn.disabled = ebayTrafficInFlight;
+  btn.textContent = ebayTrafficInFlight ? 'Refreshing…' : 'Refresh';
+}
+
+function setEbayTrafficActiveStoreId(storeId){
+  ebayTrafficActiveStoreId = String(storeId || '').trim();
+  try { localStorage.setItem(EBAY_TRAFFIC_ACTIVE_STORE_KEY, ebayTrafficActiveStoreId); } catch {}
+}
+
+function setEbayTrafficActiveInsightView(view){
+  const nextView = String(view || '').trim();
+  ebayTrafficActiveInsightView = nextView === 'trend' || nextView === 'promo' ? nextView : 'sources';
+  try { localStorage.setItem(EBAY_TRAFFIC_ACTIVE_INSIGHT_KEY, ebayTrafficActiveInsightView); } catch {}
+}
+
+function setEbayTrafficActiveListingsView(view){
+  ebayTrafficActiveListingsView = String(view || '').trim() === 'watchers' ? 'watchers' : 'traffic';
+  try { localStorage.setItem(EBAY_TRAFFIC_ACTIVE_LISTINGS_KEY, ebayTrafficActiveListingsView); } catch {}
+}
+
+function setEbayTrafficPromoLiftWindow(view){
+  ebayTrafficPromoLiftWindow = String(view || '').trim() === 'avg7' ? 'avg7' : 'day';
+  try { localStorage.setItem(EBAY_TRAFFIC_PROMO_LIFT_WINDOW_KEY, ebayTrafficPromoLiftWindow); } catch {}
+}
+
+function resolveEbayTrafficActiveStore(stores = []){
+  const list = Array.isArray(stores) ? stores : [];
+  if (!list.length) return null;
+  const current = list.find((store) => String(store?.id || '') === ebayTrafficActiveStoreId);
+  if (current) return current;
+  const fallback = list.find((store) => String(store?.status || '') === 'ok')
+    || list.find((store) => !!store?.configured)
+    || list[0];
+  setEbayTrafficActiveStoreId(String(fallback?.id || ''));
+  return fallback;
+}
+
+function formatEbayTrafficNumber(value, options = {}){
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 'n/a';
+  if (options.compact) {
+    return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(numeric);
+  }
+  return new Intl.NumberFormat().format(Math.round(numeric));
+}
+
+function formatEbayTrafficPercent(value){
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 'n/a';
+  return `${numeric.toFixed(numeric >= 10 ? 1 : 2).replace(/\.?0+$/, '')}%`;
+}
+
+function formatEbayTrafficDecimal(value, options = {}){
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 'n/a';
+  const maximumFractionDigits = Number.isFinite(Number(options.maximumFractionDigits))
+    ? Math.max(0, Number(options.maximumFractionDigits))
+    : 2;
+  const minimumFractionDigits = Number.isFinite(Number(options.minimumFractionDigits))
+    ? Math.max(0, Number(options.minimumFractionDigits))
+    : (Math.abs(numeric) > 0 && Math.abs(numeric) < 1 ? 1 : 0);
+  return new Intl.NumberFormat(undefined, {
+    minimumFractionDigits,
+    maximumFractionDigits,
+  }).format(numeric);
+}
+
+function formatEbayTrafficDateTimeLabel(value){
+  const parsed = Date.parse(String(value || '').trim());
+  if (!Number.isFinite(parsed)) return '';
+  return new Date(parsed).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function classifyEbayMarketingReportAge(value){
+  const parsed = Date.parse(String(value || '').trim());
+  if (!Number.isFinite(parsed)) return null;
+  const ageMs = Math.max(0, Date.now() - parsed);
+  if (ageMs <= 2 * 60 * 60 * 1000) {
+    return { tone: 'fresh', label: 'Fresh report' };
+  }
+  if (ageMs <= 12 * 60 * 60 * 1000) {
+    return { tone: 'warm', label: 'Aging report' };
+  }
+  return { tone: 'stale', label: 'Older report' };
+}
+
+function buildEbayListingUrl(listingId, marketplaceId = 'EBAY_US'){
+  const itemId = String(listingId || '').trim();
+  if (!itemId) return '';
+  const marketplace = String(marketplaceId || 'EBAY_US').trim().toUpperCase();
+  const hostMap = {
+    EBAY_US: 'www.ebay.com',
+    EBAY_MOTORS_US: 'www.ebay.com',
+    EBAY_GB: 'www.ebay.co.uk',
+    EBAY_DE: 'www.ebay.de',
+    EBAY_AU: 'www.ebay.com.au',
+    EBAY_CA: 'www.ebay.ca',
+    EBAY_FR: 'www.ebay.fr',
+    EBAY_IT: 'www.ebay.it',
+    EBAY_ES: 'www.ebay.es',
+  };
+  const host = hostMap[marketplace] || 'www.ebay.com';
+  return `https://${host}/itm/${encodeURIComponent(itemId)}`;
+}
+
+function formatEbayTrafficDateLabel(value){
+  const text = String(value || '').trim();
+  if (!text) return 'Unknown';
+  if (/^\d{8}$/.test(text)) {
+    const year = Number(text.slice(0, 4));
+    const month = Number(text.slice(4, 6));
+    const day = Number(text.slice(6, 8));
+    return new Date(year, month - 1, day).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const [year, month, day] = text.split('-').map((item) => Number(item));
+    return new Date(year, month - 1, day).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+  const parsed = Date.parse(text);
+  if (!Number.isFinite(parsed)) return text;
+  return new Date(parsed).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function renderEbayTrafficTag(label, tone = 'neutral'){
+  return `<span class="ebay-traffic-tag ebay-traffic-tag-${tone}">${escapeHtml(label)}</span>`;
+}
+
+function renderEbayTrafficMetricCard(label, value, meta = '', tone = 'neutral'){
+  return `
+    <div class="ebay-traffic-metric-card ebay-traffic-metric-card-${tone}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      ${meta ? `<small>${escapeHtml(meta)}</small>` : ''}
+    </div>
+  `;
+}
+
+function formatEbayTrafficDeltaText(metric, suffix = 'vs previous day'){
+  const delta = Number(metric?.deltaPercent);
+  if (!Number.isFinite(delta)) return `No prior day ${suffix}`;
+  const formatted = `${delta > 0 ? '+' : ''}${delta.toFixed(1).replace(/\.0$/, '')}%`;
+  return `${formatted} ${suffix}`;
+}
+
+function renderEbayTrafficSnapshotMetricCard(label, metric, formatter, tone = 'neutral'){
+  const direction = String(metric?.direction || 'flat');
+  const deltaTone = direction === 'up' ? 'up' : direction === 'down' ? 'down' : 'flat';
+  const value = typeof formatter === 'function' ? formatter(metric?.value || 0) : String(metric?.value || 0);
+  return `
+    <article class="ebay-traffic-snapshot-card ebay-traffic-snapshot-card-${tone}">
+      <span class="ebay-traffic-snapshot-label">${escapeHtml(label)}</span>
+      <strong class="ebay-traffic-snapshot-value">${escapeHtml(value)}</strong>
+      <small class="ebay-traffic-snapshot-delta ebay-traffic-snapshot-delta-${deltaTone}">${escapeHtml(formatEbayTrafficDeltaText(metric))}</small>
+    </article>
+  `;
+}
+
+function renderEbayTrafficStoreTabs(stores = [], activeStoreId = ''){
+  const list = Array.isArray(stores) ? stores : [];
+  if (list.length < 2) return '';
+  return `
+    <div class="ebay-traffic-store-tabs" role="tablist" aria-label="eBay stores">
+      ${list.map((store) => {
+        const isActive = String(store?.id || '') === String(activeStoreId || '');
+        const status = String(store?.status || '').trim();
+        const badgeTone = status === 'ok' ? 'fresh' : status === 'setup' ? 'neutral' : 'issue';
+        const badgeLabel = status === 'ok' ? formatEbayTrafficNumber(store?.summary?.views || 0, { compact: true }) : status === 'setup' ? 'Setup' : 'Issue';
+        return `
+          <button
+            class="ebay-traffic-store-tab ${isActive ? 'is-active' : ''}"
+            type="button"
+            role="tab"
+            aria-selected="${isActive ? 'true' : 'false'}"
+            data-ebay-traffic-store-id="${escapeHtml(String(store?.id || ''))}"
+          >
+            <span class="ebay-traffic-store-tab-label">${escapeHtml(String(store?.label || 'Store'))}</span>
+            <span class="ebay-traffic-store-tab-badge ebay-traffic-store-tab-badge-${badgeTone}">${escapeHtml(badgeLabel)}</span>
+          </button>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderEbayTrafficTopListings(store){
+  const activeView = ebayTrafficActiveListingsView === 'watchers' ? 'watchers' : 'traffic';
+  const baseListings = Array.isArray(store?.topListings) ? store.topListings : [];
+  const listings = activeView === 'watchers'
+    ? [...baseListings]
+        .filter((entry) => Number.isFinite(Number(entry?.watchCount)))
+        .sort((left, right) => (
+          Number(right?.watchCount || 0) - Number(left?.watchCount || 0)
+          || Number(right?.views || 0) - Number(left?.views || 0)
+        ))
+    : baseListings;
+  const hasWatchCounts = baseListings.some((entry) => Number.isFinite(Number(entry?.watchCount)));
+  if (!listings.length) {
+    return `
+      <div class="ebay-traffic-empty-state">
+        <strong>${activeView === 'watchers' ? 'No watcher counts returned' : 'No listing traffic returned'}</strong>
+        <p>${activeView === 'watchers'
+          ? (hasWatchCounts
+            ? 'None of the current top listings have watchers yet.'
+            : 'eBay did not return watcher counts for these listings right now.')
+          : 'eBay did not return listing-level traffic rows for this store and date range yet.'}</p>
+      </div>
+    `;
+  }
+  return `
+    <div class="ebay-traffic-table-wrap">
+      <table class="ebay-traffic-table">
+        <thead>
+          <tr>
+            <th>Listing</th>
+            ${activeView === 'watchers' ? '<th>Watchers</th>' : '<th>Views</th>'}
+            ${activeView === 'watchers' ? '<th>Views</th>' : '<th>Store</th>'}
+            <th>Sales</th>
+            <th>Conv.</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${listings.map((entry) => `
+            <tr>
+              <td>
+                <div class="ebay-traffic-listing-title">
+                  <a
+                    class="ebay-traffic-listing-link"
+                    href="${escapeHtml(buildEbayListingUrl(entry?.listingId, store?.marketplaceId || 'EBAY_US'))}"
+                    target="_blank"
+                    rel="noopener"
+                  >${escapeHtml(String(entry?.title || 'Untitled listing'))}</a>
+                </div>
+                <div class="ebay-traffic-listing-meta">${escapeHtml(String(entry?.listingId || ''))}</div>
+              </td>
+              <td>${escapeHtml(activeView === 'watchers' ? formatEbayTrafficNumber(entry?.watchCount || 0) : formatEbayTrafficNumber(entry?.views || 0))}</td>
+              <td>${escapeHtml(activeView === 'watchers' ? formatEbayTrafficNumber(entry?.views || 0) : formatEbayTrafficNumber(entry?.storeImpressions || 0))}</td>
+              <td>${escapeHtml(formatEbayTrafficNumber(entry?.transactions || 0))}</td>
+              <td>${escapeHtml(formatEbayTrafficPercent(entry?.salesConversionRate))}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderEbayTrafficViewSources(store){
+  const items = Array.isArray(store?.dailySnapshot?.viewSources) ? store.dailySnapshot.viewSources : [];
+  if (!items.length) {
+    return `
+      <div class="ebay-traffic-empty-state">
+        <strong>No source breakdown yet</strong>
+        <p>eBay has not returned channel-level daily view sources for this store yet.</p>
+      </div>
+    `;
+  }
+  const maxValue = Math.max(...items.map((entry) => Number(entry?.value || 0)), 1);
+  return `
+    <div class="ebay-traffic-source-list">
+      ${items.map((entry) => {
+        const value = Number(entry?.value || 0);
+        const width = Math.max(value > 0 ? 12 : 0, Math.round((value / maxValue) * 100));
+        return `
+          <div class="ebay-traffic-source-row">
+            <div class="ebay-traffic-source-labels">
+              <strong>${escapeHtml(String(entry?.label || 'Source'))}</strong>
+              <span>${escapeHtml(formatEbayTrafficPercent(entry?.sharePercent))} of views</span>
+            </div>
+            <div class="ebay-traffic-source-bar"><span style="width:${width}%"></span></div>
+            <div class="ebay-traffic-source-value">${escapeHtml(formatEbayTrafficNumber(value))}</div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderEbayTrafficPromotionMix(store){
+  const mix = store?.promotionMix && typeof store.promotionMix === 'object' ? store.promotionMix : null;
+  const items = Array.isArray(mix?.items) ? mix.items : [];
+  if (!items.length) {
+    const pending = String(mix?.status || '').trim() === 'pending';
+    const detail = Array.isArray(mix?.warnings) && mix.warnings.length
+      ? String(mix.warnings[0] || '')
+      : (pending
+        ? 'eBay is still building the promoted-listings report for this store.'
+        : 'Promoted-listing impression data is not available for this store yet.');
+    return `
+      <div class="ebay-traffic-empty-state">
+        <strong>${pending ? 'Promoted mix warming up' : 'No promoted mix yet'}</strong>
+        <p>${escapeHtml(detail)}</p>
+      </div>
+    `;
+  }
+  const maxValue = Math.max(...items.map((entry) => Number(entry?.value || 0)), 1);
+  const toneMap = {
+    organic: 'linear-gradient(90deg, rgba(45, 212, 191, 0.78), rgba(59, 130, 246, 0.48))',
+    promoted: 'linear-gradient(90deg, rgba(168, 85, 247, 0.82), rgba(59, 130, 246, 0.55))',
+    offsite: 'linear-gradient(90deg, rgba(251, 191, 36, 0.82), rgba(244, 114, 182, 0.52))',
+  };
+  const lead = Number.isFinite(Number(mix?.promotedImpressions))
+    ? `Promoted listings generated ${formatEbayTrafficNumber(mix?.promotedImpressions || 0)} impressions`
+    : 'Promoted listings report is still syncing';
+  const suffixParts = [
+    mix?.label ? formatEbayTrafficDateLabel(mix.label) : '',
+    Number.isFinite(Number(mix?.promotedClicks)) ? `${formatEbayTrafficNumber(mix.promotedClicks)} clicks` : '',
+    Number.isFinite(Number(mix?.promotedSales)) ? `${formatEbayTrafficNumber(mix.promotedSales)} sales` : '',
+    Number.isFinite(Number(mix?.promotedCtr)) ? `CTR ${formatEbayTrafficPercent(mix.promotedCtr)}` : '',
+  ].filter(Boolean);
+  const marketingReportUpdatedAt = formatEbayTrafficDateTimeLabel(mix?.reportUpdatedAt || mix?.reportTaskCompletionDate || mix?.reportTaskCreationDate || '');
+  const marketingReportAge = classifyEbayMarketingReportAge(mix?.reportUpdatedAt || mix?.reportTaskCompletionDate || mix?.reportTaskCreationDate || '');
+  const marketingStatus = String(mix?.reportStatusLabel || mix?.taskStatus || '').trim().toUpperCase();
+  const liftWindows = mix?.liftWindows && typeof mix.liftWindows === 'object' ? mix.liftWindows : {};
+  const hasAvg7Lift = !!(liftWindows?.avg7 && typeof liftWindows.avg7 === 'object');
+  const activeLiftWindow = hasAvg7Lift && ebayTrafficPromoLiftWindow === 'avg7' ? 'avg7' : 'day';
+  const lift = liftWindows?.[activeLiftWindow] && typeof liftWindows[activeLiftWindow] === 'object'
+    ? liftWindows[activeLiftWindow]
+    : (mix?.lift && typeof mix.lift === 'object' ? mix.lift : null);
+  const liftLeader = String(lift?.leader || '').trim();
+  const confidence = lift?.confidence && typeof lift.confidence === 'object' ? lift.confidence : null;
+  const liftWindowPrefix = activeLiftWindow === 'avg7'
+    ? `Over the last ${Math.max(2, Number(lift?.sampleSize || 7))} days, `
+    : '';
+  const liftSummary = !lift || !Number.isFinite(Number(lift?.liftVsOrganicPercent))
+    ? ''
+    : liftLeader === 'promoted'
+      ? `${liftWindowPrefix}promoted reach was ${formatEbayTrafficPercent(Math.abs(lift.liftVsOrganicPercent))} more sales-efficient than organic.`
+      : liftLeader === 'organic'
+        ? `${liftWindowPrefix}organic reach was ${formatEbayTrafficPercent(Math.abs(lift.liftVsOrganicPercent))} more sales-efficient than promoted.`
+        : `${liftWindowPrefix}promoted and organic reach performed about evenly.`;
+  return `
+    <div class="ebay-traffic-promo-mix">
+      <div class="ebay-traffic-inline-note">${escapeHtml([lead, ...suffixParts].join(' · '))}</div>
+      ${marketingReportUpdatedAt
+        ? `
+          <div class="ebay-traffic-inline-note ebay-traffic-inline-note-report">
+            <span>eBay Marketing updated ${escapeHtml(marketingReportUpdatedAt)}${marketingStatus && marketingStatus !== 'SUCCESS' ? ` · ${escapeHtml(marketingStatus.toLowerCase())}` : ''}</span>
+            ${marketingReportAge
+              ? `<span class="ebay-traffic-promo-confidence ebay-traffic-promo-confidence-${escapeHtml(marketingReportAge.tone)}">${escapeHtml(marketingReportAge.label)}</span>`
+              : ''}
+          </div>
+        `
+        : ''}
+      ${Array.isArray(mix?.warnings) && mix.warnings.length
+        ? `<div class="ebay-traffic-inline-note">${escapeHtml(String(mix.warnings[0] || ''))}</div>`
+        : ''}
+      <div class="ebay-traffic-source-list">
+        ${items.map((entry) => {
+          const value = Number(entry?.value || 0);
+          const width = Math.max(value > 0 ? 12 : 0, Math.round((value / maxValue) * 100));
+          const tone = toneMap[String(entry?.id || '').trim()] || toneMap.organic;
+          return `
+            <div class="ebay-traffic-source-row">
+              <div class="ebay-traffic-source-labels">
+                <strong>${escapeHtml(String(entry?.label || 'Channel'))}</strong>
+                <span>${escapeHtml(formatEbayTrafficPercent(entry?.sharePercent))} of daily impressions</span>
+              </div>
+              <div class="ebay-traffic-source-bar"><span style="width:${width}%; background:${tone}"></span></div>
+              <div class="ebay-traffic-source-value">${escapeHtml(formatEbayTrafficNumber(value))}</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+      ${lift
+        ? `
+          <div class="ebay-traffic-promo-lift">
+            <div class="ebay-traffic-promo-lift-head">
+              <div class="ebay-traffic-promo-lift-title">
+                <strong>Estimated sales lift</strong>
+                <div class="ebay-traffic-promo-lift-meta">
+                  ${lift?.estimated ? '<span>Based on sales share vs reach share</span>' : ''}
+                  ${confidence
+                    ? `<span class="ebay-traffic-promo-confidence ebay-traffic-promo-confidence-${escapeHtml(String(confidence.level || 'low'))}">${escapeHtml(String(confidence.label || 'Confidence'))}</span>`
+                    : ''}
+                </div>
+              </div>
+              <div class="ebay-traffic-insight-tabs" role="tablist" aria-label="Promo lift window">
+                <button
+                  class="ebay-traffic-insight-tab ${activeLiftWindow === 'day' ? 'is-active' : ''}"
+                  type="button"
+                  role="tab"
+                  aria-selected="${activeLiftWindow === 'day' ? 'true' : 'false'}"
+                  data-ebay-traffic-promo-lift-window="day"
+                >Today</button>
+                ${hasAvg7Lift
+                  ? `
+                    <button
+                      class="ebay-traffic-insight-tab ${activeLiftWindow === 'avg7' ? 'is-active' : ''}"
+                      type="button"
+                      role="tab"
+                      aria-selected="${activeLiftWindow === 'avg7' ? 'true' : 'false'}"
+                      data-ebay-traffic-promo-lift-window="avg7"
+                    >7d avg</button>
+                  `
+                  : ''}
+              </div>
+            </div>
+            ${liftSummary ? `<div class="ebay-traffic-promo-lift-summary">${escapeHtml(liftSummary)}</div>` : ''}
+            ${confidence?.reason ? `<div class="ebay-traffic-promo-lift-summary">${escapeHtml(String(confidence.reason || ''))}</div>` : ''}
+            <div class="ebay-traffic-promo-lift-grid">
+              <article class="ebay-traffic-promo-lift-card ${liftLeader === 'promoted' ? 'is-leading' : ''}">
+                <div class="ebay-traffic-promo-lift-label">Promoted</div>
+                <strong>${escapeHtml(formatEbayTrafficPercent(lift?.promotedSalesSharePercent))} of sales</strong>
+                <span>${escapeHtml(formatEbayTrafficPercent(lift?.promotedReachSharePercent))} of reach</span>
+                <span>${escapeHtml(formatEbayTrafficDecimal(lift?.promotedSalesPerDay))} sales/day · ${escapeHtml(formatEbayTrafficNumber(lift?.promotedImpressionsPerDay || 0))} impr/day</span>
+              </article>
+              <article class="ebay-traffic-promo-lift-card ${liftLeader === 'organic' ? 'is-leading' : ''}">
+                <div class="ebay-traffic-promo-lift-label">Organic</div>
+                <strong>${escapeHtml(formatEbayTrafficPercent(lift?.organicSalesSharePercent))} of sales</strong>
+                <span>${escapeHtml(formatEbayTrafficPercent(lift?.organicReachSharePercent))} of reach</span>
+                <span>${escapeHtml(formatEbayTrafficDecimal(lift?.organicSalesPerDay))} sales/day · ${escapeHtml(formatEbayTrafficNumber(lift?.organicImpressionsPerDay || 0))} impr/day</span>
+              </article>
+            </div>
+          </div>
+        `
+        : ''}
+    </div>
+  `;
+}
+
+function renderEbayTrafficInsightTabs(activeView = 'sources'){
+  const normalized = String(activeView || '').trim();
+  const current = normalized === 'trend' || normalized === 'promo' ? normalized : 'sources';
+  const options = [
+    { id: 'sources', label: 'Source mix' },
+    { id: 'trend', label: 'Trend' },
+    { id: 'promo', label: 'Promo mix' },
+  ];
+  return `
+    <div class="ebay-traffic-insight-tabs" role="tablist" aria-label="eBay traffic views">
+      ${options.map((option) => `
+        <button
+          class="ebay-traffic-insight-tab ${current === option.id ? 'is-active' : ''}"
+          type="button"
+          role="tab"
+          aria-selected="${current === option.id ? 'true' : 'false'}"
+          data-ebay-traffic-insight-view="${option.id}"
+        >${escapeHtml(option.label)}</button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderEbayTrafficListingsTabs(activeView = 'traffic'){
+  const current = String(activeView || '').trim() === 'watchers' ? 'watchers' : 'traffic';
+  const options = [
+    { id: 'traffic', label: 'Traffic' },
+    { id: 'watchers', label: 'Watchers' },
+  ];
+  return `
+    <div class="ebay-traffic-insight-tabs" role="tablist" aria-label="Top listing views">
+      ${options.map((option) => `
+        <button
+          class="ebay-traffic-insight-tab ${current === option.id ? 'is-active' : ''}"
+          type="button"
+          role="tab"
+          aria-selected="${current === option.id ? 'true' : 'false'}"
+          data-ebay-traffic-listings-view="${option.id}"
+        >${escapeHtml(option.label)}</button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderEbayTrafficDailyTrend(store){
+  const daily = Array.isArray(store?.daily) ? store.daily.slice(-14) : [];
+  if (!daily.length) return '';
+  const maxImpressions = Math.max(...daily.map((entry) => Number(entry?.totalImpressions || entry?.impressions || 0)), 1);
+  return `
+    <div class="ebay-traffic-trend-list">
+      ${daily.map((entry) => {
+        const views = Number(entry?.views || 0);
+        const impressions = Number(entry?.totalImpressions || entry?.impressions || 0);
+        const width = Math.max(impressions > 0 ? 8 : 0, Math.round((impressions / maxImpressions) * 100));
+        return `
+          <div class="ebay-traffic-trend-row">
+            <div class="ebay-traffic-trend-date">${escapeHtml(formatEbayTrafficDateLabel(entry?.label || ''))}</div>
+            <div class="ebay-traffic-trend-bar"><span style="width:${width}%"></span></div>
+            <div class="ebay-traffic-trend-values">
+              <strong>${escapeHtml(formatEbayTrafficNumber(impressions))} impr.</strong>
+              <span>${escapeHtml(formatEbayTrafficNumber(views))} views · ${escapeHtml(formatEbayTrafficNumber(entry?.transactions || 0))} sold</span>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function wireEbayTrafficInteractions(options = {}){
+  const el = document.getElementById('ebayTrafficWidget');
+  if (!el) return;
+  el.querySelectorAll('[data-ebay-traffic-store-id]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const nextId = String(btn.getAttribute('data-ebay-traffic-store-id') || '').trim();
+      if (!nextId || nextId === ebayTrafficActiveStoreId) return;
+      setEbayTrafficActiveStoreId(nextId);
+      if (ebayTrafficLastPayload) renderEbayTrafficWidget(ebayTrafficLastPayload, options);
+    });
+  });
+  el.querySelectorAll('[data-ebay-traffic-insight-view]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const nextView = String(btn.getAttribute('data-ebay-traffic-insight-view') || '').trim();
+      if (!nextView || nextView === ebayTrafficActiveInsightView) return;
+      setEbayTrafficActiveInsightView(nextView);
+      if (ebayTrafficLastPayload) renderEbayTrafficWidget(ebayTrafficLastPayload, options);
+    });
+  });
+  el.querySelectorAll('[data-ebay-traffic-listings-view]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const nextView = String(btn.getAttribute('data-ebay-traffic-listings-view') || '').trim();
+      if (!nextView || nextView === ebayTrafficActiveListingsView) return;
+      setEbayTrafficActiveListingsView(nextView);
+      if (ebayTrafficLastPayload) renderEbayTrafficWidget(ebayTrafficLastPayload, options);
+    });
+  });
+  el.querySelectorAll('[data-ebay-traffic-promo-lift-window]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const nextWindow = String(btn.getAttribute('data-ebay-traffic-promo-lift-window') || '').trim();
+      if (!nextWindow || nextWindow === ebayTrafficPromoLiftWindow) return;
+      setEbayTrafficPromoLiftWindow(nextWindow);
+      if (ebayTrafficLastPayload) renderEbayTrafficWidget(ebayTrafficLastPayload, options);
+    });
+  });
+}
+
+function renderEbayTrafficWidget(payload = {}, options = {}){
+  const el = document.getElementById('ebayTrafficWidget');
+  if (!el) return;
+  const stores = Array.isArray(payload?.stores) ? payload.stores : [];
+  const stale = !!options.stale || !!payload?.stale;
+  const backoffLeftMs = Number(options.backoffLeftMs || 0);
+  const activeStore = resolveEbayTrafficActiveStore(stores);
+
+  if (!stores.length && payload?.setupRequired) {
+    el.innerHTML = `
+      <div class="ebay-traffic-shell">
+        <div class="ebay-traffic-empty-state">
+          <strong>Configuration needed</strong>
+          <p>Set <code>EBAY_TRAFFIC_CLIENT_ID</code>, <code>EBAY_TRAFFIC_CLIENT_SECRET</code>, and <code>EBAY_TRAFFIC_REFRESH_TOKEN</code>. For multiple stores, use <code>EBAY_TRAFFIC_STORES_JSON</code>.</p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const storeCount = Number(payload?.storeCount || stores.length || 0);
+  const healthyCount = Number(payload?.healthyStoreCount || 0);
+  const activeSummary = activeStore?.summary && typeof activeStore.summary === 'object' ? activeStore.summary : {};
+  const dailySnapshot = activeStore?.dailySnapshot && typeof activeStore.dailySnapshot === 'object' ? activeStore.dailySnapshot : null;
+  const healthLabel = payload?.setupRequired
+    ? 'Setup required'
+    : payload?.partialFailure
+      ? `${healthyCount}/${storeCount} stores healthy`
+      : storeCount
+        ? `${storeCount} store${storeCount === 1 ? '' : 's'} connected`
+        : 'No stores';
+  const latestDayLabel = formatEbayTrafficDateLabel(dailySnapshot?.label || activeStore?.lastUpdatedDate || '');
+  const previousDayLabel = dailySnapshot?.previousLabel ? formatEbayTrafficDateLabel(dailySnapshot.previousLabel) : '';
+  const freshnessLabel = stale
+    ? (payload?.message
+      ? `${String(payload.message)}${backoffLeftMs > 0 ? ` · retry in ${Math.ceil(backoffLeftMs / 1000)}s` : ''}`
+      : `Stale snapshot${backoffLeftMs > 0 ? ` · retry in ${Math.ceil(backoffLeftMs / 1000)}s` : ''}`)
+    : (activeStore?.lastUpdatedDate ? `eBay updated ${formatEbayTrafficDateLabel(activeStore.lastUpdatedDate)}` : 'Latest available snapshot');
+  const activeStatus = stale && activeStore ? 'ok' : String(activeStore?.status || '').trim();
+  const activeStatusTone = activeStatus === 'ok' ? 'fresh' : activeStatus === 'setup' ? 'neutral' : 'issue';
+  const promotionMix = activeStore?.promotionMix && typeof activeStore.promotionMix === 'object' ? activeStore.promotionMix : null;
+  const activeInsightView = ebayTrafficActiveInsightView === 'trend' || ebayTrafficActiveInsightView === 'promo'
+    ? ebayTrafficActiveInsightView
+    : 'sources';
+  const activeListingsView = ebayTrafficActiveListingsView === 'watchers' ? 'watchers' : 'traffic';
+  const insightTitle = activeInsightView === 'trend'
+    ? 'Recent daily pace'
+    : activeInsightView === 'promo'
+      ? 'Promoted vs organic'
+      : 'Where listing views came from';
+  const insightKicker = activeInsightView === 'trend'
+    ? 'Trend'
+    : activeInsightView === 'promo'
+      ? 'Ad mix'
+      : 'Source mix';
+  const insightBody = activeInsightView === 'trend'
+    ? renderEbayTrafficDailyTrend(activeStore)
+    : activeInsightView === 'promo'
+      ? renderEbayTrafficPromotionMix(activeStore)
+      : renderEbayTrafficViewSources(activeStore);
+  const insightTags = activeInsightView === 'trend'
+    ? `
+        ${renderEbayTrafficTag(`${formatEbayTrafficNumber((activeStore?.daily || []).length)} days`, 'neutral')}
+        ${renderEbayTrafficTag(latestDayLabel, 'count')}
+      `
+    : activeInsightView === 'promo'
+      ? `
+          ${renderEbayTrafficTag(
+            promotionMix?.label ? formatEbayTrafficDateLabel(promotionMix.label) : latestDayLabel,
+            'count'
+          )}
+          ${Number.isFinite(Number(promotionMix?.promotedImpressions))
+            ? renderEbayTrafficTag(`${formatEbayTrafficNumber(promotionMix.promotedImpressions)} promoted impr.`, 'success')
+            : renderEbayTrafficTag(
+                String(promotionMix?.status || '').trim() === 'pending' ? 'Report warming up' : 'No report yet',
+                'neutral'
+              )}
+        `
+    : `
+        ${renderEbayTrafficTag(latestDayLabel, 'count')}
+        ${renderEbayTrafficTag(`${formatEbayTrafficNumber(dailySnapshot?.metrics?.views?.value || 0)} views`, 'neutral')}
+      `;
+  const focusContent = !activeStore ? `
+    <div class="ebay-traffic-empty-state">
+      <strong>No store selected</strong>
+      <p>Refresh this pod after adding eBay traffic credentials.</p>
+    </div>
+  ` : activeStatus === 'setup' ? `
+    <div class="ebay-traffic-empty-state">
+      <strong>${escapeHtml(String(activeStore?.label || 'Store'))}</strong>
+      <p>${escapeHtml(String(activeStore?.message || 'Add eBay credentials to load this store.'))}</p>
+    </div>
+  ` : activeStatus === 'error' ? `
+    <div class="ebay-traffic-empty-state">
+      <strong>${escapeHtml(String(activeStore?.label || 'Store'))}</strong>
+      <p>${escapeHtml(String(activeStore?.error || activeStore?.message || 'Unable to load this store right now.'))}</p>
+    </div>
+  ` : `
+    <div class="ebay-traffic-sections">
+      <section class="ebay-traffic-section">
+        <div class="ebay-traffic-section-head">
+          <div>
+            <div class="ebay-traffic-section-kicker">${escapeHtml(insightKicker)}</div>
+            <strong>${escapeHtml(insightTitle)}</strong>
+          </div>
+          <div class="ebay-traffic-section-tools">
+            ${renderEbayTrafficInsightTabs(activeInsightView)}
+            <div class="ebay-traffic-section-tags">
+              ${insightTags}
+            </div>
+          </div>
+        </div>
+        ${insightBody}
+      </section>
+      <section class="ebay-traffic-section">
+        <div class="ebay-traffic-section-head">
+          <div>
+            <div class="ebay-traffic-section-kicker">Listings</div>
+            <strong>Top traffic drivers</strong>
+          </div>
+          <div class="ebay-traffic-section-tools">
+            ${renderEbayTrafficListingsTabs(activeListingsView)}
+            <div class="ebay-traffic-section-tags">
+              ${renderEbayTrafficTag(`${formatEbayTrafficNumber((activeStore?.topListings || []).length)} rows`, 'count')}
+              ${activeListingsView === 'watchers'
+                ? renderEbayTrafficTag(
+                    `${formatEbayTrafficNumber(
+                      Math.max(
+                        0,
+                        ...((activeStore?.topListings || []).map((entry) => Number(entry?.watchCount || 0)))
+                      )
+                    )} max watchers`,
+                    'success'
+                  )
+                : ''}
+              ${renderEbayTrafficTag(activeStore?.marketplaceId || 'eBay', 'neutral')}
+            </div>
+          </div>
+        </div>
+        ${renderEbayTrafficTopListings(activeStore)}
+      </section>
+    </div>
+  `;
+
+  el.innerHTML = `
+    <div class="ebay-traffic-shell">
+      <div class="ebay-traffic-overview">
+        <section class="ebay-traffic-summary-card">
+          <div class="ebay-traffic-summary-head">
+            <div>
+              <div class="ebay-traffic-summary-kicker">Daily live view</div>
+              <div class="ebay-traffic-summary-title">${escapeHtml(latestDayLabel)}</div>
+              <p>${escapeHtml(previousDayLabel ? `Compared with ${previousDayLabel}` : healthLabel)}</p>
+            </div>
+            <strong>${escapeHtml(formatEbayTrafficNumber(dailySnapshot?.metrics?.impressions?.value || 0, { compact: true }))}</strong>
+          </div>
+          <div class="ebay-traffic-summary-subtitle">Latest eBay day with day-over-day movement.</div>
+          <div class="ebay-traffic-snapshot-grid">
+            ${renderEbayTrafficSnapshotMetricCard('Impressions', dailySnapshot?.metrics?.impressions || {}, formatEbayTrafficNumber, 'primary')}
+            ${renderEbayTrafficSnapshotMetricCard('Listing views', dailySnapshot?.metrics?.views || {}, formatEbayTrafficNumber, 'neutral')}
+            ${renderEbayTrafficSnapshotMetricCard('Quantity sold', dailySnapshot?.metrics?.quantitySold || {}, formatEbayTrafficNumber, 'success')}
+            ${renderEbayTrafficSnapshotMetricCard('Click-through rate', dailySnapshot?.metrics?.clickThroughRate || {}, formatEbayTrafficPercent, 'neutral')}
+            ${renderEbayTrafficSnapshotMetricCard('Sales conversion rate', dailySnapshot?.metrics?.salesConversionRate || {}, formatEbayTrafficPercent, 'success')}
+          </div>
+        </section>
+        <section class="ebay-traffic-focus-card">
+          <div class="ebay-traffic-focus-head">
+            <div>
+              <div class="ebay-traffic-summary-kicker">Store focus</div>
+              <div class="ebay-traffic-focus-title">${escapeHtml(String(activeStore?.label || 'No store selected'))}</div>
+              <div class="ebay-traffic-focus-meta">${escapeHtml(String(activeStore?.marketplaceId || ''))}</div>
+            </div>
+            <div class="ebay-traffic-focus-stats">
+              <span class="ebay-traffic-focus-status ebay-traffic-focus-status-${activeStatusTone}">${escapeHtml(activeStatus === 'ok' ? 'Live' : activeStatus === 'setup' ? 'Setup' : 'Issue')}</span>
+              <span class="ebay-traffic-focus-count">${escapeHtml(formatEbayTrafficNumber(dailySnapshot?.metrics?.views?.value || activeSummary?.views || 0, { compact: true }))}</span>
+            </div>
+          </div>
+          <p>${escapeHtml(freshnessLabel)}</p>
+          <div class="ebay-traffic-focus-actions">
+            ${activeStore?.storeUrl ? `<a class="btn ghost" href="${encodeURI(activeStore.storeUrl)}" target="_blank" rel="noopener">Open store</a>` : ''}
+            ${renderEbayTrafficTag(`30d ${formatEbayTrafficNumber(activeSummary?.impressions || 0)} impressions`, 'neutral')}
+            ${renderEbayTrafficTag(`30d ${formatEbayTrafficNumber(activeSummary?.transactions || 0)} sold`, 'success')}
+            ${renderEbayTrafficTag(`CTR ${formatEbayTrafficPercent(dailySnapshot?.metrics?.clickThroughRate?.value ?? activeSummary?.clickThroughRate)}`, 'neutral')}
+            ${renderEbayTrafficTag(`Conv. ${formatEbayTrafficPercent(dailySnapshot?.metrics?.salesConversionRate?.value ?? activeSummary?.salesConversionRate)}`, 'success')}
+          </div>
+        </section>
+      </div>
+      ${renderEbayTrafficStoreTabs(stores, activeStore?.id || '')}
+      ${payload?.message && !payload?.ok ? `<div class="ebay-traffic-inline-note">${escapeHtml(String(payload.message || ''))}</div>` : ''}
+      ${focusContent}
+    </div>
+  `;
+
+  wireEbayTrafficInteractions(options);
+}
+
+async function fetchEbayTrafficPayload(manual = false){
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(manual ? EBAY_TRAFFIC_REFRESH_API : EBAY_TRAFFIC_API, {
+      method: manual ? 'POST' : 'GET',
+      signal: controller.signal,
+      headers: manual ? { 'Content-Type': 'application/json' } : undefined,
+      body: manual ? JSON.stringify({ source: 'manual' }) : undefined,
+    });
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function renderEbayTrafficPod(options = {}){
+  const meta = document.getElementById('ebayTrafficMeta');
+  const manual = !!options.manual;
+  const backoffLeftMs = pollingBackoffState('ebay-traffic').backoffUntil - Date.now();
+
+  updateEbayTrafficRefreshButton();
+
+  if (ebayTrafficInFlight) {
+    if (ebayTrafficLastPayload) renderEbayTrafficWidget(ebayTrafficLastPayload, { stale: true, backoffLeftMs: Math.max(0, backoffLeftMs) });
+    setPodStatusSignal('ebay-traffic', 'neutral', 'refreshing');
+    if (meta) meta.textContent = 'Refresh already in progress.';
+    return;
+  }
+
+  if (!manual && backoffLeftMs > 0 && ebayTrafficLastPayload) {
+    renderEbayTrafficWidget(ebayTrafficLastPayload, { stale: true, backoffLeftMs });
+    setPodStatusSignal('ebay-traffic', 'stale', `retry ${Math.ceil(backoffLeftMs / 1000)}s`);
+    if (meta) {
+      const lastSeen = ebayTrafficLastUpdatedAt ? new Date(ebayTrafficLastUpdatedAt).toLocaleTimeString() : 'unknown';
+      meta.textContent = `Updated: ${lastSeen} · stale snapshot · retry in ${Math.ceil(backoffLeftMs / 1000)}s`;
+    }
+    return;
+  }
+
+  ebayTrafficInFlight = true;
+  updateEbayTrafficRefreshButton();
+  try {
+    const payload = await fetchEbayTrafficPayload(manual);
+    ebayTrafficLastPayload = payload;
+    ebayTrafficLastUpdatedAt = String(payload?.fetchedAt || now());
+    ebayTrafficLastError = '';
+    clearPollingBackoff('ebay-traffic');
+    renderEbayTrafficWidget(payload);
+
+    if (payload?.setupRequired) {
+      setPodStatusSignal('ebay-traffic', 'neutral', 'setup');
+      if (meta) meta.textContent = 'Setup required · add eBay Sell Analytics credentials in .env';
+    } else if (!payload?.ok) {
+      const rateLimited = String(payload?.refreshSource || '') === 'rate_limited_backoff'
+        || /rate limit/i.test(String(payload?.message || ''));
+      setPodStatusSignal('ebay-traffic', rateLimited ? 'stale' : 'error', rateLimited ? 'cooling down' : 'unavailable');
+      if (meta) {
+        meta.textContent = payload?.message
+          ? String(payload.message)
+          : 'eBay traffic is configured, but no live store data was returned.';
+      }
+    } else {
+      const detail = payload?.partialFailure
+        ? `${Number(payload?.healthyStoreCount || 0)}/${Number(payload?.storeCount || 0)} stores healthy`
+        : `${Number(payload?.storeCount || 0)} store${Number(payload?.storeCount || 0) === 1 ? '' : 's'}`;
+      setPodStatusSignal('ebay-traffic', payload?.stale ? 'stale' : (payload?.partialFailure ? 'degraded' : 'fresh'), payload?.stale ? 'stale cache' : detail);
+      if (meta) {
+        const parts = [
+          `Updated: ${new Date(ebayTrafficLastUpdatedAt).toLocaleTimeString()}`,
+          'Auto: every 30 min',
+          Number(payload?.storeCount || 0) ? `Stores: ${payload.storeCount}` : '',
+          payload?.partialFailure ? `Healthy: ${payload.healthyStoreCount || 0}` : '',
+          payload?.stale ? 'Last good snapshot' : '',
+        ].filter(Boolean);
+        meta.textContent = parts.join(' · ');
+      }
+    }
+  } catch (error) {
+    ebayTrafficLastError = String(error?.message || error || 'eBay traffic refresh failed').slice(0, 220);
+    const backoffMs = registerPollingFailure('ebay-traffic', error, ebayTrafficLastError);
+    if (ebayTrafficLastPayload) {
+      renderEbayTrafficWidget(ebayTrafficLastPayload, { stale: true, backoffLeftMs: backoffMs });
+      setPodStatusSignal('ebay-traffic', 'stale', `retry ${Math.ceil(backoffMs / 1000)}s`);
+      if (meta) {
+        const lastSeen = ebayTrafficLastUpdatedAt ? new Date(ebayTrafficLastUpdatedAt).toLocaleTimeString() : 'unknown';
+        meta.textContent = `Updated: ${lastSeen} · ${ebayTrafficLastError} · retry in ${Math.ceil(backoffMs / 1000)}s`;
+      }
+    } else {
+      const routeUnavailable = Number(error?.status || 0) === 404;
+      document.getElementById('ebayTrafficWidget').innerHTML = `
+        <div class="ebay-traffic-shell">
+          <div class="ebay-traffic-empty-state">
+            <strong>${routeUnavailable ? 'Server restart needed' : 'eBay traffic unavailable'}</strong>
+            <p>${escapeHtml(routeUnavailable
+              ? 'The new eBay traffic API route is not loaded yet. Restart the local server.'
+              : ebayTrafficLastError)}</p>
+          </div>
+        </div>
+      `;
+      setPodStatusSignal('ebay-traffic', 'error', routeUnavailable ? 'server restart' : `retry ${Math.ceil(backoffMs / 1000)}s`);
+      if (meta) {
+        meta.textContent = routeUnavailable
+          ? 'eBay traffic API route not found. Restart the local server so it loads the new endpoint.'
+          : `${ebayTrafficLastError} · retry in ${Math.ceil(backoffMs / 1000)}s`;
+      }
+    }
+  } finally {
+    ebayTrafficInFlight = false;
+    updateEbayTrafficRefreshButton();
+  }
+}
+
 function renderRssListFromState(){
   const el = document.getElementById('rssWidget');
   const ts = document.getElementById('rssUpdatedAt');
@@ -3884,26 +6696,88 @@ function renderRssListFromState(){
   const readIds = new Set(Array.isArray(state.rss?.readItemIds) ? state.rss.readItemIds : []);
   const showRead = !!state.rss?.showRead;
   const visible = showRead ? allItems : allItems.filter((item) => !readIds.has(item.id));
+  const unreadCount = allItems.filter((item) => !readIds.has(item.id)).length;
+  const sourceCount = new Set(allItems.map((item) => String(item.feedTitle || item.tag || 'Feed').trim()).filter(Boolean)).size;
+  const formatRelativeTime = (publishedAt) => {
+    const publishedMs = Date.parse(String(publishedAt || ''));
+    if (!Number.isFinite(publishedMs)) return 'Unknown time';
+    const diffMs = Date.now() - publishedMs;
+    const absMinutes = Math.round(Math.abs(diffMs) / 60000);
+    if (absMinutes < 1) return 'Just now';
+    if (absMinutes < 60) return `${absMinutes}m ago`;
+    const absHours = Math.round(absMinutes / 60);
+    if (absHours < 24) return `${absHours}h ago`;
+    const absDays = Math.round(absHours / 24);
+    if (absDays < 7) return `${absDays}d ago`;
+    return new Date(publishedMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  };
+  const renderOverview = () => `
+    <div class="rss-overview-grid">
+      <div class="rss-overview-card rss-overview-card--hero">
+        <span class="rss-overview-label">Unread</span>
+        <strong>${unreadCount}</strong>
+        <span class="rss-overview-meta">${showRead ? `${visible.length} visible in archive view` : `${visible.length} visible right now`}</span>
+      </div>
+      <div class="rss-overview-card">
+        <span class="rss-overview-label">Sources</span>
+        <strong>${sourceCount || 0}</strong>
+        <span class="rss-overview-meta">${Array.isArray(state.rss?.feeds) ? state.rss.feeds.length : 0} configured feeds</span>
+      </div>
+      <div class="rss-overview-card">
+        <span class="rss-overview-label">Mode</span>
+        <strong>${showRead ? 'Archive' : 'Fresh'}</strong>
+        <span class="rss-overview-meta">${showRead ? 'Read items included' : 'Unread stories prioritized'}</span>
+      </div>
+    </div>
+  `;
 
   if (!allItems.length) {
-    el.innerHTML = '<div class="note-meta">No feed items yet. Add a feed in Settings, then refresh.</div>';
+    el.innerHTML = `
+      <div class="rss-v2-shell">
+        ${renderOverview()}
+        <div class="rss-empty-state">
+          <strong>No feed items yet.</strong>
+          <span>Add a feed in Settings, then refresh to start building your news stream.</span>
+        </div>
+      </div>
+    `;
   } else if (!visible.length) {
-    el.innerHTML = '<div class="note-meta">All caught up. Enable “Show read” to review older items.</div>';
+    el.innerHTML = `
+      <div class="rss-v2-shell">
+        ${renderOverview()}
+        <div class="rss-empty-state">
+          <strong>All caught up.</strong>
+          <span>Enable "Show read" to browse older items, or wait for the next refresh.</span>
+        </div>
+      </div>
+    `;
   } else {
-    el.innerHTML = `<div class="rss-list">${visible.slice(0, 40).map((item) => {
+    el.innerHTML = `
+      <div class="rss-v2-shell">
+        ${renderOverview()}
+        <div class="rss-list rss-v2-list">${visible.slice(0, 40).map((item) => {
       const isRead = readIds.has(item.id);
       const published = item.publishedAt ? new Date(item.publishedAt).toLocaleString() : 'Unknown time';
+      const relative = formatRelativeTime(item.publishedAt);
+      const sourceLabel = escapeHtml(item.feedTitle || item.tag || 'Feed');
+      const summary = escapeHtml(item.summary || '');
       return `
-        <div class="change-log-item ${isRead ? 'is-read' : ''}" style="margin-bottom:8px;">
-          <div class="row-between-wrap" style="gap:8px;align-items:flex-start;">
-            <a href="${encodeURI(item.link)}" target="_blank" rel="noopener" style="font-weight:700;line-height:1.35;">${escapeHtml(item.title || 'Untitled')}</a>
-            ${isRead ? '' : `<button class="btn ghost" data-rss-read="${item.id}" type="button">Mark read</button>`}
+        <article class="rss-story-card ${isRead ? 'is-read' : ''}">
+          <div class="rss-story-meta">
+            <span class="rss-source-chip">${sourceLabel}</span>
+            <span class="rss-story-time">${escapeHtml(relative)} · ${escapeHtml(published)}</span>
           </div>
-          <div class="note-meta" style="margin-top:4px;">${escapeHtml(item.feedTitle || item.tag || 'Feed')} · ${escapeHtml(published)}</div>
-          ${item.summary ? `<div class="note-meta" style="margin-top:4px;line-height:1.45;">${escapeHtml(item.summary)}</div>` : ''}
-        </div>
+          <a class="rss-story-title" href="${encodeURI(item.link)}" target="_blank" rel="noopener">${escapeHtml(item.title || 'Untitled')}</a>
+          ${summary ? `<div class="rss-story-summary">${summary}</div>` : '<div class="rss-story-summary rss-story-summary-empty">Open the story for the full article.</div>'}
+          <div class="rss-story-actions">
+            ${isRead ? '<span class="rss-read-state">Read</span>' : `<button class="btn ghost rss-mark-read-btn" data-rss-read="${item.id}" type="button">Mark read</button>`}
+            <a class="btn rss-open-link-btn" href="${encodeURI(item.link)}" target="_blank" rel="noopener">Open story</a>
+          </div>
+        </article>
       `;
-    }).join('')}</div>`;
+    }).join('')}</div>
+      </div>
+    `;
 
     el.querySelectorAll('[data-rss-read]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -4024,6 +6898,1295 @@ async function renderRss(options = {}){
   }
 
   renderRssListFromState();
+}
+
+function updateUnreadEmailRefreshButton(){
+  const btn = document.getElementById('unreadEmailRefreshBtn');
+  if (!btn) return;
+  const anyMutationInFlight = !!unreadEmailMarkReadInFlight || !!unreadEmailSpamInFlight || !!unreadEmailDeleteInFlight;
+  btn.disabled = unreadEmailInFlight || anyMutationInFlight;
+  btn.textContent = anyMutationInFlight ? 'Working…' : unreadEmailInFlight ? 'Refreshing…' : 'Refresh';
+}
+
+function setUnreadEmailActiveAccountId(accountId){
+  unreadEmailActiveAccountId = String(accountId || '').trim();
+  try { localStorage.setItem(UNREAD_EMAIL_ACTIVE_ACCOUNT_KEY, unreadEmailActiveAccountId); } catch {}
+}
+
+function resolveUnreadEmailActiveAccount(accounts = []){
+  const list = Array.isArray(accounts) ? accounts : [];
+  if (!list.length) return null;
+  const current = list.find((account) => String(account?.id || '') === unreadEmailActiveAccountId);
+  if (current) return current;
+  const fallback = list.find((account) => String(account?.status || '') === 'fresh') || list[0];
+  setUnreadEmailActiveAccountId(String(fallback?.id || ''));
+  return fallback;
+}
+
+function unreadEmailDeleteKey(accountId, mailbox, uid){
+  return [String(accountId || '').trim(), String(mailbox || '').trim(), String(uid || '').trim()].join('::');
+}
+
+function createUnreadEmailMessageKey(accountId = '', mailbox = '', uid = ''){
+  const normalizedAccountId = String(accountId || '').trim();
+  const normalizedMailbox = String(mailbox || '').trim();
+  const normalizedUid = String(uid || '').trim();
+  if (!normalizedAccountId || !normalizedMailbox || !normalizedUid) return '';
+  return unreadEmailDeleteKey(normalizedAccountId, normalizedMailbox, normalizedUid);
+}
+
+function setUnreadEmailSelection(itemKey, selected){
+  const key = String(itemKey || '').trim();
+  if (!key) return;
+  const next = new Set(unreadEmailSelectedKeys);
+  if (selected) next.add(key);
+  else next.delete(key);
+  unreadEmailSelectedKeys = next;
+}
+
+function setUnreadEmailSelections(items = [], selected = true){
+  const next = new Set(unreadEmailSelectedKeys);
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    const key = String(item?.key || '').trim();
+    if (!key) return;
+    if (selected) next.add(key);
+    else next.delete(key);
+  });
+  unreadEmailSelectedKeys = next;
+}
+
+function clearUnreadEmailSelections(accountId = ''){
+  const normalizedAccountId = String(accountId || '').trim();
+  if (!normalizedAccountId) {
+    unreadEmailSelectedKeys = new Set();
+    return;
+  }
+  unreadEmailSelectedKeys = new Set([...unreadEmailSelectedKeys].filter((key) => !key.startsWith(`${normalizedAccountId}::`)));
+}
+
+function pruneUnreadEmailSelectionsFromPayload(payload){
+  const validKeys = new Set();
+  const accounts = Array.isArray(payload?.accounts) ? payload.accounts : [];
+  accounts.forEach((account) => {
+    const accountId = String(account?.id || '').trim();
+    const entries = [
+      ...(Array.isArray(account?.entries) ? account.entries : []),
+      ...(Array.isArray(account?.recentEntries) ? account.recentEntries : []),
+      ...(Array.isArray(account?.sentEntries) ? account.sentEntries : []),
+    ];
+    entries.forEach((entry) => {
+      const mailbox = String(entry?.mailbox || '').trim();
+      const uid = Number(entry?.uid);
+      if (!accountId || !mailbox || !Number.isFinite(uid) || uid <= 0) return;
+      validKeys.add(unreadEmailDeleteKey(accountId, mailbox, uid));
+    });
+  });
+  unreadEmailSelectedKeys = new Set([...unreadEmailSelectedKeys].filter((key) => validKeys.has(key)));
+}
+
+function pruneUnreadEmailExpandedStateFromPayload(payload){
+  const validKeys = new Set();
+  const accounts = Array.isArray(payload?.accounts) ? payload.accounts : [];
+  accounts.forEach((account) => {
+    const accountId = String(account?.id || '').trim();
+    const entries = [
+      ...(Array.isArray(account?.entries) ? account.entries : []),
+      ...(Array.isArray(account?.recentEntries) ? account.recentEntries : []),
+      ...(Array.isArray(account?.sentEntries) ? account.sentEntries : []),
+    ];
+    entries.forEach((entry) => {
+      const key = createUnreadEmailMessageKey(accountId, entry?.mailbox, entry?.uid);
+      if (key) validKeys.add(key);
+    });
+  });
+  unreadEmailExpandedKeys = new Set([...unreadEmailExpandedKeys].filter((key) => validKeys.has(key)));
+  unreadEmailExpandedLoadingKeys = new Set([...unreadEmailExpandedLoadingKeys].filter((key) => validKeys.has(key)));
+  unreadEmailExpandedBodies = new Map([...unreadEmailExpandedBodies.entries()].filter(([key]) => validKeys.has(key)));
+  unreadEmailExpandedErrors = new Map([...unreadEmailExpandedErrors.entries()].filter(([key]) => validKeys.has(key)));
+}
+
+function getUnreadEmailBlockedSenderList(accountId = ''){
+  const normalizedAccountId = String(accountId || '').trim();
+  if (!normalizedAccountId) return [];
+  const source = (state?.unreadEmailBlockedSenders && typeof state.unreadEmailBlockedSenders === 'object')
+    ? state.unreadEmailBlockedSenders
+    : {};
+  return Array.isArray(source[normalizedAccountId]) ? source[normalizedAccountId] : [];
+}
+
+function getUnreadEmailBlockedSenderSet(accountId = ''){
+  return new Set(getUnreadEmailBlockedSenderList(accountId).map((value) => String(value || '').trim().toLowerCase()).filter(Boolean));
+}
+
+function getUnreadEmailBlockedSenderQuery(accountId = ''){
+  const normalizedAccountId = String(accountId || '').trim();
+  if (!normalizedAccountId) return '';
+  return String(unreadEmailBlockedSenderQueries[normalizedAccountId] || '').trim();
+}
+
+function setUnreadEmailBlockedSenderQuery(accountId = '', query = ''){
+  const normalizedAccountId = String(accountId || '').trim();
+  if (!normalizedAccountId) return;
+  const normalizedQuery = String(query || '').trim().toLowerCase().slice(0, 120);
+  if (normalizedQuery) unreadEmailBlockedSenderQueries[normalizedAccountId] = normalizedQuery;
+  else delete unreadEmailBlockedSenderQueries[normalizedAccountId];
+}
+
+function filterUnreadEmailEntriesByBlockedSenders(entries = [], blockedSenders = new Set()){
+  const list = Array.isArray(entries) ? entries : [];
+  const blocked = blockedSenders instanceof Set ? blockedSenders : new Set();
+  const filtered = list.filter((entry) => {
+    const email = String(entry?.counterpartyEmail || '').trim().toLowerCase();
+    return !email || !blocked.has(email);
+  });
+  return {
+    entries: filtered,
+    hiddenCount: Math.max(0, list.length - filtered.length),
+  };
+}
+
+function blockUnreadEmailSender(accountId = '', senderEmail = ''){
+  const normalizedAccountId = String(accountId || '').trim();
+  const normalizedEmail = String(senderEmail || '').trim().toLowerCase();
+  if (!normalizedAccountId || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normalizedEmail)) return false;
+  const next = normalizeUnreadEmailBlockedSenders({
+    ...(state.unreadEmailBlockedSenders || {}),
+    [normalizedAccountId]: [
+      ...getUnreadEmailBlockedSenderList(normalizedAccountId),
+      normalizedEmail,
+    ],
+  });
+  state.unreadEmailBlockedSenders = next;
+  save('unread_email_sender_blocked');
+  return true;
+}
+
+function unblockUnreadEmailSender(accountId = '', senderEmail = ''){
+  const normalizedAccountId = String(accountId || '').trim();
+  const normalizedEmail = String(senderEmail || '').trim().toLowerCase();
+  if (!normalizedAccountId || !normalizedEmail) return false;
+  const nextList = getUnreadEmailBlockedSenderList(normalizedAccountId).filter((email) => email !== normalizedEmail);
+  const next = {
+    ...(state.unreadEmailBlockedSenders || {}),
+  };
+  if (nextList.length) next[normalizedAccountId] = nextList;
+  else delete next[normalizedAccountId];
+  state.unreadEmailBlockedSenders = normalizeUnreadEmailBlockedSenders(next);
+  save('unread_email_sender_unblocked');
+  return true;
+}
+
+function getUnreadEmailFilteredEntrySets(activeAccount = null, accountId = ''){
+  const blockedSenderList = getUnreadEmailBlockedSenderList(accountId);
+  const blockedSenderSet = getUnreadEmailBlockedSenderSet(accountId);
+  const unread = filterUnreadEmailEntriesByBlockedSenders(Array.isArray(activeAccount?.entries) ? activeAccount.entries.slice(0, 5) : [], blockedSenderSet);
+  const recent = filterUnreadEmailEntriesByBlockedSenders(Array.isArray(activeAccount?.recentEntries) ? activeAccount.recentEntries.slice(0, 5) : [], blockedSenderSet);
+  return {
+    blockedSenderList,
+    activeEntries: unread.entries,
+    activeRecentEntries: recent.entries,
+    filteredUnreadHiddenCount: unread.hiddenCount,
+    filteredRecentHiddenCount: recent.hiddenCount,
+  };
+}
+
+function renderUnreadEmailBlockedSenderPanel(activeAccountId = '', blockedSenderList = []){
+  const list = Array.isArray(blockedSenderList) ? blockedSenderList.slice().sort((a, b) => String(a || '').localeCompare(String(b || ''))) : [];
+  if (!list.length) return '';
+  const query = getUnreadEmailBlockedSenderQuery(activeAccountId);
+  const filteredList = query
+    ? list.filter((email) => String(email || '').toLowerCase().includes(query))
+    : list;
+  const showSearch = list.length > 4;
+  const resultsLabel = query
+    ? `${filteredList.length} of ${list.length} sender${list.length === 1 ? '' : 's'}`
+    : `${list.length} sender${list.length === 1 ? '' : 's'}`;
+  return `
+    <details class="unread-email-blocklist-panel" open>
+      <summary class="unread-email-blocklist-summary">
+        <span class="unread-email-blocklist-label">Blocked senders</span>
+        <span class="unread-email-blocklist-count">${escapeHtml(String(list.length))}</span>
+      </summary>
+      <div class="unread-email-blocklist">
+        <div class="unread-email-blocklist-meta">${escapeHtml(resultsLabel)}${query ? ` for "${escapeHtml(query)}"` : ''}</div>
+        ${showSearch ? `
+          <label class="unread-email-blocklist-search">
+            <input
+              type="search"
+              value="${escapeHtml(query)}"
+              placeholder="Search blocked senders"
+              data-unread-email-block-filter="1"
+              data-unread-email-account-id="${escapeHtml(activeAccountId)}"
+            >
+          </label>
+        ` : ''}
+        ${filteredList.length ? `
+          <div class="unread-email-blocklist-chips">
+            ${filteredList.map((email) => `
+              <button
+                class="unread-email-block-chip"
+                type="button"
+                data-unread-email-unblock-sender="1"
+                data-unread-email-account-id="${escapeHtml(activeAccountId)}"
+                data-unread-email-sender-email="${escapeHtml(email)}"
+              >${escapeHtml(email)} <span aria-hidden="true">x</span></button>
+            `).join('')}
+          </div>
+        ` : `
+          <div class="unread-email-blocklist-empty">No blocked senders match this search.</div>
+        `}
+      </div>
+    </details>
+  `;
+}
+
+function renderUnreadEmailBulkBar({
+  bulkSelectionSummary = '',
+  inboxDeleteItems = [],
+  sentDeleteItems = [],
+  selectedVisibleItems = [],
+  selectedInboxItems = [],
+  anyActionInFlight = false,
+  anyMarkReadInFlight = false,
+  anySpamInFlight = false,
+  anyDeleteInFlight = false,
+} = {}){
+  const visibleSelectionCount = Array.isArray(selectedVisibleItems) ? selectedVisibleItems.length : 0;
+  const inboxSelectionCount = Array.isArray(selectedInboxItems) ? selectedInboxItems.length : 0;
+  const inboxCount = Array.isArray(inboxDeleteItems) ? inboxDeleteItems.length : 0;
+  const sentCount = Array.isArray(sentDeleteItems) ? sentDeleteItems.length : 0;
+  if (!inboxCount && !sentCount) return '';
+  return `
+    <div class="unread-email-bulk-bar">
+      <div class="unread-email-bulk-summary">
+        <strong>${escapeHtml(bulkSelectionSummary)}</strong>
+        <span>Bulk actions clear inbox items fast or move selected messages to Gmail Trash.</span>
+      </div>
+      <div class="unread-email-bulk-actions">
+        ${inboxCount ? `<button class="btn ghost unread-email-bulk-btn" type="button" data-unread-email-select-scope="inbox" ${anyActionInFlight ? 'disabled' : ''}>Select unread</button>` : ''}
+        ${sentCount ? `<button class="btn ghost unread-email-bulk-btn" type="button" data-unread-email-select-scope="sent" ${anyActionInFlight ? 'disabled' : ''}>Select sent</button>` : ''}
+        <button class="btn ghost unread-email-bulk-btn" type="button" data-unread-email-select-scope="all" ${anyActionInFlight ? 'disabled' : ''}>Select all visible</button>
+        <button class="btn ghost unread-email-bulk-btn" type="button" data-unread-email-clear-selection="1" ${(!visibleSelectionCount || anyActionInFlight) ? 'disabled' : ''}>Clear</button>
+        <button class="btn ghost unread-email-mark-read-btn" type="button" data-unread-email-mark-read-selected="1" ${(!inboxSelectionCount || anyActionInFlight) ? 'disabled' : ''}>${anyMarkReadInFlight ? 'Marking…' : `Mark selected read (${inboxSelectionCount})`}</button>
+        <button class="btn ghost unread-email-spam-btn" type="button" data-unread-email-spam-selected="1" ${(!inboxSelectionCount || anyActionInFlight) ? 'disabled' : ''}>${anySpamInFlight ? 'Sending…' : `Spam selected (${inboxSelectionCount})`}</button>
+        <button class="btn ghost unread-email-delete-btn" type="button" data-unread-email-delete-selected="1" ${(!visibleSelectionCount || anyActionInFlight) ? 'disabled' : ''}>${anyDeleteInFlight ? 'Deleting…' : `Delete selected (${visibleSelectionCount})`}</button>
+      </div>
+    </div>
+  `;
+}
+
+async function fetchUnreadEmailMessageBody({ accountId = '', mailbox = '', uid = '' } = {}){
+  return postJsonWithTimeout(UNREAD_EMAIL_MESSAGE_API, {
+    accountId: String(accountId || '').trim(),
+    mailbox: String(mailbox || '').trim(),
+    uid: Number(uid),
+  }, 20000);
+}
+
+async function handleUnreadEmailDeleteAction({ accountId = '', mailbox = '', uid = '', title = '', direction = 'received' } = {}, renderOptions = {}){
+  const normalizedAccountId = String(accountId || '').trim();
+  const normalizedMailbox = String(mailbox || '').trim();
+  const normalizedUid = String(uid || '').trim();
+  if (!normalizedAccountId || !normalizedMailbox || !normalizedUid) return;
+
+  unreadEmailDeleteInFlight = unreadEmailDeleteKey(normalizedAccountId, normalizedMailbox, normalizedUid);
+  if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
+  updateUnreadEmailRefreshButton();
+
+  try {
+    await postJsonWithTimeout(UNREAD_EMAIL_DELETE_API, {
+      accountId: normalizedAccountId,
+      mailbox: normalizedMailbox,
+      uid: Number(normalizedUid),
+    }, 15000);
+    setUnreadEmailSelection(unreadEmailDeleteKey(normalizedAccountId, normalizedMailbox, normalizedUid), false);
+    unreadEmailDeleteInFlight = '';
+    updateUnreadEmailRefreshButton();
+    await renderUnreadEmailPod({ manual: true });
+  } catch (error) {
+    unreadEmailDeleteInFlight = '';
+    if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
+    updateUnreadEmailRefreshButton();
+    window.alert(String(error?.message || 'Unable to move this email to Gmail Trash.'));
+  }
+}
+
+async function handleUnreadEmailMarkReadAction({ accountId = '', mailbox = '', uid = '' } = {}, renderOptions = {}){
+  const normalizedAccountId = String(accountId || '').trim();
+  const normalizedMailbox = String(mailbox || '').trim();
+  const normalizedUid = String(uid || '').trim();
+  if (!normalizedAccountId || !normalizedMailbox || !normalizedUid) return;
+
+  unreadEmailMarkReadInFlight = unreadEmailDeleteKey(normalizedAccountId, normalizedMailbox, normalizedUid);
+  if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
+  updateUnreadEmailRefreshButton();
+
+  try {
+    await postJsonWithTimeout(UNREAD_EMAIL_MARK_READ_API, {
+      accountId: normalizedAccountId,
+      mailbox: normalizedMailbox,
+      uid: Number(normalizedUid),
+    }, 15000);
+    setUnreadEmailSelection(unreadEmailDeleteKey(normalizedAccountId, normalizedMailbox, normalizedUid), false);
+    unreadEmailMarkReadInFlight = '';
+    updateUnreadEmailRefreshButton();
+    await renderUnreadEmailPod({ manual: true });
+  } catch (error) {
+    unreadEmailMarkReadInFlight = '';
+    if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
+    updateUnreadEmailRefreshButton();
+    window.alert(String(error?.message || 'Unable to mark this email as read.'));
+  }
+}
+
+async function handleUnreadEmailSpamAction({ accountId = '', mailbox = '', uid = '' } = {}, renderOptions = {}){
+  const normalizedAccountId = String(accountId || '').trim();
+  const normalizedMailbox = String(mailbox || '').trim();
+  const normalizedUid = String(uid || '').trim();
+  if (!normalizedAccountId || !normalizedMailbox || !normalizedUid) return;
+
+  unreadEmailSpamInFlight = unreadEmailDeleteKey(normalizedAccountId, normalizedMailbox, normalizedUid);
+  if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
+  updateUnreadEmailRefreshButton();
+
+  try {
+    await postJsonWithTimeout(UNREAD_EMAIL_SPAM_API, {
+      accountId: normalizedAccountId,
+      mailbox: normalizedMailbox,
+      uid: Number(normalizedUid),
+    }, 15000);
+    setUnreadEmailSelection(unreadEmailDeleteKey(normalizedAccountId, normalizedMailbox, normalizedUid), false);
+    unreadEmailSpamInFlight = '';
+    updateUnreadEmailRefreshButton();
+    await renderUnreadEmailPod({ manual: true });
+  } catch (error) {
+    unreadEmailSpamInFlight = '';
+    if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
+    updateUnreadEmailRefreshButton();
+    window.alert(String(error?.message || 'Unable to move this email to spam.'));
+  }
+}
+
+async function handleUnreadEmailBulkDeleteAction({ accountId = '', items = [] } = {}, renderOptions = {}){
+  const normalizedAccountId = String(accountId || '').trim();
+  const selectedItems = (Array.isArray(items) ? items : []).filter((item) => item?.key && item?.mailbox && Number.isFinite(Number(item?.uid)));
+  if (!normalizedAccountId || !selectedItems.length) return;
+
+  unreadEmailDeleteInFlight = `batch::${normalizedAccountId}`;
+  if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
+  updateUnreadEmailRefreshButton();
+
+  try {
+    await postJsonWithTimeout(UNREAD_EMAIL_DELETE_BATCH_API, {
+      accountId: normalizedAccountId,
+      items: selectedItems.map((item) => ({
+        mailbox: item.mailbox,
+        uid: Number(item.uid),
+      })),
+    }, 20000);
+    setUnreadEmailSelections(selectedItems, false);
+    unreadEmailDeleteInFlight = '';
+    updateUnreadEmailRefreshButton();
+    await renderUnreadEmailPod({ manual: true });
+  } catch (error) {
+    unreadEmailDeleteInFlight = '';
+    updateUnreadEmailRefreshButton();
+    await renderUnreadEmailPod({ manual: true });
+    window.alert(String(error?.message || 'Unable to move the selected emails to Gmail Trash.'));
+  }
+}
+
+async function handleUnreadEmailBulkMarkReadAction({ accountId = '', items = [] } = {}, renderOptions = {}){
+  const normalizedAccountId = String(accountId || '').trim();
+  const selectedItems = (Array.isArray(items) ? items : []).filter((item) => item?.key && item?.mailbox && Number.isFinite(Number(item?.uid)));
+  if (!normalizedAccountId || !selectedItems.length) return;
+
+  unreadEmailMarkReadInFlight = `batch::${normalizedAccountId}`;
+  if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
+  updateUnreadEmailRefreshButton();
+
+  try {
+    await postJsonWithTimeout(UNREAD_EMAIL_MARK_READ_BATCH_API, {
+      accountId: normalizedAccountId,
+      items: selectedItems.map((item) => ({
+        mailbox: item.mailbox,
+        uid: Number(item.uid),
+      })),
+    }, 20000);
+    setUnreadEmailSelections(selectedItems, false);
+    unreadEmailMarkReadInFlight = '';
+    updateUnreadEmailRefreshButton();
+    await renderUnreadEmailPod({ manual: true });
+  } catch (error) {
+    unreadEmailMarkReadInFlight = '';
+    updateUnreadEmailRefreshButton();
+    await renderUnreadEmailPod({ manual: true });
+    window.alert(String(error?.message || 'Unable to mark the selected emails as read.'));
+  }
+}
+
+async function handleUnreadEmailBulkSpamAction({ accountId = '', items = [] } = {}, renderOptions = {}){
+  const normalizedAccountId = String(accountId || '').trim();
+  const selectedItems = (Array.isArray(items) ? items : []).filter((item) => item?.key && item?.mailbox && Number.isFinite(Number(item?.uid)));
+  if (!normalizedAccountId || !selectedItems.length) return;
+
+  unreadEmailSpamInFlight = `batch::${normalizedAccountId}`;
+  if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
+  updateUnreadEmailRefreshButton();
+
+  try {
+    await postJsonWithTimeout(UNREAD_EMAIL_SPAM_BATCH_API, {
+      accountId: normalizedAccountId,
+      items: selectedItems.map((item) => ({
+        mailbox: item.mailbox,
+        uid: Number(item.uid),
+      })),
+    }, 20000);
+    setUnreadEmailSelections(selectedItems, false);
+    unreadEmailSpamInFlight = '';
+    updateUnreadEmailRefreshButton();
+    await renderUnreadEmailPod({ manual: true });
+  } catch (error) {
+    unreadEmailSpamInFlight = '';
+    updateUnreadEmailRefreshButton();
+    await renderUnreadEmailPod({ manual: true });
+    window.alert(String(error?.message || 'Unable to move the selected emails to spam.'));
+  }
+}
+
+async function handleUnreadEmailMessageToggle({ accountId = '', mailbox = '', uid = '' } = {}, renderOptions = {}){
+  const messageKey = createUnreadEmailMessageKey(accountId, mailbox, uid);
+  if (!messageKey) return;
+
+  if (unreadEmailExpandedKeys.has(messageKey)) {
+    unreadEmailExpandedKeys = new Set([...unreadEmailExpandedKeys].filter((key) => key !== messageKey));
+    if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
+    return;
+  }
+
+  unreadEmailExpandedKeys = new Set([...unreadEmailExpandedKeys, messageKey]);
+  if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
+
+  if (unreadEmailExpandedBodies.has(messageKey) || unreadEmailExpandedLoadingKeys.has(messageKey)) return;
+
+  unreadEmailExpandedErrors.delete(messageKey);
+  unreadEmailExpandedLoadingKeys = new Set([...unreadEmailExpandedLoadingKeys, messageKey]);
+  if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
+
+  try {
+    const payload = await fetchUnreadEmailMessageBody({ accountId, mailbox, uid });
+    unreadEmailExpandedBodies.set(messageKey, String(payload?.bodyText || '').trim());
+    unreadEmailExpandedErrors.delete(messageKey);
+  } catch (error) {
+    unreadEmailExpandedErrors.set(messageKey, String(error?.message || 'Unable to load the full email.'));
+  } finally {
+    unreadEmailExpandedLoadingKeys = new Set([...unreadEmailExpandedLoadingKeys].filter((key) => key !== messageKey));
+    if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
+  }
+}
+
+function unreadEmailVisualState({ routeUnavailable = false, setupRequired = false, stale = false, partialFailure = false, displayUnreadCount = null } = {}){
+  return routeUnavailable
+    ? 'route-error'
+    : setupRequired
+      ? 'setup'
+      : stale
+        ? 'stale'
+        : partialFailure
+          ? 'partial'
+          : displayUnreadCount == null
+            ? 'neutral'
+            : displayUnreadCount
+              ? 'active'
+              : 'clear';
+}
+
+function renderUnreadEmailTag(label, tone = 'neutral'){
+  return `<span class="unread-email-tag unread-email-tag-${tone}">${escapeHtml(label)}</span>`;
+}
+
+function renderUnreadEmailSectionTags(tags = []){
+  const markup = tags.filter(Boolean).join('');
+  return markup ? `<div class="unread-email-section-tags">${markup}</div>` : '';
+}
+
+function normalizeUnreadEmailReaderText(value = ''){
+  return String(value || '').replace(/\r\n/g, '\n').replace(/\u00a0/g, ' ').trim();
+}
+
+function unreadEmailReaderParagraphs(lines = []){
+  const paragraphs = [];
+  let current = [];
+  (Array.isArray(lines) ? lines : []).forEach((line) => {
+    const normalized = String(line || '').trim();
+    if (!normalized) {
+      if (current.length) {
+        paragraphs.push(current.join(' '));
+        current = [];
+      }
+      return;
+    }
+    current.push(normalized);
+  });
+  if (current.length) paragraphs.push(current.join(' '));
+  return paragraphs;
+}
+
+function renderUnreadEmailReaderParagraph(paragraph = '', className = ''){
+  const text = String(paragraph || '').trim();
+  const attrs = className ? ` class="${className}"` : '';
+  if (!text) return `<p${attrs}></p>`;
+  const urlPattern = /(https?:\/\/[^\s<>"']+)/g;
+  const parts = text.split(urlPattern);
+  const markup = parts.map((part, index) => {
+    if (index % 2 === 1) {
+      return `<a href="${escapeHtml(part)}" target="_blank" rel="noopener">${escapeHtml(part)}</a>`;
+    }
+    return escapeHtml(part);
+  }).join('');
+  return `<p${attrs}>${markup}</p>`;
+}
+
+function formatUnreadEmailReaderBody(bodyText = ''){
+  const source = normalizeUnreadEmailReaderText(bodyText);
+  if (!source) {
+    return {
+      lead: [],
+      quotes: [],
+      footer: [],
+      rawHtmlHidden: false,
+    };
+  }
+
+  const htmlStart = source.search(/(?:^|\n)\s*<(?:div|p|br|img|a|table|html|body)\b/i);
+  const readableSlice = htmlStart > 0 ? source.slice(0, htmlStart).trim() : source;
+  const rawHtmlHidden = htmlStart > 0;
+  const footerPatterns = [
+    /^reply to this email directly/i,
+    /^view (?:it|this pull request|on github)/i,
+    /^or unsubscribe/i,
+    /^you are receiving this because/i,
+    /^message id:/i,
+    /^id:\s/i,
+    /^charset=/i,
+    /^content-(?:type|transfer-encoding|language):/i,
+    /^mime-version:/i,
+    /^boundary=/i,
+    /^https:\/\/github\.com\/notifications\/unsubscribe/i,
+    /^on github[,.:]?$/i,
+  ];
+  const quoteBoundaryPatterns = [
+    /\b(?:wrote|napisa[łl]|schrieb|escribi[oó]|ha scritto|a écrit)\s*:?$/i,
+    /^on .+\bwrote:?$/i,
+    /^dnia .+napisa[łl]:?$/i,
+  ];
+
+  const leadLines = [];
+  const quoteLines = [];
+  const footerLines = [];
+  let inFooter = false;
+  let inQuote = false;
+
+  readableSlice.split('\n').forEach((line) => {
+    const trimmed = String(line || '').trim();
+    if (!trimmed && !inFooter) {
+      if ((inQuote || quoteLines.length) && quoteLines[quoteLines.length - 1] !== '') quoteLines.push('');
+      else if (leadLines.length && leadLines[leadLines.length - 1] !== '') leadLines.push('');
+      return;
+    }
+    if (!inFooter && footerPatterns.some((pattern) => pattern.test(trimmed))) {
+      inFooter = true;
+    }
+    if (inFooter) {
+      footerLines.push(trimmed);
+      return;
+    }
+    if (quoteBoundaryPatterns.some((pattern) => pattern.test(trimmed))) {
+      inQuote = true;
+      quoteLines.push(trimmed.replace(/^>\s?/, ''));
+      return;
+    }
+    if (inQuote || /^>/.test(trimmed)) {
+      quoteLines.push(trimmed.replace(/^>\s?/, ''));
+      return;
+    }
+    leadLines.push(trimmed);
+  });
+
+  return {
+    lead: unreadEmailReaderParagraphs(leadLines),
+    quotes: unreadEmailReaderParagraphs(quoteLines),
+    footer: unreadEmailReaderParagraphs(footerLines),
+    rawHtmlHidden,
+  };
+}
+
+function renderUnreadEmailExpandedBody(messageKey = ''){
+  const key = String(messageKey || '').trim();
+  if (!key || !unreadEmailExpandedKeys.has(key)) return '';
+
+  const isLoading = unreadEmailExpandedLoadingKeys.has(key);
+  const errorText = String(unreadEmailExpandedErrors.get(key) || '').trim();
+  const bodyText = String(unreadEmailExpandedBodies.get(key) || '').trim();
+  let content = '<p class="unread-email-item-full-note">No readable body content was returned for this email.</p>';
+
+  if (isLoading) {
+    content = '<p class="unread-email-item-full-note">Loading full email…</p>';
+  } else if (errorText) {
+    content = `<p class="unread-email-item-full-note is-error">${escapeHtml(errorText)}</p>`;
+  } else if (bodyText) {
+    const formatted = formatUnreadEmailReaderBody(bodyText);
+    const leadMarkup = formatted.lead.length
+      ? formatted.lead.map((paragraph) => renderUnreadEmailReaderParagraph(paragraph)).join('')
+      : '<p class="unread-email-item-full-note">This message does not have a clean plain-text body, so some technical content was hidden.</p>';
+    const quoteMarkup = formatted.quotes.length
+      ? `
+        <details class="unread-email-reader-details">
+          <summary>Quoted thread</summary>
+          <div class="unread-email-reader-quote">
+            ${formatted.quotes.map((paragraph) => renderUnreadEmailReaderParagraph(paragraph)).join('')}
+          </div>
+        </details>
+      `
+      : '';
+    const footerSummary = [
+      formatted.footer.length ? 'notification footer' : '',
+      formatted.rawHtmlHidden ? 'raw HTML' : '',
+    ].filter(Boolean).join(' and ');
+    const footerMarkup = (formatted.footer.length || formatted.rawHtmlHidden)
+      ? `
+        <details class="unread-email-reader-details unread-email-reader-details-muted">
+          <summary>${escapeHtml(footerSummary ? `Hidden ${footerSummary}` : 'Hidden details')}</summary>
+          <div class="unread-email-reader-footer">
+            ${formatted.footer.length ? formatted.footer.map((paragraph) => renderUnreadEmailReaderParagraph(paragraph)).join('') : '<p>Raw HTML and email metadata were hidden to keep this readable.</p>'}
+          </div>
+        </details>
+      `
+      : '';
+    content = `
+      <div class="unread-email-item-full-text unread-email-reader">
+        ${leadMarkup}
+        ${quoteMarkup}
+        ${footerMarkup}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="unread-email-item-full">
+      <div class="unread-email-item-full-head">
+        <strong>Reader view</strong>
+      </div>
+      ${content}
+    </div>
+  `;
+}
+
+function createUnreadEmailDeleteItem(activeAccountId = '', entry = {}, direction = 'received'){
+  const accountId = String(activeAccountId || '').trim();
+  const mailbox = String(entry?.mailbox || '').trim();
+  const uid = Number(entry?.uid);
+  if (!accountId || !mailbox || !Number.isFinite(uid) || uid <= 0) return null;
+  return {
+    key: unreadEmailDeleteKey(accountId, mailbox, uid),
+    accountId,
+    mailbox,
+    uid,
+    title: String(entry?.title || 'Untitled message'),
+    direction,
+  };
+}
+
+function renderUnreadEmailMessageCard({
+  entry,
+  direction = 'received',
+  activeAccountId = '',
+  showActions = true,
+  anyActionInFlight = false,
+} = {}){
+  const personLabel = direction === 'sent' ? 'To' : 'From';
+  const personText = escapeHtml(entry?.counterpartyName || entry?.counterpartyEmail || 'Unknown');
+  const issuedLabel = escapeHtml(entry?.issuedAt ? new Date(entry.issuedAt).toLocaleString() : 'Unknown time');
+  const summary = String(entry?.summary || '').trim();
+  const preview = summary ? escapeHtml(summary) : 'Preview unavailable from the mailbox bridge.';
+  const deleteItem = createUnreadEmailDeleteItem(activeAccountId, entry, direction);
+  const deleteKey = String(deleteItem?.key || '').trim();
+  const messageKey = createUnreadEmailMessageKey(activeAccountId, entry?.mailbox, entry?.uid);
+  const canDelete = !!deleteItem;
+  const senderEmailRaw = String(entry?.counterpartyEmail || '').trim().toLowerCase();
+  const canMarkRead = direction === 'received' && !!deleteItem && showActions;
+  const canSpam = direction === 'received' && !!deleteItem && showActions;
+  const canBlockSender = direction === 'received' && !!deleteItem && showActions && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(senderEmailRaw);
+  const isMarkingRead = deleteKey && unreadEmailMarkReadInFlight === deleteKey;
+  const isSpamming = deleteKey && unreadEmailSpamInFlight === deleteKey;
+  const isDeleting = deleteKey && unreadEmailDeleteInFlight === deleteKey;
+  const isSelected = deleteKey && unreadEmailSelectedKeys.has(deleteKey);
+  const isExpanded = messageKey && unreadEmailExpandedKeys.has(messageKey);
+  const isLoading = messageKey && unreadEmailExpandedLoadingKeys.has(messageKey);
+  const markReadLabel = isMarkingRead ? 'Marking…' : 'Mark read';
+  const spamLabel = isSpamming ? 'Sending…' : 'Spam';
+  const deleteLabel = isDeleting ? 'Deleting…' : 'Delete';
+  const counterpartyEmail = (entry?.counterpartyEmail && entry?.counterpartyName) ? escapeHtml(entry.counterpartyEmail) : '';
+  const directionTag = direction === 'sent'
+    ? renderUnreadEmailTag('Sent', 'sent')
+    : renderUnreadEmailTag('Unread', 'unread');
+  const expandLabel = isExpanded ? 'Collapse' : (isLoading ? 'Loading…' : 'Expand');
+  return `
+    <article class="unread-email-item unread-email-item-${direction} ${isSelected ? 'is-selected' : ''} ${isDeleting ? 'is-deleting' : ''} ${isExpanded ? 'is-expanded' : ''}">
+      <button
+        class="unread-email-item-main unread-email-item-toggle"
+        type="button"
+        ${messageKey ? `data-unread-email-toggle="1" data-unread-email-account-id="${escapeHtml(activeAccountId)}" data-unread-email-mailbox="${escapeHtml(String(entry?.mailbox || ''))}" data-unread-email-uid="${escapeHtml(String(entry?.uid || ''))}" aria-expanded="${isExpanded ? 'true' : 'false'}"` : 'disabled'}
+      >
+        <div class="unread-email-item-topline">
+          <div class="unread-email-item-tags">
+            ${directionTag}
+            ${renderUnreadEmailTag(issuedLabel, 'time')}
+          </div>
+          <span class="unread-email-item-expand-hint">${expandLabel}</span>
+        </div>
+        <div class="unread-email-item-head">
+          <strong>${escapeHtml(entry?.title || 'Untitled message')}</strong>
+          <span>${personLabel}: ${personText}</span>
+        </div>
+        ${counterpartyEmail ? `
+          <div class="unread-email-item-meta">
+            <span>${counterpartyEmail}</span>
+          </div>
+        ` : ''}
+        <p class="unread-email-item-preview ${summary ? '' : 'is-muted'}">${preview}</p>
+      </button>
+      <div class="unread-email-item-side">
+        <div class="unread-email-item-side-meta">
+          <span class="unread-email-item-side-label">${personLabel}</span>
+          <strong>${personText}</strong>
+          ${counterpartyEmail ? `<span>${counterpartyEmail}</span>` : ''}
+        </div>
+        ${(canDelete && showActions) ? `
+          <div class="unread-email-item-actions">
+            <label class="unread-email-select-toggle">
+              <input
+                type="checkbox"
+                data-unread-email-select="1"
+                data-unread-email-select-key="${escapeHtml(deleteKey)}"
+                ${isSelected ? 'checked' : ''}
+                ${anyActionInFlight ? 'disabled' : ''}
+              >
+              <span>Keep selected</span>
+            </label>
+            ${canMarkRead ? `
+              <button
+                class="btn ghost unread-email-mark-read-btn"
+                type="button"
+                data-unread-email-mark-read="1"
+                data-unread-email-account-id="${escapeHtml(deleteItem.accountId || '')}"
+                data-unread-email-mailbox="${escapeHtml(deleteItem.mailbox || '')}"
+                data-unread-email-uid="${escapeHtml(String(deleteItem.uid || ''))}"
+                ${anyActionInFlight ? 'disabled' : ''}
+              >${markReadLabel}</button>
+            ` : ''}
+            ${canSpam ? `
+              <button
+                class="btn ghost unread-email-spam-btn"
+                type="button"
+                data-unread-email-spam="1"
+                data-unread-email-account-id="${escapeHtml(deleteItem.accountId || '')}"
+                data-unread-email-mailbox="${escapeHtml(deleteItem.mailbox || '')}"
+                data-unread-email-uid="${escapeHtml(String(deleteItem.uid || ''))}"
+                ${anyActionInFlight ? 'disabled' : ''}
+              >${spamLabel}</button>
+            ` : ''}
+            ${canBlockSender ? `
+              <button
+                class="btn ghost unread-email-block-btn"
+                type="button"
+                data-unread-email-block-sender="1"
+                data-unread-email-account-id="${escapeHtml(deleteItem.accountId || '')}"
+                data-unread-email-sender-email="${escapeHtml(senderEmailRaw)}"
+                ${anyActionInFlight ? 'disabled' : ''}
+              >Block sender</button>
+            ` : ''}
+            <button
+              class="btn ghost unread-email-delete-btn"
+              type="button"
+              data-unread-email-delete="1"
+              data-unread-email-account-id="${escapeHtml(deleteItem.accountId || '')}"
+              data-unread-email-mailbox="${escapeHtml(deleteItem.mailbox || '')}"
+              data-unread-email-uid="${escapeHtml(String(deleteItem.uid || ''))}"
+              data-unread-email-title="${escapeHtml(deleteItem.title || 'Untitled message')}"
+              data-unread-email-direction="${escapeHtml(deleteItem.direction || direction)}"
+              ${anyActionInFlight ? 'disabled' : ''}
+            >${deleteLabel}</button>
+          </div>
+        ` : ''}
+      </div>
+      ${renderUnreadEmailExpandedBody(messageKey)}
+    </article>
+  `;
+}
+
+function bindUnreadEmailWidgetInteractions({
+  el,
+  options = {},
+  activeAccount = null,
+  inboxDeleteItems = [],
+  sentDeleteItems = [],
+  visibleDeleteItems = [],
+  selectedVisibleItems = [],
+  selectedInboxItems = [],
+} = {}){
+  if (!el) return;
+
+  el.querySelectorAll('[data-unread-email-account]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextId = String(button.getAttribute('data-unread-email-account') || '').trim();
+      if (!nextId || nextId === unreadEmailActiveAccountId) return;
+      setUnreadEmailActiveAccountId(nextId);
+      if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-toggle-recent]').forEach((button) => {
+    button.addEventListener('click', () => {
+      unreadEmailShowRecentInbox = !unreadEmailShowRecentInbox;
+      if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-toggle]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (button.disabled) return;
+      await handleUnreadEmailMessageToggle({
+        accountId: button.getAttribute('data-unread-email-account-id') || '',
+        mailbox: button.getAttribute('data-unread-email-mailbox') || '',
+        uid: button.getAttribute('data-unread-email-uid') || '',
+      }, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-select]').forEach((input) => {
+    input.addEventListener('change', () => {
+      const key = String(input.getAttribute('data-unread-email-select-key') || '').trim();
+      setUnreadEmailSelection(key, !!input.checked);
+      if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-select-scope]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const scope = String(button.getAttribute('data-unread-email-select-scope') || '').trim();
+      const items = scope === 'inbox'
+        ? inboxDeleteItems
+        : scope === 'sent'
+          ? sentDeleteItems
+          : visibleDeleteItems;
+      setUnreadEmailSelections(items, true);
+      if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-clear-selection]').forEach((button) => {
+    button.addEventListener('click', () => {
+      setUnreadEmailSelections(visibleDeleteItems, false);
+      if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-delete]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (button.disabled) return;
+      await handleUnreadEmailDeleteAction({
+        accountId: button.getAttribute('data-unread-email-account-id') || '',
+        mailbox: button.getAttribute('data-unread-email-mailbox') || '',
+        uid: button.getAttribute('data-unread-email-uid') || '',
+        title: button.getAttribute('data-unread-email-title') || '',
+        direction: button.getAttribute('data-unread-email-direction') || 'received',
+      }, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-mark-read]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (button.disabled) return;
+      await handleUnreadEmailMarkReadAction({
+        accountId: button.getAttribute('data-unread-email-account-id') || '',
+        mailbox: button.getAttribute('data-unread-email-mailbox') || '',
+        uid: button.getAttribute('data-unread-email-uid') || '',
+      }, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-spam]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (button.disabled) return;
+      await handleUnreadEmailSpamAction({
+        accountId: button.getAttribute('data-unread-email-account-id') || '',
+        mailbox: button.getAttribute('data-unread-email-mailbox') || '',
+        uid: button.getAttribute('data-unread-email-uid') || '',
+      }, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-block-sender]').forEach((button) => {
+    button.addEventListener('click', () => {
+      if (button.disabled) return;
+      const accountId = button.getAttribute('data-unread-email-account-id') || '';
+      const senderEmail = button.getAttribute('data-unread-email-sender-email') || '';
+      if (!blockUnreadEmailSender(accountId, senderEmail)) return;
+      clearUnreadEmailSelections(accountId);
+      if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-unblock-sender]').forEach((button) => {
+    button.addEventListener('click', () => {
+      if (button.disabled) return;
+      const accountId = button.getAttribute('data-unread-email-account-id') || '';
+      const senderEmail = button.getAttribute('data-unread-email-sender-email') || '';
+      if (!unblockUnreadEmailSender(accountId, senderEmail)) return;
+      if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-block-filter]').forEach((input) => {
+    input.addEventListener('input', () => {
+      const accountId = input.getAttribute('data-unread-email-account-id') || '';
+      setUnreadEmailBlockedSenderQuery(accountId, input.value || '');
+      if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-delete-selected]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (button.disabled || !activeAccount?.id) return;
+      await handleUnreadEmailBulkDeleteAction({
+        accountId: activeAccount.id,
+        items: selectedVisibleItems,
+      }, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-mark-read-selected]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (button.disabled || !activeAccount?.id) return;
+      await handleUnreadEmailBulkMarkReadAction({
+        accountId: activeAccount.id,
+        items: selectedInboxItems,
+      }, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-spam-selected]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (button.disabled || !activeAccount?.id) return;
+      await handleUnreadEmailBulkSpamAction({
+        accountId: activeAccount.id,
+        items: selectedInboxItems,
+      }, options);
+    });
+  });
+}
+
+function renderUnreadEmailWidget(payload, options = {}){
+  const el = document.getElementById('unreadEmailWidget');
+  if (!el) return;
+
+  const accounts = Array.isArray(payload?.accounts) ? payload.accounts : [];
+  const activeAccount = resolveUnreadEmailActiveAccount(accounts);
+  const activeAccountId = String(activeAccount?.id || '').trim();
+  const {
+    blockedSenderList,
+    activeEntries,
+    activeRecentEntries,
+    filteredUnreadHiddenCount,
+    filteredRecentHiddenCount,
+  } = getUnreadEmailFilteredEntrySets(activeAccount, activeAccountId);
+  const activeSentEntries = Array.isArray(activeAccount?.sentEntries) ? activeAccount.sentEntries.slice(0, 5) : [];
+  const totalUnreadCount = Number.isFinite(Number(payload?.unreadCount)) ? Math.max(0, Number(payload.unreadCount)) : null;
+  const activeUnreadCount = Number.isFinite(Number(activeAccount?.unreadCount)) ? Math.max(0, Number(activeAccount.unreadCount)) : null;
+  const displayUnreadCount = activeAccount ? activeUnreadCount : totalUnreadCount;
+  const inboxUrl = String(activeAccount?.inboxUrl || payload?.inboxUrl || '').trim();
+  const sentOpenUrl = String(activeAccount?.sentOpenUrl || '').trim();
+  const setupRequired = !!payload?.setupRequired;
+  const partialFailure = !!payload?.partialFailure;
+  const routeUnavailable = !!payload?.routeUnavailable;
+  const stale = !!options.stale;
+  const backoffLeftMs = Number(options.backoffLeftMs || 0);
+  const activeLabel = String(activeAccount?.label || 'Unread email').trim();
+  const activeStatus = String(activeAccount?.status || '').trim();
+  const anyActionInFlight = !!unreadEmailMarkReadInFlight || !!unreadEmailSpamInFlight || !!unreadEmailDeleteInFlight;
+  const anyDeleteInFlight = !!unreadEmailDeleteInFlight;
+  const stateLabel = routeUnavailable
+    ? 'Server route unavailable'
+    : setupRequired
+    ? 'Setup required'
+    : stale
+      ? 'Using last successful snapshot'
+      : partialFailure
+        ? 'Partial inbox coverage'
+      : displayUnreadCount == null
+        ? 'Waiting for inbox data'
+      : displayUnreadCount === 0
+        ? `${activeLabel} is clear`
+        : `${activeLabel} · ${displayUnreadCount} unread right now`;
+  const helper = routeUnavailable
+    ? 'The browser reached the app, but the running server does not yet expose `/api/email-unread`. Restart the local server after pulling the latest code.'
+    : setupRequired
+    ? 'Add Gmail credentials in `.env` to enable live inbox snapshots.'
+    : stale
+      ? `Retrying in ${Math.ceil(backoffLeftMs / 1000)}s while keeping the latest working snapshot visible.`
+      : partialFailure
+        ? 'Some inboxes are healthy while others still need credentials or attention.'
+      : displayUnreadCount == null
+        ? 'The mailbox bridge has not returned a count yet.'
+      : activeAccount?.includeSent
+        ? 'Showing unread inbox items by default. Use the latest 5 overall button for recent mail; Tavern sent items stay separate.'
+        : 'Showing unread inbox items by default. Use the latest 5 overall button for recent mail.';
+  const inboxDeleteItems = activeEntries.map((entry) => createUnreadEmailDeleteItem(activeAccountId, entry, 'received')).filter(Boolean);
+  const sentDeleteItems = activeSentEntries.map((entry) => createUnreadEmailDeleteItem(activeAccountId, entry, 'sent')).filter(Boolean);
+  const visibleDeleteItems = [...inboxDeleteItems, ...sentDeleteItems];
+  const selectedVisibleItems = visibleDeleteItems.filter((item) => unreadEmailSelectedKeys.has(item.key));
+  const selectedInboxItems = inboxDeleteItems.filter((item) => unreadEmailSelectedKeys.has(item.key));
+  const bulkSelectionSummary = selectedVisibleItems.length ? `${selectedVisibleItems.length} selected` : `${visibleDeleteItems.length} available`;
+  const visualState = unreadEmailVisualState({ routeUnavailable, setupRequired, stale, partialFailure, displayUnreadCount });
+
+  const accountTabs = accounts.map((account) => {
+    const isActive = String(account?.id || '') === String(activeAccount?.id || '');
+    const countLabel = account?.unreadCount == null ? '—' : escapeHtml(String(account.unreadCount));
+    return `
+      <button class="unread-email-account-tab ${isActive ? 'is-active' : ''}" type="button" data-unread-email-account="${escapeHtml(account.id || '')}">
+        <span class="unread-email-account-tab-label">${escapeHtml(account.label || account.account || 'Inbox')}</span>
+        <strong class="unread-email-account-tab-count">${countLabel}</strong>
+      </button>
+    `;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="unread-email-shell" data-pod="unread-email">
+      ${accounts.length ? `<div class="unread-email-account-tabs">${accountTabs}</div>` : ''}
+      <div class="unread-email-overview">
+        <div class="unread-email-summary-card is-${visualState}">
+          <div class="unread-email-summary-head">
+            <div>
+              <span class="unread-email-summary-kicker">Inbox pulse</span>
+              ${activeAccount ? `<div class="unread-email-summary-account">${escapeHtml(activeLabel)} · ${escapeHtml(activeAccount.account || '')}</div>` : ''}
+            </div>
+            <strong>${displayUnreadCount == null ? '—' : displayUnreadCount}</strong>
+          </div>
+          <div class="unread-email-summary-body">
+            <div class="unread-email-summary-title">${escapeHtml(stateLabel)}</div>
+            <p>${escapeHtml(helper)}</p>
+          </div>
+        </div>
+        ${activeAccount ? `
+          <div class="unread-email-focus-card is-${visualState}">
+            <div class="unread-email-focus-head">
+              <div>
+                <strong>${escapeHtml(activeLabel)}</strong>
+                <div class="unread-email-focus-meta">${escapeHtml(activeAccount.account || 'Not configured')}</div>
+              </div>
+              <div class="unread-email-focus-stats">
+                <span class="unread-email-focus-status">${escapeHtml(activeStatus || stateLabel)}</span>
+                <span class="unread-email-focus-count">${displayUnreadCount == null ? '—' : escapeHtml(String(displayUnreadCount))}</span>
+              </div>
+            </div>
+            <div class="unread-email-focus-actions">
+              ${inboxUrl ? `<a class="btn ghost" href="${encodeURI(inboxUrl)}" target="_blank" rel="noopener">Open inbox</a>` : ''}
+              <button class="btn ghost unread-email-bulk-btn" type="button" data-unread-email-toggle-recent="1">${unreadEmailShowRecentInbox ? 'Hide latest 5 overall' : 'Show latest 5 overall'}</button>
+              ${(activeAccount.includeSent && sentOpenUrl) ? `<a class="btn ghost" href="${encodeURI(sentOpenUrl)}" target="_blank" rel="noopener">Open sent</a>` : ''}
+            </div>
+            ${renderUnreadEmailBlockedSenderPanel(activeAccountId, blockedSenderList)}
+            ${activeAccount.message ? `<p>${escapeHtml(activeAccount.message)}</p>` : ''}
+          </div>
+        ` : ''}
+      </div>
+      ${renderUnreadEmailBulkBar({
+        bulkSelectionSummary,
+        inboxDeleteItems,
+        sentDeleteItems,
+        selectedVisibleItems,
+        selectedInboxItems,
+        anyActionInFlight,
+        anyMarkReadInFlight: !!unreadEmailMarkReadInFlight,
+        anySpamInFlight: !!unreadEmailSpamInFlight,
+        anyDeleteInFlight,
+      })}
+      ${setupRequired ? `
+        <div class="unread-email-setup-card">
+          <strong>Configuration</strong>
+          <p>For one inbox, set <code>EMAIL_UNREAD_USERNAME</code> and <code>EMAIL_UNREAD_APP_PASSWORD</code>. For multiple inboxes, use <code>EMAIL_UNREAD_ACCOUNTS_JSON</code> with one object per Gmail address.</p>
+          <p class="note-meta">This pod keeps mailbox credentials on the local server and only sends snapshots to the browser.</p>
+        </div>
+      ` : ''}
+      ${activeEntries.length ? `
+        <section class="unread-email-section">
+          <div class="unread-email-section-head">
+            <div>
+              <div class="unread-email-section-kicker">Unread</div>
+              <strong>Latest unread inbox emails</strong>
+            </div>
+            ${renderUnreadEmailSectionTags([
+              renderUnreadEmailTag(`${activeEntries.length} message${activeEntries.length === 1 ? '' : 's'}`, 'count'),
+              renderUnreadEmailTag('Unread only', 'neutral'),
+              filteredUnreadHiddenCount ? renderUnreadEmailTag(`${filteredUnreadHiddenCount} blocked hidden`, 'neutral') : '',
+            ])}
+          </div>
+          <div class="unread-email-list">
+            ${activeEntries.map((entry) => renderUnreadEmailMessageCard({ entry, direction: 'received', activeAccountId, anyActionInFlight })).join('')}
+          </div>
+        </section>
+      ` : (!setupRequired && !routeUnavailable ? `
+        <div class="unread-email-empty-state">
+          <strong>No unread email previews available</strong>
+          <p>The mailbox bridge returned the account status, but there were no unread inbox messages to show.</p>
+        </div>
+      ` : '')}
+      ${unreadEmailShowRecentInbox ? `
+        <section class="unread-email-section">
+          <div class="unread-email-section-head">
+            <div>
+              <div class="unread-email-section-kicker">Recent</div>
+              <strong>Latest 5 inbox emails overall</strong>
+            </div>
+            ${renderUnreadEmailSectionTags([
+              renderUnreadEmailTag(`${activeRecentEntries.length} message${activeRecentEntries.length === 1 ? '' : 's'}`, 'count'),
+              renderUnreadEmailTag('Read + unread', 'neutral'),
+              filteredRecentHiddenCount ? renderUnreadEmailTag(`${filteredRecentHiddenCount} blocked hidden`, 'neutral') : '',
+            ])}
+          </div>
+          ${activeRecentEntries.length ? `
+            <div class="unread-email-list">
+              ${activeRecentEntries.map((entry) => renderUnreadEmailMessageCard({ entry, direction: 'received', activeAccountId, showActions: false, anyActionInFlight })).join('')}
+            </div>
+          ` : `
+            <div class="unread-email-empty-state">
+              <strong>No recent inbox emails available</strong>
+              <p>The mailbox bridge did not return any recent inbox messages for this account.</p>
+            </div>
+          `}
+        </section>
+      ` : ''}
+      ${activeAccount?.includeSent ? `
+        <section class="unread-email-section">
+          <div class="unread-email-section-head">
+            <div>
+              <div class="unread-email-section-kicker">Sent</div>
+              <strong>Latest 5 sent emails</strong>
+            </div>
+            ${renderUnreadEmailSectionTags([
+              renderUnreadEmailTag(`${activeSentEntries.length} message${activeSentEntries.length === 1 ? '' : 's'}`, 'count'),
+              renderUnreadEmailTag('Tavern only', 'sent'),
+            ])}
+          </div>
+          ${activeSentEntries.length ? `
+            <div class="unread-email-list unread-email-list-sent">
+              ${activeSentEntries.map((entry) => renderUnreadEmailMessageCard({ entry, direction: 'sent', activeAccountId, anyActionInFlight })).join('')}
+            </div>
+          ` : `
+            <div class="unread-email-empty-state">
+              <strong>No sent previews available</strong>
+              <p>The selected mailbox did not return any recent sent-message previews.</p>
+            </div>
+          `}
+        </section>
+      ` : ''}
+    </div>
+  `;
+  bindUnreadEmailWidgetInteractions({
+    el,
+    options,
+    activeAccount,
+    inboxDeleteItems,
+    sentDeleteItems,
+    visibleDeleteItems,
+    selectedVisibleItems,
+    selectedInboxItems,
+  });
+}
+
+async function renderUnreadEmailPod(options = {}){
+  const meta = document.getElementById('unreadEmailMeta');
+  const manual = !!options.manual;
+  const backoffLeftMs = pollingBackoffState('unread-email').backoffUntil - Date.now();
+
+  updateUnreadEmailRefreshButton();
+
+  if (unreadEmailInFlight) {
+    if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, { stale: true, backoffLeftMs: Math.max(0, backoffLeftMs) });
+    setPodStatusSignal('unread-email', 'neutral', 'refreshing');
+    if (meta) meta.textContent = 'Refresh already in progress.';
+    return;
+  }
+
+  if (!manual && backoffLeftMs > 0 && unreadEmailLastPayload) {
+    renderUnreadEmailWidget(unreadEmailLastPayload, { stale: true, backoffLeftMs });
+    setPodStatusSignal('unread-email', 'stale', `retry ${Math.ceil(backoffLeftMs / 1000)}s`);
+    if (meta) {
+      const lastSeen = unreadEmailLastUpdatedAt ? new Date(unreadEmailLastUpdatedAt).toLocaleTimeString() : 'unknown';
+      meta.textContent = `Updated: ${lastSeen} · stale snapshot · retry in ${Math.ceil(backoffLeftMs / 1000)}s`;
+    }
+    return;
+  }
+
+  unreadEmailInFlight = true;
+  updateUnreadEmailRefreshButton();
+  try {
+    const payload = await fetchJsonWithTimeout(UNREAD_EMAIL_API, 10000);
+    unreadEmailLastPayload = payload;
+    unreadEmailLastUpdatedAt = String(payload?.fetchedAt || now());
+    unreadEmailLastError = '';
+    pruneUnreadEmailSelectionsFromPayload(payload);
+    pruneUnreadEmailExpandedStateFromPayload(payload);
+    clearPollingBackoff('unread-email');
+    renderUnreadEmailWidget(payload);
+
+    if (payload?.setupRequired) {
+      setPodStatusSignal('unread-email', 'neutral', 'setup');
+      if (meta) meta.textContent = 'Setup required · add Gmail Atom credentials in .env';
+    } else {
+      const unreadCount = Number.isFinite(Number(payload?.unreadCount)) ? Math.max(0, Number(payload.unreadCount)) : 0;
+      const detail = payload?.partialFailure
+        ? `${Number(payload?.healthyAccountCount || 0)}/${Number(payload?.accountCount || 0)} accounts healthy`
+        : unreadCount ? `${unreadCount} unread` : 'zero unread';
+      setPodStatusSignal('unread-email', payload?.partialFailure ? 'degraded' : 'fresh', detail);
+      if (meta) {
+        const parts = [
+          `Updated: ${new Date(unreadEmailLastUpdatedAt).toLocaleTimeString()}`,
+          'Auto: every 3 min',
+          Number(payload?.accountCount || 0) ? `Accounts: ${payload.accountCount}` : '',
+          payload?.partialFailure ? `Healthy: ${payload.healthyAccountCount || 0}` : '',
+        ].filter(Boolean);
+        meta.textContent = parts.join(' · ');
+      }
+    }
+  } catch (error) {
+    unreadEmailLastError = String(error?.message || error || 'Unread email refresh failed').slice(0, 220);
+    const backoffMs = registerPollingFailure('unread-email', error, unreadEmailLastError);
+    if (unreadEmailLastPayload) {
+      renderUnreadEmailWidget(unreadEmailLastPayload, { stale: true, backoffLeftMs: backoffMs });
+      setPodStatusSignal('unread-email', 'stale', `retry ${Math.ceil(backoffMs / 1000)}s`);
+      if (meta) {
+        const lastSeen = unreadEmailLastUpdatedAt ? new Date(unreadEmailLastUpdatedAt).toLocaleTimeString() : 'unknown';
+        meta.textContent = `Updated: ${lastSeen} · ${unreadEmailLastError} · retry in ${Math.ceil(backoffMs / 1000)}s`;
+      }
+    } else {
+      renderUnreadEmailWidget({
+        unreadCount: null,
+        entries: [],
+        setupRequired: false,
+        routeUnavailable: Number(error?.status || 0) === 404,
+      });
+      setPodStatusSignal('unread-email', 'error', Number(error?.status || 0) === 404 ? 'server restart' : `retry ${Math.ceil(backoffMs / 1000)}s`);
+      if (meta) {
+        meta.textContent = Number(error?.status || 0) === 404
+          ? 'Unread email API route not found. Restart the local server so it loads the new endpoint.'
+          : `${unreadEmailLastError} · retry in ${Math.ceil(backoffMs / 1000)}s`;
+      }
+    }
+  } finally {
+    unreadEmailInFlight = false;
+    updateUnreadEmailRefreshButton();
+  }
 }
 
 function normalizeYoutubeId(candidate){
@@ -4203,9 +8366,110 @@ function getMusicEls(){
   };
 }
 
+function getMusicPresentation(statusText = ''){
+  const isAmbientMode = state.musicPlayer.mode === 'ambient';
+  const ambient = getAmbientSourceForPreset();
+  const currentLabel = isAmbientMode
+    ? ambient.preset.label
+    : (state.musicPlayer.currentTrackName || (state.musicPlayer.sourceType === 'local' ? 'Local audio file' : 'Stream source'));
+  const hasSource = isAmbientMode
+    ? !!ambient?.source?.url
+    : !!String(state.musicPlayer.currentStreamUrl || '').trim() || state.musicPlayer.sourceType === 'local';
+  const rawStatus = String(statusText || '').toLowerCase();
+
+  let tone = 'idle';
+  let signal = 'neutral';
+  let signalDetail = isAmbientMode ? 'ambient' : 'ready';
+  let badge = 'Ready';
+  let heroTitle = isAmbientMode ? `Ambient mode: ${ambient.preset.label}` : (hasSource ? currentLabel : 'Load a stream to start');
+  let fallbackMeta = isAmbientMode
+    ? `Set a mood, then press Play. Current source ${ambient.sourceIndex + 1} of ${ambient.preset.sources.length}.`
+    : hasSource
+      ? 'Playback source is loaded. Use the transport controls when you are ready.'
+      : 'Paste a stream URL, use a favorite, or drop in a local file.';
+
+  if (state.musicPlayer.isPlaying) {
+    tone = 'playing';
+    signal = 'fresh';
+    signalDetail = isAmbientMode ? 'ambient live' : (state.musicPlayer.sourceType === 'local' ? 'local playback' : 'playing');
+    badge = 'Playing';
+    heroTitle = currentLabel;
+    fallbackMeta = isAmbientMode
+      ? `Ambient playback is live with ${ambient.source.label}.`
+      : state.musicPlayer.sourceType === 'local'
+        ? `Local audio is playing: ${currentLabel}.`
+        : `Playback is active from ${state.musicPlayer.streamMode === 'youtube' ? 'YouTube' : state.musicPlayer.streamMode === 'embed' ? 'embedded player' : 'stream source'}.`;
+  } else if (hasSource) {
+    tone = 'loaded';
+    signal = 'degraded';
+    signalDetail = 'loaded';
+    badge = 'Loaded';
+  }
+
+  if (/failed|error|blocked|could not|unavailable/.test(rawStatus)) {
+    tone = 'error';
+    signal = 'error';
+    signalDetail = 'attention';
+    badge = 'Issue';
+    fallbackMeta = statusText || fallbackMeta;
+  }
+
+  return {
+    tone,
+    signal,
+    signalDetail,
+    badge,
+    heroTitle,
+    heroMeta: String(statusText || fallbackMeta || '').trim(),
+    sourceLine: state.musicPlayer.sourceType === 'local'
+      ? 'Local file'
+      : isAmbientMode
+        ? `Ambient · ${ambient.preset.label}`
+        : (state.musicPlayer.streamMode === 'youtube' ? 'YouTube stream' : state.musicPlayer.streamMode === 'embed' ? 'Embedded stream' : 'Stream URL'),
+    favoriteLine: state.musicPlayer.favoriteStreamUrl ? 'Favorite saved' : 'No favorite saved',
+    sleepLine: state.musicPlayer.sleepTimerMin ? `Sleep ${state.musicPlayer.sleepTimerMin}m` : 'Sleep off',
+    volumePercent: Math.round((Number(state.musicPlayer.volume || 0) || 0) * 100),
+    hasSource,
+    currentLabel,
+  };
+}
+
+function syncMusicUiStatus(statusText = ''){
+  const meta = getMusicPresentation(statusText);
+  const hero = document.querySelector('[data-music-role="hero"]');
+  if (hero) hero.className = `music-player-hero music-player-hero--${meta.tone}`;
+
+  const badge = document.querySelector('[data-music-role="status-badge"]');
+  if (badge) {
+    badge.textContent = meta.badge;
+    badge.className = `music-player-status-pill music-player-status-pill--${meta.tone}`;
+  }
+
+  const title = document.querySelector('[data-music-role="hero-title"]');
+  if (title) title.textContent = meta.heroTitle;
+
+  const heroMeta = document.querySelector('[data-music-role="hero-meta"]');
+  if (heroMeta) heroMeta.textContent = meta.heroMeta;
+
+  const sourceLine = document.querySelector('[data-music-role="summary-source"]');
+  if (sourceLine) sourceLine.textContent = meta.sourceLine;
+
+  const favoriteLine = document.querySelector('[data-music-role="summary-favorite"]');
+  if (favoriteLine) favoriteLine.textContent = meta.favoriteLine;
+
+  const sleepLine = document.querySelector('[data-music-role="summary-sleep"]');
+  if (sleepLine) sleepLine.textContent = meta.sleepLine;
+
+  const volumeLine = document.querySelector('[data-music-role="summary-volume"]');
+  if (volumeLine) volumeLine.textContent = `${meta.volumePercent}%`;
+
+  setPodStatusSignal('music-player', meta.signal, meta.signalDetail);
+}
+
 function setMusicStatus(text){
   const el = document.getElementById('musicPlayerStatus');
   if (el) el.textContent = text;
+  syncMusicUiStatus(text);
 }
 
 function getAmbientPreset(presetId = state.musicPlayer.ambientPresetId){
@@ -4537,6 +8801,7 @@ function renderMusicPlayer(){
   const hasFav = !!fav;
   const isAmbientMode = state.musicPlayer.mode === 'ambient';
   const ambient = getAmbientSourceForPreset();
+  const musicUi = getMusicPresentation();
 
   const ambientButtons = AMBIENT_PRESETS.map((preset) => {
     const active = ambient.preset.id === preset.id;
@@ -4549,45 +8814,97 @@ function renderMusicPlayer(){
   }).join('');
 
   el.innerHTML = `
-    <div class="music-player-shell" data-pod="music-player">
-      <div class="music-mode-tabs">
+    <div class="music-player-shell music-player-v2-shell" data-pod="music-player">
+      <div class="music-player-hero music-player-hero--${musicUi.tone}" data-music-role="hero">
+        <div class="music-player-hero-copy">
+          <span class="music-player-kicker">Listening Pod</span>
+          <strong data-music-role="hero-title">${escapeHtml(musicUi.heroTitle)}</strong>
+          <div class="music-player-hero-meta" data-music-role="hero-meta">${escapeHtml(musicUi.heroMeta)}</div>
+        </div>
+        <div class="music-player-hero-badges">
+          <span class="music-player-status-pill music-player-status-pill--${musicUi.tone}" data-music-role="status-badge">${escapeHtml(musicUi.badge)}</span>
+          <span class="music-player-chip">${escapeHtml(musicUi.sourceLine)}</span>
+          <span class="music-player-chip">${escapeHtml(musicUi.sleepLine)}</span>
+        </div>
+      </div>
+
+      <div class="music-mode-tabs music-mode-tabs--v2">
         <button class="btn ${isAmbientMode ? 'ghost' : ''}" data-music-role="mode" data-mode="stream">Stream</button>
         <button class="btn ${isAmbientMode ? '' : 'ghost'}" data-music-role="mode" data-mode="ambient">Ambient</button>
       </div>
 
-      <div class="music-mode-panel ${isAmbientMode ? 'music-player-hidden-panel' : ''}" data-music-panel="stream">
-        <input id="musicStreamUrlInput" data-music-role="stream-input" placeholder="YouTube/live stream URL" value="${streamVal}" />
-        <div class="row-wrap">
-          <button id="musicLoadStreamBtn" data-music-role="load-stream" class="btn">Load Stream</button>
-          <button id="musicSaveFavoriteBtn" data-music-role="save-favorite" class="btn ghost">Save Favorite</button>
-          <button id="musicUseFavoriteBtn" data-music-role="use-favorite" class="btn ghost" ${hasFav ? '' : 'disabled'}>Use Favorite</button>
+      <div class="music-player-overview-grid">
+        <div class="music-player-summary-card">
+          <span class="music-player-summary-label">Source</span>
+          <strong data-music-role="summary-source">${escapeHtml(musicUi.sourceLine)}</strong>
+          <span class="music-player-summary-meta">${escapeHtml(musicUi.currentLabel)}</span>
         </div>
-        <div class="row-wrap">
-          <input id="musicLocalFileInput" data-music-role="local-file" type="file" accept="audio/*" />
+        <div class="music-player-summary-card">
+          <span class="music-player-summary-label">Favorite</span>
+          <strong data-music-role="summary-favorite">${escapeHtml(musicUi.favoriteLine)}</strong>
+          <span class="music-player-summary-meta">${hasFav ? 'Quick recall is ready.' : 'Save a go-to stream for one-click loading.'}</span>
         </div>
-      </div>
-
-      <div class="music-mode-panel ${isAmbientMode ? '' : 'music-player-hidden-panel'}" data-music-panel="ambient">
-        <div class="music-ambient-grid">${ambientButtons}</div>
-        <div class="row-wrap">
-          <button class="btn" data-music-role="ambient-play">Play ${escapeHtml(ambient.preset.label)}</button>
-          <button class="btn ghost" data-music-role="ambient-next" ${ambient.hasFallback ? '' : 'disabled'}>Try Next Source</button>
-        </div>
-        <div class="row-wrap music-player-mini">
-          Sleep timer:
-          ${sleepOptions}
-          <button class="btn ghost" data-music-role="sleep-timer" data-sleep-min="0">Off</button>
+        <div class="music-player-summary-card">
+          <span class="music-player-summary-label">Volume</span>
+          <strong data-music-role="summary-volume">${musicUi.volumePercent}%</strong>
+          <span class="music-player-summary-meta" data-music-role="summary-sleep">${escapeHtml(musicUi.sleepLine)}</span>
         </div>
       </div>
 
-      <div class="music-player-controls">
-        <button id="musicPlayBtn" data-music-role="play" class="btn">Play</button>
-        <button id="musicPauseBtn" data-music-role="pause" class="btn ghost">Pause</button>
-        <button id="musicStopBtn" data-music-role="stop" class="btn ghost">Stop</button>
+      <div class="music-player-control-grid">
+        <div class="music-mode-panel music-player-card ${isAmbientMode ? 'music-player-hidden-panel' : ''}" data-music-panel="stream">
+          <div class="music-player-card-head">
+            <span class="music-player-kicker">Stream Deck</span>
+            <strong>Streams, favorites, and local files</strong>
+          </div>
+          <input id="musicStreamUrlInput" data-music-role="stream-input" placeholder="YouTube/live stream URL" value="${streamVal}" />
+          <div class="music-player-action-row">
+            <button id="musicLoadStreamBtn" data-music-role="load-stream" class="btn">Load Stream</button>
+            <button id="musicSaveFavoriteBtn" data-music-role="save-favorite" class="btn ghost">Save Favorite</button>
+            <button id="musicUseFavoriteBtn" data-music-role="use-favorite" class="btn ghost" ${hasFav ? '' : 'disabled'}>Use Favorite</button>
+          </div>
+          <label class="music-player-file-row">
+            <span>Local audio file</span>
+            <input id="musicLocalFileInput" data-music-role="local-file" type="file" accept="audio/*" />
+          </label>
+        </div>
+
+        <div class="music-mode-panel music-player-card ${isAmbientMode ? '' : 'music-player-hidden-panel'}" data-music-panel="ambient">
+          <div class="music-player-card-head">
+            <span class="music-player-kicker">Ambient Deck</span>
+            <strong>${escapeHtml(ambient.preset.label)}</strong>
+          </div>
+          <div class="music-ambient-grid">${ambientButtons}</div>
+          <div class="music-player-action-row">
+            <button class="btn" data-music-role="ambient-play">Play ${escapeHtml(ambient.preset.label)}</button>
+            <button class="btn ghost" data-music-role="ambient-next" ${ambient.hasFallback ? '' : 'disabled'}>Try Next Source</button>
+          </div>
+          <div class="music-player-sleep-row">
+            <span class="music-player-summary-label">Sleep timer</span>
+            <div class="music-player-action-row">
+              ${sleepOptions}
+              <button class="btn ghost" data-music-role="sleep-timer" data-sleep-min="0">Off</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="music-player-card music-player-transport-card">
+          <div class="music-player-card-head">
+            <span class="music-player-kicker">Transport</span>
+            <strong>${state.musicPlayer.isPlaying ? 'Now playing controls' : 'Playback controls'}</strong>
+          </div>
+          <div class="music-player-controls">
+            <button id="musicPlayBtn" data-music-role="play" class="btn">Play</button>
+            <button id="musicPauseBtn" data-music-role="pause" class="btn ghost">Pause</button>
+            <button id="musicStopBtn" data-music-role="stop" class="btn ghost">Stop</button>
+          </div>
+          <label class="music-player-volume-stack">Volume
+            <input id="musicVolumeInput" data-music-role="volume" type="range" min="0" max="1" step="0.05" value="${state.musicPlayer.volume}">
+          </label>
+          <div class="music-player-mini">Use Stream mode for YouTube/live URLs and Ambient mode for set-it-and-forget-it background vibes.</div>
+        </div>
       </div>
-      <label class="music-player-mini">Volume
-        <input id="musicVolumeInput" data-music-role="volume" type="range" min="0" max="1" step="0.05" value="${state.musicPlayer.volume}">
-      </label>
+
       <iframe id="musicStreamIframe" data-music-role="iframe" class="music-player-hidden" allow="autoplay; encrypted-media" title="Music stream player"></iframe>
       <audio id="musicLocalAudio" data-music-role="audio" class="music-player-hidden" preload="metadata"></audio>
       <div class="music-player-mini">Source: ${state.musicPlayer.sourceType === 'local' ? 'Local file' : (isAmbientMode ? `Ambient · ${escapeHtml(ambient.preset.label)}` : 'Stream URL')}${hasFav ? ' · Favorite saved' : ''}${state.musicPlayer.sleepTimerMin ? ` · Sleep ${state.musicPlayer.sleepTimerMin}m` : ''}</div>
@@ -4790,6 +9107,7 @@ function getCameraFeedEls(){
     proxyToggle: root?.querySelector('[data-camera-role="proxy"]') || null,
     startBtn: root?.querySelector('[data-camera-role="start"]') || null,
     stopBtn: root?.querySelector('[data-camera-role="stop"]') || null,
+    fullscreenBtn: root?.querySelector('[data-camera-role="fullscreen"]') || null,
     resetSizeBtn: root?.querySelector('[data-camera-role="reset-size"]') || null,
     frameWrap: root?.querySelector('[data-camera-role="frame-wrap"]') || null,
     resizeHandle: root?.querySelector('[data-camera-role="resize-handle"]') || null,
@@ -4800,9 +9118,150 @@ function getCameraFeedEls(){
   };
 }
 
+function cameraFeedModeLabel(mode = state.cameraFeed.mode){
+  const map = {
+    stream: 'Embed stream',
+    snapshot: 'Snapshot refresh',
+    local: 'Local webcam',
+  };
+  return map[String(mode || '').toLowerCase()] || 'Camera feed';
+}
+
+function cameraFeedCompactSourceLabel(raw){
+  const value = String(raw || '').trim();
+  if (!value) return 'No source configured yet';
+  try {
+    const u = new URL(value);
+    const host = u.hostname.replace(/^www\./i, '');
+    const path = u.pathname && u.pathname !== '/' ? u.pathname : '';
+    return `${host}${path}`.slice(0, 64);
+  } catch {
+    return value.slice(0, 64);
+  }
+}
+
+function getCameraFeedPresentation(statusText = ''){
+  const mode = ['stream', 'snapshot', 'local'].includes(state.cameraFeed.mode) ? state.cameraFeed.mode : 'stream';
+  const status = String(state.cameraFeed.status || (state.cameraFeed.active ? 'loading' : 'idle')).toLowerCase();
+  const interval = Math.max(1, Math.min(60, Number(state.cameraFeed.refreshIntervalSec || 5) || 5));
+  const isActive = !!state.cameraFeed.active;
+  const useProxy = !!state.cameraFeed.useProxy;
+  const sourceUrl = String(state.cameraFeed.sourceUrl || '').trim();
+  const deviceId = String(state.cameraFeed.deviceId || '');
+  const deviceLabel = cameraDeviceList.find((d) => String(d.deviceId || '') === deviceId)?.label || 'Default browser camera';
+  const modeLabel = cameraFeedModeLabel(mode);
+
+  let tone = 'idle';
+  let signal = 'neutral';
+  let signalDetail = mode === 'local' ? 'browser' : mode === 'snapshot' ? `${interval}s` : 'embed';
+  let badge = 'Ready';
+  let heroTitle = mode === 'local' ? 'Ready to start your webcam' : sourceUrl ? 'Ready to load this camera feed' : 'Add a camera source to begin';
+  let fallbackMeta = mode === 'local'
+    ? 'Choose a device if needed, then request browser camera access.'
+    : mode === 'snapshot'
+      ? 'Use snapshot mode when a camera blocks embedding or needs a safer fallback.'
+      : 'Embed mode is best for camera pages or stream URLs that allow framing.';
+
+  if (status === 'live') {
+    tone = 'live';
+    signal = 'fresh';
+    signalDetail = mode === 'local' ? 'webcam live' : mode === 'snapshot' ? `${interval}s cycle` : 'feed live';
+    badge = 'Live';
+    heroTitle = mode === 'local' ? 'Local webcam is live' : mode === 'snapshot' ? 'Snapshot monitor is running' : 'Embedded camera feed is live';
+    fallbackMeta = mode === 'local'
+      ? `Watching ${deviceLabel}.`
+      : mode === 'snapshot'
+        ? `Refreshing every ${interval}s${useProxy ? ' via the local proxy' : ''}.`
+        : 'Embed loaded successfully.';
+  } else if (status === 'loading') {
+    tone = 'loading';
+    signal = 'degraded';
+    signalDetail = 'warming up';
+    badge = 'Loading';
+    heroTitle = mode === 'local' ? 'Requesting webcam access' : mode === 'snapshot' ? 'Refreshing snapshot feed' : 'Loading embedded feed';
+    fallbackMeta = mode === 'local'
+      ? 'Waiting for browser permission and camera readiness.'
+      : mode === 'snapshot'
+        ? `Preparing snapshot refresh${useProxy ? ' through the local proxy' : ''}.`
+        : 'Waiting for the camera page to load.';
+  } else if (status === 'error') {
+    tone = 'error';
+    signal = 'error';
+    signalDetail = 'attention';
+    badge = 'Issue';
+    heroTitle = 'Camera feed needs attention';
+    fallbackMeta = state.cameraFeed.lastError || 'Something blocked the current camera source.';
+  } else if (isActive) {
+    tone = 'loading';
+    signal = 'degraded';
+    signalDetail = 'active';
+    badge = 'Active';
+    heroTitle = mode === 'local' ? 'Webcam session is active' : 'Camera feed is active';
+  }
+
+  const chips = [
+    modeLabel,
+    isActive ? 'Session active' : 'Idle',
+  ];
+  if (mode === 'snapshot') chips.push(`${interval}s refresh`);
+  if (mode === 'snapshot' && useProxy) chips.push('Proxy on');
+  if (mode === 'local') chips.push(deviceLabel);
+
+  return {
+    tone,
+    signal,
+    signalDetail,
+    badge,
+    heroTitle,
+    heroMeta: String(statusText || fallbackMeta || '').trim(),
+    sourceHeadline: mode === 'local' ? deviceLabel : cameraFeedCompactSourceLabel(sourceUrl),
+    sourceHint: mode === 'local'
+      ? 'Uses browser camera permissions, so no URL is required in local mode.'
+      : mode === 'snapshot'
+        ? 'Snapshot mode is a reliable fallback when embeds fail or a camera blocks framing.'
+        : 'Use a camera page or embeddable stream URL when direct framing is supported.',
+    controlHeadline: mode === 'local' ? 'Browser capture controls' : 'Source and refresh controls',
+    stageTitle: mode === 'local' ? 'Local webcam preview' : mode === 'snapshot' ? 'Snapshot monitor' : 'Embedded feed stage',
+    stageMeta: mode === 'snapshot'
+      ? `Resize the frame as needed. Current snapshot cadence: ${interval}s${useProxy ? ' with proxy assist' : ''}.`
+      : mode === 'local'
+        ? 'Resize the preview to fit your room, desk, or scene.'
+        : 'Resize the stage and keep Snapshot mode handy if the source blocks embedding.',
+    chips,
+    footnote: `One active feed at a time. Snapshot mode helps when embeds fail. Local webcam uses browser permission${navigator?.mediaDevices?.getUserMedia ? '' : ' and may be unavailable in this browser/context'}.`,
+  };
+}
+
+function syncCameraFeedUiStatus(statusText = ''){
+  const meta = getCameraFeedPresentation(statusText);
+  const hero = document.querySelector('[data-camera-role="hero"]');
+  if (hero) hero.className = `camera-feed-hero camera-feed-hero--${meta.tone}`;
+
+  const badge = document.querySelector('[data-camera-role="status-badge"]');
+  if (badge) {
+    badge.textContent = meta.badge;
+    badge.className = `camera-feed-status-pill camera-feed-status-pill--${meta.tone}`;
+  }
+
+  const heroTitle = document.querySelector('[data-camera-role="hero-title"]');
+  if (heroTitle) heroTitle.textContent = meta.heroTitle;
+
+  const heroMeta = document.querySelector('[data-camera-role="hero-meta"]');
+  if (heroMeta) heroMeta.textContent = meta.heroMeta;
+
+  const stageTitle = document.querySelector('[data-camera-role="stage-title"]');
+  if (stageTitle) stageTitle.textContent = meta.stageTitle;
+
+  const stageMeta = document.querySelector('[data-camera-role="stage-meta"]');
+  if (stageMeta) stageMeta.textContent = meta.stageMeta;
+
+  setPodStatusSignal('camera-feed', meta.signal, meta.signalDetail);
+}
+
 function setCameraFeedStatus(text){
   const el = document.getElementById('cameraFeedStatus');
   if (el) el.textContent = text;
+  syncCameraFeedUiStatus(text);
 }
 
 function cameraSnapshotUrl(url){
@@ -5081,52 +9540,96 @@ function renderCameraFeedPod(){
   const showStream = state.cameraFeed.active && mode === 'stream';
   const showLocal = state.cameraFeed.active && mode === 'local';
   const urlDisabled = mode === 'local';
-  const hasMediaDevices = !!navigator?.mediaDevices?.getUserMedia;
-  const localSupportHint = hasMediaDevices ? '' : ' (unsupported in this browser/context)';
   const localDeviceValue = String(state.cameraFeed.deviceId || '');
   const localDeviceOptions = [`<option value="">Default camera</option>`, ...cameraDeviceList.map((d) => (
     `<option value="${escapeHtml(d.deviceId)}" ${localDeviceValue === d.deviceId ? 'selected' : ''}>${escapeHtml(d.label)}</option>`
   ))].join('');
   const viewport = getCameraViewportSize(el);
+  const cameraUi = getCameraFeedPresentation();
 
   el.innerHTML = `
-    <div class="camera-feed-shell" data-pod="camera-feed">
-      <input data-camera-role="url" placeholder="Camera URL (http/https)" value="${escapeHtml(state.cameraFeed.sourceUrl || '')}" ${urlDisabled ? 'disabled' : ''} />
-      <div class="row-wrap">
-        <label class="camera-feed-inline-label">Mode
-          <select data-camera-role="mode" class="w-auto">
-            <option value="stream" ${mode === 'stream' ? 'selected' : ''}>Embed Stream</option>
-            <option value="snapshot" ${mode === 'snapshot' ? 'selected' : ''}>Snapshot Refresh</option>
-            <option value="local" ${mode === 'local' ? 'selected' : ''}>Local Webcam (Browser)</option>
-          </select>
-        </label>
-        <label class="camera-feed-inline-label">Refresh (sec)
-          <input data-camera-role="interval" type="number" min="1" max="60" step="1" class="w-110" value="${interval}" ${mode === 'snapshot' ? '' : 'disabled'} />
-        </label>
-        <label class="camera-feed-inline-check ${mode === 'snapshot' ? '' : 'is-disabled'}">
-          <input data-camera-role="proxy" type="checkbox" ${state.cameraFeed.useProxy ? 'checked' : ''} ${mode === 'snapshot' ? '' : 'disabled'} />
-          Use local proxy
-        </label>
+    <div class="camera-feed-shell camera-feed-v2-shell" data-pod="camera-feed">
+      <div class="camera-feed-hero camera-feed-hero--${cameraUi.tone}" data-camera-role="hero">
+        <div class="camera-feed-hero-copy">
+          <span class="camera-feed-kicker">Camera Deck</span>
+          <strong data-camera-role="hero-title">${escapeHtml(cameraUi.heroTitle)}</strong>
+          <div class="camera-feed-hero-meta" data-camera-role="hero-meta">${escapeHtml(cameraUi.heroMeta)}</div>
+        </div>
+        <div class="camera-feed-hero-badges">
+          <span class="camera-feed-status-pill camera-feed-status-pill--${cameraUi.tone}" data-camera-role="status-badge">${escapeHtml(cameraUi.badge)}</span>
+          ${cameraUi.chips.map((chip) => `<span class="camera-feed-chip">${escapeHtml(chip)}</span>`).join('')}
+        </div>
       </div>
-      <div class="row-wrap">
-        <label class="camera-feed-inline-label ${mode === 'local' ? '' : 'is-disabled'}">Webcam Device
-          <select data-camera-role="device" class="w-auto" ${mode === 'local' ? '' : 'disabled'}>
-            ${localDeviceOptions}
-          </select>
-        </label>
+
+      <div class="camera-feed-control-grid">
+        <div class="camera-feed-panel">
+          <div class="camera-feed-panel-head">
+            <span class="camera-feed-panel-kicker">Source</span>
+            <strong>${escapeHtml(cameraUi.sourceHeadline)}</strong>
+          </div>
+          <input data-camera-role="url" placeholder="Camera URL (http/https)" value="${escapeHtml(state.cameraFeed.sourceUrl || '')}" ${urlDisabled ? 'disabled' : ''} />
+          <div class="camera-feed-panel-note">${escapeHtml(cameraUi.sourceHint)}</div>
+        </div>
+
+        <div class="camera-feed-panel">
+          <div class="camera-feed-panel-head">
+            <span class="camera-feed-panel-kicker">Controls</span>
+            <strong>${escapeHtml(cameraUi.controlHeadline)}</strong>
+          </div>
+          <div class="camera-feed-settings-grid">
+            <label class="camera-feed-field">
+              <span>Mode</span>
+              <select data-camera-role="mode">
+                <option value="stream" ${mode === 'stream' ? 'selected' : ''}>Embed Stream</option>
+                <option value="snapshot" ${mode === 'snapshot' ? 'selected' : ''}>Snapshot Refresh</option>
+                <option value="local" ${mode === 'local' ? 'selected' : ''}>Local Webcam (Browser)</option>
+              </select>
+            </label>
+            <label class="camera-feed-field ${mode === 'snapshot' ? '' : 'is-disabled'}">
+              <span>Refresh (sec)</span>
+              <input data-camera-role="interval" type="number" min="1" max="60" step="1" value="${interval}" ${mode === 'snapshot' ? '' : 'disabled'} />
+            </label>
+            <label class="camera-feed-toggle ${mode === 'snapshot' ? '' : 'is-disabled'}">
+              <input data-camera-role="proxy" type="checkbox" ${state.cameraFeed.useProxy ? 'checked' : ''} ${mode === 'snapshot' ? '' : 'disabled'} />
+              <span>Use local proxy for snapshot requests</span>
+            </label>
+            <label class="camera-feed-field ${mode === 'local' ? '' : 'is-disabled'}">
+              <span>Webcam Device</span>
+              <select data-camera-role="device" ${mode === 'local' ? '' : 'disabled'}>
+                ${localDeviceOptions}
+              </select>
+            </label>
+          </div>
+          <div class="camera-feed-action-row">
+            <button data-camera-role="start" class="btn">Load / Start</button>
+            <button data-camera-role="stop" class="btn ghost" ${state.cameraFeed.active ? '' : 'disabled'}>Stop</button>
+            <button data-camera-role="fullscreen" class="btn ghost" ${state.cameraFeed.active ? '' : 'disabled'}>Fullscreen</button>
+            <button data-camera-role="reset-size" class="btn ghost">Reset Size</button>
+          </div>
+        </div>
       </div>
-      <div class="row-wrap">
-        <button data-camera-role="start" class="btn">Load / Start</button>
-        <button data-camera-role="stop" class="btn ghost" ${state.cameraFeed.active ? '' : 'disabled'}>Stop</button>
-        <button data-camera-role="reset-size" class="btn ghost">Reset Size</button>
+
+      <div class="camera-feed-stage-card">
+        <div class="camera-feed-stage-head">
+          <div class="camera-feed-stage-copy">
+            <span class="camera-feed-stage-kicker">Live Stage</span>
+            <strong data-camera-role="stage-title">${escapeHtml(cameraUi.stageTitle)}</strong>
+            <div class="camera-feed-stage-meta" data-camera-role="stage-meta">${escapeHtml(cameraUi.stageMeta)}</div>
+          </div>
+          <div class="camera-feed-stage-chips">
+            <span class="camera-feed-stage-chip">${escapeHtml(cameraFeedModeLabel(mode))}</span>
+            <span class="camera-feed-stage-chip">${escapeHtml(cameraUi.sourceHeadline)}</span>
+          </div>
+        </div>
+        <div class="camera-feed-frame-wrap" data-camera-role="frame-wrap" style="width:min(100%, ${viewport.width}px); height:${viewport.height}px;">
+          <iframe data-camera-role="stream-frame" title="Camera feed stream" ${showStream ? '' : 'style="display:none;"'} referrerpolicy="no-referrer"></iframe>
+          <img data-camera-role="snapshot-img" alt="Camera snapshot" ${showSnapshot ? '' : 'style="display:none;"'} />
+          <video data-camera-role="local-video" autoplay playsinline muted ${showLocal ? '' : 'style="display:none;"'}></video>
+          <button class="camera-feed-resize-handle" data-camera-role="resize-handle" aria-label="Resize camera feed" title="Drag to resize" type="button"></button>
+        </div>
       </div>
-      <div class="camera-feed-frame-wrap mt6" data-camera-role="frame-wrap" style="width:min(100%, ${viewport.width}px); height:${viewport.height}px;">
-        <iframe data-camera-role="stream-frame" title="Camera feed stream" ${showStream ? '' : 'style="display:none;"'} referrerpolicy="no-referrer"></iframe>
-        <img data-camera-role="snapshot-img" alt="Camera snapshot" ${showSnapshot ? '' : 'style="display:none;"'} />
-        <video data-camera-role="local-video" autoplay playsinline muted ${showLocal ? '' : 'style="display:none;"'}></video>
-        <button class="camera-feed-resize-handle" data-camera-role="resize-handle" aria-label="Resize camera feed" title="Drag to resize" type="button"></button>
-      </div>
-      <div class="note-meta mt6">V1 supports one active feed at a time. If embed fails, use Snapshot mode. Local Webcam uses browser permission${localSupportHint}.</div>
+
+      <div class="camera-feed-footnote">${escapeHtml(cameraUi.footnote)}</div>
     </div>
   `;
 
@@ -5193,6 +9696,23 @@ function renderCameraFeedPod(){
     event.preventDefault();
     event.stopPropagation();
     stopCameraFeed();
+  });
+
+  els.fullscreenBtn?.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!els.frameWrap) return;
+    try {
+      if (document.fullscreenElement === els.frameWrap && document.exitFullscreen) {
+        await document.exitFullscreen();
+      } else if (els.frameWrap.requestFullscreen) {
+        await els.frameWrap.requestFullscreen();
+      } else {
+        setCameraFeedStatus('Fullscreen is not available in this browser/context.');
+      }
+    } catch {
+      setCameraFeedStatus('Unable to open the camera stage in fullscreen.');
+    }
   });
 
   els.resetSizeBtn?.addEventListener('click', (event) => {
@@ -5624,6 +10144,7 @@ function buildLiveStreamTarget(){
 function setLiveStreamsStatus(text){
   const el = document.getElementById('liveStreamsStatus');
   if (el) el.textContent = text;
+  syncLiveStreamsUiStatus(text);
 }
 
 function getLiveStreamsEls(){
@@ -5634,8 +10155,10 @@ function getLiveStreamsEls(){
     input: root?.querySelector('[data-live-role="input"]') || null,
     startBtn: root?.querySelector('[data-live-role="start"]') || null,
     stopBtn: root?.querySelector('[data-live-role="stop"]') || null,
+    fullscreenBtn: root?.querySelector('[data-live-role="fullscreen"]') || null,
     popoutBtn: root?.querySelector('[data-live-role="popout"]') || null,
     openBtn: root?.querySelector('[data-live-role="open"]') || null,
+    playerWrap: root?.querySelector('[data-live-role="player-wrap"]') || null,
     frame: root?.querySelector('[data-live-role="frame"]') || null,
     video: root?.querySelector('[data-live-role="video"]') || null,
     presetName: root?.querySelector('[data-live-role="preset-name"]') || null,
@@ -5643,6 +10166,111 @@ function getLiveStreamsEls(){
     presetSelect: root?.querySelector('[data-live-role="preset-select"]') || null,
     applyPresetBtn: root?.querySelector('[data-live-role="apply-preset"]') || null,
   };
+}
+
+function liveStreamsCompactValueLabel(raw){
+  const value = String(raw || '').trim();
+  if (!value) return 'No source loaded yet';
+  try {
+    const u = new URL(value);
+    const host = u.hostname.replace(/^www\./i, '');
+    const path = u.pathname && u.pathname !== '/' ? u.pathname : '';
+    return `${host}${path}`.slice(0, 68);
+  } catch {
+    return value.slice(0, 68);
+  }
+}
+
+function getLiveStreamsPresentation(statusText = ''){
+  const sourceType = String(state.liveStreams.sourceType || 'youtube');
+  const providerLabel = liveSourceLabel(sourceType);
+  const sourceValue = String(state.liveStreams.inputs[sourceType] || '').trim();
+  const presetCount = Array.isArray(state.liveStreams.presets) ? state.liveStreams.presets.length : 0;
+  const status = String(state.liveStreams.status || (state.liveStreams.active ? 'loading' : 'idle')).toLowerCase();
+  const renderMode = String(state.liveStreams.renderMode || 'iframe').toLowerCase();
+  const hasExternal = !!state.liveStreams.externalUrl;
+
+  let tone = 'idle';
+  let signal = 'neutral';
+  let signalDetail = providerLabel;
+  let badge = 'Ready';
+  let heroTitle = `Queue up ${providerLabel}`;
+  let fallbackMeta = 'Choose a source, paste a channel or URL, then start the stream deck.';
+
+  if (status === 'live') {
+    tone = 'live';
+    signal = 'fresh';
+    signalDetail = renderMode === 'video' ? 'direct media' : 'live';
+    badge = 'Live';
+    heroTitle = `${providerLabel} is on deck`;
+    fallbackMeta = hasExternal
+      ? 'If the embed blanks out, the fallback buttons are ready.'
+      : 'Live playback is active in the embedded stage.';
+  } else if (status === 'loading') {
+    tone = 'loading';
+    signal = 'degraded';
+    signalDetail = 'loading';
+    badge = 'Loading';
+    heroTitle = `Loading ${providerLabel}`;
+    fallbackMeta = 'Some providers take a few seconds to reveal whether framing is allowed.';
+  } else if (status === 'error') {
+    tone = 'error';
+    signal = 'error';
+    signalDetail = 'fallback ready';
+    badge = 'Blocked';
+    heroTitle = `${providerLabel} needs a fallback path`;
+    fallbackMeta = state.liveStreams.lastError || 'This source likely blocks in-app embedding.';
+  }
+
+  return {
+    tone,
+    signal,
+    signalDetail,
+    badge,
+    heroTitle,
+    heroMeta: String(statusText || fallbackMeta || '').trim(),
+    providerLabel,
+    sourceHeadline: liveStreamsCompactValueLabel(sourceValue),
+    sourceHint: 'Drop in a handle, channel name, or direct stream URL. Different providers normalize differently behind the scenes.',
+    presetMeta: presetCount ? `${presetCount} saved preset${presetCount === 1 ? '' : 's'} ready to reuse.` : 'No presets saved yet. Save your favorite channels for quick launch.',
+    stageTitle: renderMode === 'video' ? 'Direct media player' : 'Embedded stream stage',
+    stageMeta: hasExternal
+      ? 'When a provider blocks framing or the player stays blank, use Pop-out or Open in new tab.'
+      : 'This source is best experienced directly inside the dashboard when embedding cooperates.',
+    chips: [
+      providerLabel,
+      state.liveStreams.active ? 'Session active' : 'Idle',
+      renderMode === 'video' ? 'Direct media' : 'Embed mode',
+      hasExternal ? 'Fallback ready' : 'In-dashboard only',
+    ],
+    footnote: 'Providers differ wildly on iframe policy. The pod keeps fallback routes close so a blocked embed does not kill the experience.',
+  };
+}
+
+function syncLiveStreamsUiStatus(statusText = ''){
+  const meta = getLiveStreamsPresentation(statusText);
+  const hero = document.querySelector('[data-live-role="hero"]');
+  if (hero) hero.className = `live-streams-hero live-streams-hero--${meta.tone}`;
+
+  const badge = document.querySelector('[data-live-role="status-badge"]');
+  if (badge) {
+    badge.textContent = meta.badge;
+    badge.className = `live-streams-status-pill live-streams-status-pill--${meta.tone}`;
+  }
+
+  const heroTitle = document.querySelector('[data-live-role="hero-title"]');
+  if (heroTitle) heroTitle.textContent = meta.heroTitle;
+
+  const heroMeta = document.querySelector('[data-live-role="hero-meta"]');
+  if (heroMeta) heroMeta.textContent = meta.heroMeta;
+
+  const stageTitle = document.querySelector('[data-live-role="stage-title"]');
+  if (stageTitle) stageTitle.textContent = meta.stageTitle;
+
+  const stageMeta = document.querySelector('[data-live-role="stage-meta"]');
+  if (stageMeta) stageMeta.textContent = meta.stageMeta;
+
+  setPodStatusSignal('live-streams', meta.signal, meta.signalDetail);
 }
 
 function stopLiveStream({ keepStatus = false } = {}){
@@ -5711,40 +10339,100 @@ function renderLiveStreamsPod(){
   ))].join('');
   const isVideo = state.liveStreams.active && state.liveStreams.renderMode === 'video';
   const isFrame = state.liveStreams.active && state.liveStreams.renderMode === 'iframe';
+  const liveUi = getLiveStreamsPresentation();
 
   el.innerHTML = `
-    <div class="live-streams-shell" data-pod="live-streams">
-      <label class="camera-feed-inline-label">Source
-        <select data-live-role="source-type" class="w-auto">
-          <option value="youtube" ${sourceType === 'youtube' ? 'selected' : ''}>YouTube Live</option>
-          <option value="twitch" ${sourceType === 'twitch' ? 'selected' : ''}>Twitch</option>
-          <option value="kick" ${sourceType === 'kick' ? 'selected' : ''}>Kick</option>
-          <option value="vaughn" ${sourceType === 'vaughn' ? 'selected' : ''}>Vaughn Live</option>
-          <option value="rumble" ${sourceType === 'rumble' ? 'selected' : ''}>Rumble</option>
-          <option value="xlive" ${sourceType === 'xlive' ? 'selected' : ''}>X Live / Spaces</option>
-          <option value="facebook" ${sourceType === 'facebook' ? 'selected' : ''}>Facebook Live</option>
-          <option value="generic" ${sourceType === 'generic' ? 'selected' : ''}>Generic RTMP/HLS/M3U8 URL</option>
-          <option value="local" ${sourceType === 'local' ? 'selected' : ''}>Local source URL</option>
-        </select>
-      </label>
-      <input data-live-role="input" placeholder="${escapeHtml(placeholders[sourceType])}" value="${escapeHtml(inputValue)}" />
-      <div class="row-wrap">
-        <button data-live-role="start" class="btn">Load / Start</button>
-        <button data-live-role="stop" class="btn ghost" ${state.liveStreams.active ? '' : 'disabled'}>Stop</button>
-        <button data-live-role="popout" class="btn ghost" ${state.liveStreams.externalUrl ? '' : 'disabled'}>Pop-out Player</button>
-        <button data-live-role="open" class="btn ghost" ${state.liveStreams.externalUrl ? '' : 'disabled'}>Open in new tab</button>
+    <div class="live-streams-shell live-streams-v2-shell" data-pod="live-streams">
+      <div class="live-streams-hero live-streams-hero--${liveUi.tone}" data-live-role="hero">
+        <div class="live-streams-hero-copy">
+          <span class="live-streams-kicker">Stream Deck</span>
+          <strong data-live-role="hero-title">${escapeHtml(liveUi.heroTitle)}</strong>
+          <div class="live-streams-hero-meta" data-live-role="hero-meta">${escapeHtml(liveUi.heroMeta)}</div>
+        </div>
+        <div class="live-streams-hero-badges">
+          <span class="live-streams-status-pill live-streams-status-pill--${liveUi.tone}" data-live-role="status-badge">${escapeHtml(liveUi.badge)}</span>
+          ${liveUi.chips.map((chip) => `<span class="live-streams-chip">${escapeHtml(chip)}</span>`).join('')}
+        </div>
       </div>
-      <div class="row-wrap">
-        <input data-live-role="preset-name" placeholder="Preset name (optional)" class="w-180" />
-        <button data-live-role="save-preset" class="btn ghost">Save Preset</button>
-        <select data-live-role="preset-select" class="w-auto">${presetOptions}</select>
-        <button data-live-role="apply-preset" class="btn ghost">Apply</button>
+
+      <div class="live-streams-control-grid">
+        <div class="live-streams-stage-card live-streams-stage-card--primary">
+        <div class="live-streams-stage-head">
+          <div class="live-streams-stage-copy">
+            <span class="live-streams-stage-kicker">Player Stage</span>
+            <strong data-live-role="stage-title">${escapeHtml(liveUi.stageTitle)}</strong>
+            <div class="live-streams-stage-meta" data-live-role="stage-meta">${escapeHtml(liveUi.stageMeta)}</div>
+          </div>
+          <div class="live-streams-stage-chips">
+            <span class="live-streams-stage-chip">${escapeHtml(liveUi.providerLabel)}</span>
+            <span class="live-streams-stage-chip">${escapeHtml(liveUi.sourceHeadline)}</span>
+          </div>
+        </div>
+        <div class="live-streams-frame-wrap" data-live-role="player-wrap">
+          <iframe data-live-role="frame" title="Live stream" referrerpolicy="no-referrer" allow="autoplay; fullscreen" ${isFrame ? '' : 'style="display:none;"'}></iframe>
+          <video data-live-role="video" controls autoplay playsinline ${isVideo ? '' : 'style="display:none;"'}></video>
+        </div>
       </div>
-      <div class="live-streams-frame-wrap mt6">
-        <iframe data-live-role="frame" title="Live stream" referrerpolicy="no-referrer" allow="autoplay; fullscreen" ${isFrame ? '' : 'style="display:none;"'}></iframe>
-        <video data-live-role="video" controls autoplay playsinline ${isVideo ? '' : 'style="display:none;"'}></video>
+
+        <div class="live-streams-panel">
+          <div class="live-streams-panel-head">
+            <span class="live-streams-panel-kicker">Source</span>
+            <strong>${escapeHtml(liveUi.sourceHeadline)}</strong>
+          </div>
+          <div class="live-streams-settings-grid">
+            <label class="live-streams-field">
+              <span>Provider</span>
+              <select data-live-role="source-type">
+                <option value="youtube" ${sourceType === 'youtube' ? 'selected' : ''}>YouTube Live</option>
+                <option value="twitch" ${sourceType === 'twitch' ? 'selected' : ''}>Twitch</option>
+                <option value="kick" ${sourceType === 'kick' ? 'selected' : ''}>Kick</option>
+                <option value="vaughn" ${sourceType === 'vaughn' ? 'selected' : ''}>Vaughn Live</option>
+                <option value="rumble" ${sourceType === 'rumble' ? 'selected' : ''}>Rumble</option>
+                <option value="xlive" ${sourceType === 'xlive' ? 'selected' : ''}>X Live / Spaces</option>
+                <option value="facebook" ${sourceType === 'facebook' ? 'selected' : ''}>Facebook Live</option>
+                <option value="generic" ${sourceType === 'generic' ? 'selected' : ''}>Generic RTMP/HLS/M3U8 URL</option>
+                <option value="local" ${sourceType === 'local' ? 'selected' : ''}>Local source URL</option>
+              </select>
+            </label>
+            <label class="live-streams-field live-streams-field--wide">
+              <span>Channel or URL</span>
+              <input data-live-role="input" placeholder="${escapeHtml(placeholders[sourceType])}" value="${escapeHtml(inputValue)}" />
+            </label>
+          </div>
+          <div class="live-streams-panel-note">${escapeHtml(liveUi.sourceHint)}</div>
+          <div class="live-streams-action-row">
+            <button data-live-role="start" class="btn">Load / Start</button>
+            <button data-live-role="stop" class="btn ghost" ${state.liveStreams.active ? '' : 'disabled'}>Stop</button>
+            <button data-live-role="fullscreen" class="btn ghost" ${state.liveStreams.active ? '' : 'disabled'}>Fullscreen</button>
+            <button data-live-role="popout" class="btn ghost" ${state.liveStreams.externalUrl ? '' : 'disabled'}>Pop-out Player</button>
+            <button data-live-role="open" class="btn ghost" ${state.liveStreams.externalUrl ? '' : 'disabled'}>Open in new tab</button>
+          </div>
+        </div>
+
+        <div class="live-streams-panel">
+          <div class="live-streams-panel-head">
+            <span class="live-streams-panel-kicker">Presets</span>
+            <strong>Quick launch favorites</strong>
+          </div>
+          <div class="live-streams-settings-grid">
+            <label class="live-streams-field live-streams-field--wide">
+              <span>Preset name</span>
+              <input data-live-role="preset-name" placeholder="Preset name (optional)" />
+            </label>
+            <label class="live-streams-field live-streams-field--wide">
+              <span>Saved presets</span>
+              <select data-live-role="preset-select">${presetOptions}</select>
+            </label>
+          </div>
+          <div class="live-streams-panel-note">${escapeHtml(liveUi.presetMeta)}</div>
+          <div class="live-streams-action-row">
+            <button data-live-role="save-preset" class="btn ghost">Save Preset</button>
+            <button data-live-role="apply-preset" class="btn ghost">Apply</button>
+          </div>
+        </div>
       </div>
-      <div class="note-meta mt6">Some providers block iframe embeds with X-Frame-Options/CSP. If playback fails or stays blank, use <strong>Pop-out Player</strong> or <strong>Open in new tab</strong>.</div>
+
+      <div class="live-streams-footnote">${escapeHtml(liveUi.footnote)}</div>
     </div>
   `;
 
@@ -5776,6 +10464,23 @@ function renderLiveStreamsPod(){
     event.preventDefault();
     event.stopPropagation();
     stopLiveStream();
+  });
+
+  els.fullscreenBtn?.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!els.playerWrap) return;
+    try {
+      if (document.fullscreenElement === els.playerWrap && document.exitFullscreen) {
+        await document.exitFullscreen();
+      } else if (els.playerWrap.requestFullscreen) {
+        await els.playerWrap.requestFullscreen();
+      } else {
+        setLiveStreamsStatus('Fullscreen is not available in this browser/context.');
+      }
+    } catch {
+      setLiveStreamsStatus('Unable to open the player stage in fullscreen.');
+    }
   });
 
   els.popoutBtn?.addEventListener('click', (event) => {
@@ -5896,6 +10601,279 @@ function getVoiceNoteControls(){
 
 function getSpeechRecognitionCtor(){
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function setVoiceDeskStatus(text, status = 'neutral', detail = ''){
+  const el = document.getElementById('voiceDeskStatus');
+  if (el) el.textContent = text;
+  setPodStatusSignal(MERGED_VOICE_POD_ID, status, detail);
+}
+
+function setVoiceDeskDraftValue(text){
+  voiceToRowanDraft = String(text || '');
+  const input = document.getElementById('voiceDeskTranscript');
+  if (input && input.value !== voiceToRowanDraft) {
+    input.value = voiceToRowanDraft;
+  }
+}
+
+function showVoiceDeskFallbackTools(show){
+  const toolsEl = document.getElementById('voiceDeskFallbackTools');
+  if (!toolsEl) return;
+  toolsEl.style.display = show ? 'flex' : 'none';
+}
+
+function getVoiceDeskControls(){
+  const root = document.getElementById('voiceDeskWidget')?.querySelector('[data-pod="voice-desk"]') || null;
+  return {
+    root,
+    startBtn: root?.querySelector('[data-voice-desk-role="start"]') || null,
+    stopBtn: root?.querySelector('[data-voice-desk-role="stop"]') || null,
+    saveBtn: root?.querySelector('[data-voice-desk-role="save-note"]') || null,
+    sendBtn: root?.querySelector('[data-voice-desk-role="send-rowan"]') || null,
+    clearBtn: root?.querySelector('[data-voice-desk-role="clear"]') || null,
+    transcript: root?.querySelector('[data-voice-desk-role="transcript"]') || null,
+  };
+}
+
+function ensureVoiceDeskRecognizer(){
+  if (voiceToRowanRecognizer || !voiceToRowanSupported) return voiceToRowanRecognizer;
+  const SpeechRecognitionCtor = getSpeechRecognitionCtor();
+  if (!SpeechRecognitionCtor) return null;
+
+  const recognizer = new SpeechRecognitionCtor();
+  recognizer.continuous = true;
+  recognizer.interimResults = true;
+  recognizer.lang = 'en-US';
+
+  recognizer.onresult = (event) => {
+    let interim = '';
+    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+      const text = event.results[i][0]?.transcript || '';
+      if (event.results[i].isFinal) {
+        voiceToRowanFinalTranscript += `${text} `;
+      } else {
+        interim += `${text} `;
+      }
+    }
+    const live = `${voiceToRowanFinalTranscript} ${interim}`.trim();
+    setVoiceDeskDraftValue(live);
+    setVoiceDeskStatus(live ? 'Listening... edit the draft before saving or sending.' : 'Listening... speak now.', 'fresh', 'listening');
+  };
+
+  recognizer.onerror = (event) => {
+    const err = event?.error || 'unknown';
+    voiceToRowanLastError = err;
+    if (err === 'not-allowed') {
+      setVoiceDeskStatus('Microphone permission denied. Allow mic access and try again.', 'error', 'permission');
+      return;
+    }
+    if (err === 'no-speech') {
+      setVoiceDeskStatus('Listening... no speech detected yet. Keep talking or stop when ready.', 'degraded', 'no speech');
+      return;
+    }
+    setVoiceDeskStatus(`Voice input error: ${err}.`, 'error', 'input error');
+  };
+
+  recognizer.onend = () => {
+    const wasListening = voiceToRowanListening;
+    voiceToRowanListening = false;
+    const controls = getVoiceDeskControls();
+    if (controls.startBtn) controls.startBtn.disabled = !voiceToRowanSupported;
+    if (controls.stopBtn) controls.stopBtn.disabled = true;
+
+    if (!wasListening) return;
+
+    const hasDraft = !!String(voiceToRowanDraft || '').trim();
+    if (!hasDraft && voiceToRowanLastError && voiceToRowanLastError !== 'no-speech') {
+      voiceToRowanManualStop = false;
+      setVoiceDeskStatus(`Voice input error: ${voiceToRowanLastError}. Try Chrome/Edge on localhost and verify your mic device.`, 'error', 'mic issue');
+      return;
+    }
+
+    voiceToRowanManualStop = false;
+    if (hasDraft) {
+      setVoiceDeskStatus('Draft ready. Save it as a note or send it to Rowan.', 'fresh', 'draft ready');
+      return;
+    }
+    setVoiceDeskStatus('No speech captured. Try again and speak clearly.', 'degraded', 'empty');
+  };
+
+  voiceToRowanRecognizer = recognizer;
+  return voiceToRowanRecognizer;
+}
+
+function renderVoiceDeskPod(){
+  const el = document.getElementById('voiceDeskWidget');
+  if (!el) return;
+
+  voiceToRowanSupported = !!getSpeechRecognitionCtor();
+  const hasDraft = !!String(voiceToRowanDraft || '').trim();
+  el.innerHTML = `
+    <div class="voice-desk-shell" data-pod="voice-desk">
+      <div class="voice-desk-topbar">
+        <button data-voice-desk-role="start" class="btn" ${voiceToRowanSupported && !voiceToRowanListening ? '' : 'disabled'}>Start</button>
+        <button data-voice-desk-role="stop" class="btn ghost" ${voiceToRowanListening ? '' : 'disabled'}>Stop</button>
+        <span class="voice-desk-pill">${voiceToRowanSupported ? 'Speech to draft' : 'Browser unsupported'}</span>
+      </div>
+      <div class="voice-desk-meta">${voiceToRowanSupported ? 'Capture once, then choose where the transcript should go.' : 'Voice transcription is not supported in this browser.'}</div>
+      <textarea id="voiceDeskTranscript" data-voice-desk-role="transcript" class="voice-desk-transcript" rows="5" placeholder="Transcript draft... edit before saving as a note or sending to Rowan.">${escapeHtml(voiceToRowanDraft)}</textarea>
+      <div class="voice-desk-actions">
+        <button data-voice-desk-role="save-note" class="btn ghost" ${hasDraft ? '' : 'disabled'}>Save as Note</button>
+        <button data-voice-desk-role="send-rowan" class="btn" ${hasDraft ? '' : 'disabled'}>Send to Rowan</button>
+        <button data-voice-desk-role="clear" class="btn ghost" ${hasDraft ? '' : 'disabled'}>Clear</button>
+      </div>
+      <div id="voiceDeskFallbackTools" class="voice-desk-actions" style="display:none;">
+        <button id="voiceDeskCopyBtn" class="btn ghost">Copy draft</button>
+        <a id="voiceDeskOpenChatLink" class="btn ghost" href="#chat" title="Open host chat">Open chat</a>
+      </div>
+      <div class="voice-desk-meta">Manual send only. Nothing is auto-sent. Saving as a note creates an unassigned note in your board.</div>
+    </div>
+  `;
+
+  if (!voiceToRowanSupported) {
+    setVoiceDeskStatus('SpeechRecognition unsupported. Try Chrome/Edge on HTTPS or localhost.', 'error', 'unsupported');
+    return;
+  }
+
+  if (hasDraft) {
+    setVoiceDeskStatus('Draft ready. Save it as a note or send it to Rowan.', 'fresh', 'draft ready');
+  } else if (!voiceToRowanListening) {
+    setVoiceDeskStatus('Ready. Start listening, then save as a note or send to Rowan manually.', 'neutral', 'ready');
+  }
+
+  const controls = getVoiceDeskControls();
+
+  controls.transcript?.addEventListener('input', (event) => {
+    voiceToRowanDraft = event.target.value;
+    const filled = !!String(voiceToRowanDraft || '').trim();
+    if (controls.saveBtn) controls.saveBtn.disabled = !filled;
+    if (controls.sendBtn) controls.sendBtn.disabled = !filled;
+    if (controls.clearBtn) controls.clearBtn.disabled = !filled;
+    if (filled) showVoiceDeskFallbackTools(false);
+  });
+
+  document.getElementById('voiceDeskCopyBtn')?.addEventListener('click', async () => {
+    const body = String(voiceToRowanDraft || '').trim();
+    if (!body) {
+      setVoiceDeskStatus('Nothing to copy yet. Record or type a message first.', 'degraded', 'empty');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(body);
+      setVoiceDeskStatus('Draft copied. Paste it in Rowan chat.', 'fresh', 'copied');
+    } catch {
+      setVoiceDeskStatus('Copy failed. Select the draft text and copy manually.', 'error', 'copy failed');
+    }
+  });
+
+  document.getElementById('voiceDeskOpenChatLink')?.addEventListener('click', () => {
+    setVoiceDeskStatus('Use your host app chat panel/tab, then paste from clipboard if needed.', 'degraded', 'manual fallback');
+  });
+
+  controls.startBtn?.addEventListener('click', () => {
+    const recognizer = ensureVoiceDeskRecognizer();
+    if (!recognizer || voiceToRowanListening) return;
+    voiceToRowanFinalTranscript = '';
+    voiceToRowanLastError = '';
+    voiceToRowanManualStop = false;
+    setVoiceDeskDraftValue('');
+    showVoiceDeskFallbackTools(false);
+    voiceToRowanListening = true;
+    setVoiceDeskStatus('Listening... speak now.', 'fresh', 'listening');
+    if (controls.startBtn) controls.startBtn.disabled = true;
+    if (controls.stopBtn) controls.stopBtn.disabled = false;
+    if (controls.saveBtn) controls.saveBtn.disabled = true;
+    if (controls.sendBtn) controls.sendBtn.disabled = true;
+    if (controls.clearBtn) controls.clearBtn.disabled = true;
+    try {
+      recognizer.start();
+    } catch {
+      voiceToRowanListening = false;
+      if (controls.startBtn) controls.startBtn.disabled = false;
+      if (controls.stopBtn) controls.stopBtn.disabled = true;
+      setVoiceDeskStatus('Could not start voice capture. Try again.', 'error', 'start failed');
+    }
+  });
+
+  controls.stopBtn?.addEventListener('click', () => {
+    if (!voiceToRowanRecognizer || !voiceToRowanListening) return;
+    voiceToRowanManualStop = true;
+    setVoiceDeskStatus('Stopping...', 'degraded', 'stopping');
+    try {
+      voiceToRowanRecognizer.stop();
+    } catch {}
+  });
+
+  controls.clearBtn?.addEventListener('click', () => {
+    setVoiceDeskDraftValue('');
+    voiceToRowanFinalTranscript = '';
+    voiceToRowanLastError = '';
+    showVoiceDeskFallbackTools(false);
+    if (controls.saveBtn) controls.saveBtn.disabled = true;
+    if (controls.sendBtn) controls.sendBtn.disabled = true;
+    if (controls.clearBtn) controls.clearBtn.disabled = true;
+    setVoiceDeskStatus('Draft cleared.', 'neutral', 'cleared');
+  });
+
+  controls.root?.querySelector('[data-voice-desk-role="save-note"]')?.addEventListener('click', () => {
+    const body = String(voiceToRowanDraft || '').trim();
+    if (!body) {
+      setVoiceDeskStatus('Draft is empty. Record or type a message first.', 'degraded', 'empty');
+      return;
+    }
+    if (addVoiceNoteFromTranscript(body)) {
+      setVoiceDeskDraftValue('');
+      voiceToRowanFinalTranscript = '';
+      voiceToRowanLastError = '';
+      showVoiceDeskFallbackTools(false);
+      if (controls.saveBtn) controls.saveBtn.disabled = true;
+      if (controls.sendBtn) controls.sendBtn.disabled = true;
+      if (controls.clearBtn) controls.clearBtn.disabled = true;
+      setVoiceDeskStatus('Saved as a new note.', 'fresh', 'note saved');
+      commitState('voice_note_saved');
+      return;
+    }
+    setVoiceDeskStatus('Could not save the draft as a note.', 'error', 'save failed');
+  });
+
+  controls.root?.querySelector('[data-voice-desk-role="send-rowan"]')?.addEventListener('click', async () => {
+    const body = String(voiceToRowanDraft || '').trim();
+    if (!body) {
+      setVoiceDeskStatus('Draft is empty. Record or type a message first.', 'degraded', 'empty');
+      return;
+    }
+
+    if (controls.sendBtn) controls.sendBtn.disabled = true;
+    if (controls.clearBtn) controls.clearBtn.disabled = true;
+    if (controls.saveBtn) controls.saveBtn.disabled = true;
+    setVoiceDeskStatus('Sending message to Rowan...', 'degraded', 'sending');
+
+    try {
+      const result = await sendVoiceToRowanMessage(body);
+      setVoiceDeskDraftValue('');
+      voiceToRowanFinalTranscript = '';
+      voiceToRowanLastError = '';
+      showVoiceDeskFallbackTools(false);
+      setVoiceDeskStatus(`Sent to Rowan chat via ${result.transport}.`, 'fresh', 'sent');
+    } catch (err) {
+      if (err?.code === 'ROWAN_BRIDGE_UNAVAILABLE' || err?.code === 'ROWAN_RELAY_NOT_CONFIGURED') {
+        showVoiceDeskFallbackTools(true);
+        if (err?.code === 'ROWAN_RELAY_NOT_CONFIGURED') {
+          setVoiceDeskStatus('Relay is not configured on this server. Draft preserved — use Copy draft, then paste into chat.', 'error', 'relay missing');
+        } else {
+          setVoiceDeskStatus(`Relay send failed. Draft preserved — ${String(err?.message || err)}. Use Copy draft as fallback.`, 'error', 'fallback ready');
+        }
+      } else {
+        setVoiceDeskStatus(`Could not send: ${String(err?.message || err)}. Draft preserved.`, 'error', 'send failed');
+      }
+    } finally {
+      const filled = !!String(voiceToRowanDraft || '').trim();
+      if (controls.sendBtn) controls.sendBtn.disabled = !filled;
+      if (controls.saveBtn) controls.saveBtn.disabled = !filled;
+      if (controls.clearBtn) controls.clearBtn.disabled = !filled;
+    }
+  });
 }
 
 function addVoiceNoteFromTranscript(transcript){
@@ -6402,6 +11380,17 @@ function formatRateBytesPerSec(value){
   return `${(n / (1024 * 1024)).toFixed(2)} MB/s`;
 }
 
+function formatSystemMonitorUptime(seconds){
+  const total = Number(seconds);
+  if (!Number.isFinite(total) || total < 0) return '—';
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
 const SYSMON_SEVERITY_THRESHOLDS = {
   goodMax: 59.9,
   warnMax: 84.9,
@@ -6430,11 +11419,29 @@ function applySystemMonitorAllowlistPreset(preset){
 }
 
 function renderProcessList(items = [], mode = 'cpu'){
-  if (!Array.isArray(items) || !items.length) return '<div class="note-meta">No process data.</div>';
+  if (!Array.isArray(items) || !items.length) {
+    return `
+      <div class="sysmon-process-empty">
+        <strong>No process data.</strong>
+        <span>Nothing useful was returned in this sample.</span>
+      </div>
+    `;
+  }
   return items.slice(0, 3).map((proc) => {
     const primary = mode === 'cpu' ? `${Number(proc.cpuPercent || 0).toFixed(1)}% CPU` : `${Number(proc.memPercent || 0).toFixed(1)}% RAM`;
     const secondary = mode === 'cpu' ? `${Number(proc.memPercent || 0).toFixed(1)}% RAM` : `${Number(proc.cpuPercent || 0).toFixed(1)}% CPU`;
-    return `<div class="sysmon-process-item"><span class="sysmon-process-name">${escapeHtml(proc.name || 'unknown')} <small>#${Number(proc.pid || 0)}</small></span><span class="sysmon-process-usage">${primary}<small>${secondary}</small></span></div>`;
+    return `
+      <div class="sysmon-process-card">
+        <div class="sysmon-process-card-head">
+          <span class="sysmon-process-name">${escapeHtml(proc.name || 'unknown')}</span>
+          <span class="sysmon-process-chip">#${Number(proc.pid || 0)}</span>
+        </div>
+        <div class="sysmon-process-usage">
+          <strong>${primary}</strong>
+          <small>${secondary}</small>
+        </div>
+      </div>
+    `;
   }).join('');
 }
 
@@ -6499,7 +11506,14 @@ function renderSystemResourceMonitorPod(){
   const cpuSeverity = classifySysMonSeverity(host.cpuPercent);
   const memorySeverity = classifySysMonSeverity(host.memoryPercent);
   const diskSeverity = classifySysMonSeverity(host.diskPercent);
+  const topSeverity = [cpuSeverity, memorySeverity, diskSeverity].includes('danger')
+    ? 'danger'
+    : ([cpuSeverity, memorySeverity, diskSeverity].includes('warn') ? 'warn' : 'good');
+  const healthLabel = topSeverity === 'danger' ? 'High load' : topSeverity === 'warn' ? 'Watch load' : 'Healthy';
   const activeAllowlist = state.systemMonitor?.allowlist || [];
+  const scannedCount = Number(processes.scanned || 0);
+  const allowlistMatchCount = Array.isArray(processes.allowlistMatches) ? processes.allowlistMatches.length : 0;
+  const uptimeLabel = formatSystemMonitorUptime(host.uptimeSec);
   const presetState = {
     dev: SYSMON_ALLOWLIST_PRESETS.dev.every((name) => activeAllowlist.includes(name)),
     media: SYSMON_ALLOWLIST_PRESETS.media.every((name) => activeAllowlist.includes(name)),
@@ -6508,24 +11522,88 @@ function renderSystemResourceMonitorPod(){
 
   el.innerHTML = `
     <div class="system-monitor-shell" data-pod="system-resource-monitor">
-      <div class="sysmon-row-between">
-        <div class="note-meta">Host Snapshot</div>
-        ${hotProcess ? `<span class="sysmon-hot-badge" title="Highest current CPU process">🔥 ${escapeHtml(hotProcess.name || 'unknown')} <small>#${Number(hotProcess.pid || 0)} · ${Number(hotProcess.cpuPercent || 0).toFixed(1)}%</small></span>` : '<span class="note-meta">Hot process unavailable</span>'}
+      <div class="sysmon-hero sysmon-hero--${topSeverity}">
+        <div class="sysmon-hero-main">
+          <div class="sysmon-hero-kicker">Live Host Snapshot</div>
+          <div class="sysmon-hero-title">${healthLabel}</div>
+          <div class="sysmon-hero-meta">
+            <span>Uptime ${uptimeLabel}</span>
+            <span>${scannedCount} processes scanned</span>
+            <span>${allowlistMatchCount} allowlist matches</span>
+          </div>
+        </div>
+        <div class="sysmon-hero-side">
+          ${hotProcess ? `
+            <div class="sysmon-hot-card" title="Highest current CPU process">
+              <span class="sysmon-hot-card-label">Hottest process</span>
+              <strong>${escapeHtml(hotProcess.name || 'unknown')}</strong>
+              <span>#${Number(hotProcess.pid || 0)} · ${Number(hotProcess.cpuPercent || 0).toFixed(1)}% CPU</span>
+            </div>
+          ` : `
+            <div class="sysmon-hot-card sysmon-hot-card--quiet">
+              <span class="sysmon-hot-card-label">Hottest process</span>
+              <strong>Unavailable</strong>
+              <span>No process spotlight in this sample</span>
+            </div>
+          `}
+        </div>
       </div>
 
       <div class="sysmon-metrics-grid">
-        <div class="sysmon-metric sysmon-metric--${cpuSeverity}"><span>CPU</span><strong>${Number.isFinite(host.cpuPercent) ? host.cpuPercent.toFixed(1) : '—'}%</strong></div>
-        <div class="sysmon-metric sysmon-metric--${memorySeverity}"><span>RAM</span><strong>${Number.isFinite(host.memoryPercent) ? host.memoryPercent.toFixed(1) : '—'}%</strong></div>
-        <div class="sysmon-metric sysmon-metric--${diskSeverity}"><span>Disk</span><strong>${Number.isFinite(host.diskPercent) ? host.diskPercent.toFixed(1) : '—'}%</strong></div>
-        <div class="sysmon-metric"><span>Net</span><strong>↓ ${formatRateBytesPerSec(host.network?.downBytesPerSec)} <small>↑ ${formatRateBytesPerSec(host.network?.upBytesPerSec)}</small></strong></div>
+        <div class="sysmon-metric sysmon-metric--${cpuSeverity}">
+          <span>CPU</span>
+          <strong>${Number.isFinite(host.cpuPercent) ? host.cpuPercent.toFixed(1) : '—'}%</strong>
+          <small>${cpuSeverity === 'danger' ? 'Machine is running hot' : cpuSeverity === 'warn' ? 'Worth watching' : 'Comfortable load'}</small>
+        </div>
+        <div class="sysmon-metric sysmon-metric--${memorySeverity}">
+          <span>RAM</span>
+          <strong>${Number.isFinite(host.memoryPercent) ? host.memoryPercent.toFixed(1) : '—'}%</strong>
+          <small>${memorySeverity === 'danger' ? 'Memory pressure is high' : memorySeverity === 'warn' ? 'Moderate pressure' : 'Healthy headroom'}</small>
+        </div>
+        <div class="sysmon-metric sysmon-metric--${diskSeverity}">
+          <span>Disk</span>
+          <strong>${Number.isFinite(host.diskPercent) ? host.diskPercent.toFixed(1) : '—'}%</strong>
+          <small>${diskSeverity === 'danger' ? 'Storage is nearly stressed' : diskSeverity === 'warn' ? 'Storage trend worth checking' : 'Storage looks calm'}</small>
+        </div>
+        <div class="sysmon-metric sysmon-metric--neutral">
+          <span>Net</span>
+          <strong>↓ ${formatRateBytesPerSec(host.network?.downBytesPerSec)}</strong>
+          <small>↑ ${formatRateBytesPerSec(host.network?.upBytesPerSec)}</small>
+        </div>
+      </div>
+
+      <div class="sysmon-scope-card">
+        <div class="sysmon-scope-head">
+          <div>
+            <div class="sysmon-scope-kicker">Monitor Scope</div>
+            <strong>${activeAllowlist.length ? `${activeAllowlist.length} names in focus` : 'Default monitor scope'}</strong>
+          </div>
+          <div class="sysmon-scope-pills">
+            ${activeAllowlist.slice(0, 5).map((name) => `<span class="sysmon-scope-pill">${escapeHtml(name)}</span>`).join('') || '<span class="sysmon-scope-pill">node</span><span class="sysmon-scope-pill">chrome</span>'}
+            ${activeAllowlist.length > 5 ? `<span class="sysmon-scope-pill">+${activeAllowlist.length - 5} more</span>` : ''}
+          </div>
+        </div>
+        <div class="sysmon-scope-meta">Matches in current sample: ${(processes.allowlistMatches || []).map((p) => `${p.name}#${p.pid}`).join(', ') || 'none in current sample'}</div>
       </div>
 
       <div class="sysmon-grid-two">
-        <div><div class="note-meta">Top CPU</div>${renderProcessList(processes.topCpu, 'cpu')}</div>
-        <div><div class="note-meta">Top RAM</div>${renderProcessList(processes.topMemory, 'ram')}</div>
+        <section class="sysmon-panel">
+          <div class="sysmon-panel-head">
+            <div class="sysmon-panel-kicker">Process Heat</div>
+            <strong>Top CPU</strong>
+          </div>
+          <div class="sysmon-process-grid">${renderProcessList(processes.topCpu, 'cpu')}</div>
+        </section>
+        <section class="sysmon-panel">
+          <div class="sysmon-panel-head">
+            <div class="sysmon-panel-kicker">Memory Pressure</div>
+            <strong>Top RAM</strong>
+          </div>
+          <div class="sysmon-process-grid">${renderProcessList(processes.topMemory, 'ram')}</div>
+        </section>
       </div>
 
-      <div class="row-between-wrap mt8">
+      <div class="sysmon-controls-row">
         <button type="button" class="btn ghost" id="sysMonToggleSettingsBtn">${state.systemMonitor?.settingsOpen ? 'Hide' : 'Edit'} Allowlist</button>
         <button type="button" class="btn ghost" id="sysMonRefreshBtn">Refresh</button>
       </div>
@@ -6843,11 +11921,15 @@ function getUtilityPodLegacyRenderer(podId){
   if (podId === 'gas-prices') return () => renderGasPricesView();
   if (podId === 'nba-scores') return () => renderNbaScores();
   if (podId === 'crypto-tracker') return () => renderCrypto();
+  if (podId === MERGED_SOCIAL_FOLLOWERS_POD_ID) return () => renderSocialFollowersPod();
+  if (podId === 'ebay-traffic') return () => renderEbayTrafficPod();
+  if (podId === MERGED_VOICE_POD_ID) return () => renderVoiceDeskPod();
   if (podId === 'facebook-followers') return () => renderFacebookFollowersPod();
   if (podId === 'instagram-followers') return () => renderInstagramFollowersPod();
   if (podId === 'tiktok-followers') return () => renderTikTokFollowersPod();
   if (podId === 'youtube-subscribers') return () => renderYouTubeSubscribersPod();
   if (podId === 'rss-feed') return () => renderRss();
+  if (podId === 'unread-email') return () => renderUnreadEmailPod();
   if (podId === 'everyday-calculator') return () => renderEverydayCalculatorPod();
   if (podId === 'system-resource-monitor') return () => renderSystemResourceMonitorPod();
   if (podId === 'speed-test') return () => renderSpeedTestPod();
@@ -6856,7 +11938,7 @@ function getUtilityPodLegacyRenderer(podId){
 }
 
 function syncUtilityPodLifecycle(){
-  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', 'facebook-followers', 'instagram-followers', 'tiktok-followers', 'youtube-subscribers', 'speed-test', 'rss-feed', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'];
+  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', MERGED_SOCIAL_FOLLOWERS_POD_ID, 'facebook-followers', 'instagram-followers', 'tiktok-followers', 'youtube-subscribers', 'ebay-traffic', 'speed-test', 'rss-feed', 'unread-email', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'];
   managed.forEach((podId) => {
     const visible = state.layout?.visibility?.[podId] !== false;
     const legacyRender = getUtilityPodLegacyRenderer(podId);
@@ -7232,6 +12314,8 @@ function renderAll(){
   renderEverydayCalculatorPod();
   renderSystemResourceMonitorPod();
   renderSpeedTestPod();
+  renderEbayTrafficPod();
+  renderUnreadEmailPod();
   renderCalendarRemindersPanel();
   renderTodayReminders();
   renderSettings();
@@ -7243,8 +12327,7 @@ function renderAll(){
   renderMusicPlayer();
   renderCameraFeedPod();
   renderLiveStreamsPod();
-  renderVoiceNotePod();
-  renderVoiceToRowanPod();
+  renderVoiceDeskPod();
   renderShortcutsPod();
   renderShortcutsSettings();
   syncUtilityPodLifecycle();
@@ -7973,9 +13056,12 @@ document.getElementById('closeSettingsBtn')?.addEventListener('click', ()=> {
 });
 
 document.getElementById('settingTheme')?.addEventListener('change', (e)=> {
-  state.settings.theme = e.target.value;
-  logChange(`Theme changed to ${e.target.value}`);
-  commitState('theme_changed');
+  setThemePreference(e.target.value);
+});
+document.getElementById('themeChoiceGrid')?.addEventListener('click', (e) => {
+  const choice = e.target.closest('[data-theme-choice]');
+  if (!choice) return;
+  setThemePreference(choice.getAttribute('data-theme-choice'));
 });
 
 document.getElementById('settingWeatherInterval')?.addEventListener('change', (e)=> {
@@ -8434,6 +13520,16 @@ if (!state.changelog.some((c) => c.message === nbaLinksPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: nbaLinksPatch });
 }
 
+const nbaV2Patch = 'NBA Scores 2.0: favorites-first views, featured matchup, richer game cards with leaders/broadcasts, recap mode, and 1-minute live refresh.';
+if (!state.changelog.some((c) => c.message === nbaV2Patch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: nbaV2Patch });
+}
+
+const nbaImportanceTagsPatch = 'NBA Scores refinement: smarter game importance tags now surface My Team, Starts Soon, OT, Close Game, Tight Finish, National TV, and Upset moments without bloating the pod.';
+if (!state.changelog.some((c) => c.message === nbaImportanceTagsPatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: nbaImportanceTagsPatch });
+}
+
 const cryptoPatch = 'Added Crypto Tracker pod: watchlist-focused view with cached coin directory search, add/remove controls, manual list refresh, and 5-minute auto-refresh.';
 if (!state.changelog.some((c) => c.message === cryptoPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: cryptoPatch });
@@ -8449,9 +13545,44 @@ if (!state.changelog.some((c) => c.message === cryptoMultiProviderPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: cryptoMultiProviderPatch });
 }
 
+const cryptoV2Patch = 'Crypto Tracker 2.0: upgraded from a plain watchlist into a richer portfolio snapshot with market pulse cards, cleaner asset rows, and a calmer holdings-vs-radar layout.';
+if (!state.changelog.some((c) => c.message === cryptoV2Patch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: cryptoV2Patch });
+}
+
+const dateTimeV2Patch = 'Date & Time 2.0: refreshed the pod with a stronger clock hero, cleaner timer panel, and more polished integrated weather cards.';
+if (!state.changelog.some((c) => c.message === dateTimeV2Patch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: dateTimeV2Patch });
+}
+
+const calendarV2Patch = 'Calendar 2.0: refreshed the month view with cleaner day cells and turned the lower half into a fuller selected-day agenda panel.';
+if (!state.changelog.some((c) => c.message === calendarV2Patch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: calendarV2Patch });
+}
+
+const rssV2Patch = 'RSS Feed 2.0: upgraded the pod from a text blob into a cleaner editorial feed with story cards and a quick overview strip.';
+if (!state.changelog.some((c) => c.message === rssV2Patch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: rssV2Patch });
+}
+
+const systemMonitorV2Patch = 'System Resource Monitor 2.0: refreshed the pod with a stronger host-health hero, clearer metric cards, and richer process spotlight panels.';
+if (!state.changelog.some((c) => c.message === systemMonitorV2Patch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: systemMonitorV2Patch });
+}
+
+const cameraFeedV2Patch = 'Camera Feed 2.0: rebuilt the pod around a cleaner control deck, a stronger live-stage presentation, and synced status cues for embed, snapshot, and local webcam modes.';
+if (!state.changelog.some((c) => c.message === cameraFeedV2Patch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: cameraFeedV2Patch });
+}
+
 const musicPatch = 'Added mini Music Player pod with YouTube/stream URL input, local audio file playback, compact controls, volume, and one-click favorite stream recall.';
 if (!state.changelog.some((c) => c.message === musicPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: musicPatch });
+}
+
+const musicV2Patch = 'Music Player 2.0: refreshed the pod with a stronger listening hero, cleaner stream-vs-ambient control decks, and a calmer transport-focused layout.';
+if (!state.changelog.some((c) => c.message === musicV2Patch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: musicV2Patch });
 }
 
 const utilityLayoutPatch = 'Utility layout refresh: split utility pods into two rows (Date/Calendar/Weather + NBA/Crypto/Music) with cleaner responsive spacing.';
@@ -8482,6 +13613,11 @@ if (!state.changelog.some((c) => c.message === voiceToRowanRelayPatch)) {
 const voiceToRowanTurnkeyConfigPatch = 'Voice-to-Rowan turnkey setup patch: local `.env` / `.env.local` relay config is now first-class (one-time setup + npm start), while preserving local-only relay security defaults.';
 if (!state.changelog.some((c) => c.message === voiceToRowanTurnkeyConfigPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: voiceToRowanTurnkeyConfigPatch });
+}
+
+const voiceDeskMergePatch = 'Voice Desk merge: combined Voice Note and Voice to Rowan into one shared transcript pod with manual Save as Note and Send to Rowan actions.';
+if (!state.changelog.some((c) => c.message === voiceDeskMergePatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: voiceDeskMergePatch });
 }
 
 const taskEditPatch = 'Board update: task cards now support Edit via modal for all task fields, including project/column reassignment.';
@@ -8584,6 +13720,11 @@ if (!state.changelog.some((c) => c.message === liveStreamsVaughnPopoutPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: liveStreamsVaughnPopoutPatch });
 }
 
+const liveStreamsV2Patch = 'Live Streams 2.0: upgraded the pod into a cleaner stream deck with clearer provider controls, preset management, a stronger player stage, and built-in fallback emphasis for blocked embeds.';
+if (!state.changelog.some((c) => c.message === liveStreamsV2Patch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: liveStreamsV2Patch });
+}
+
 const liveStreamsPhase2APatch = 'Patch: Live Streams Phase 2A adds Rumble, X Live/Spaces, and Facebook Live presets with provider-specific normalization and explicit non-silent fallback messaging when embeds are blocked.';
 if (!state.changelog.some((c) => c.message === liveStreamsPhase2APatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: liveStreamsPhase2APatch });
@@ -8609,6 +13750,11 @@ if (!state.changelog.some((c) => c.message === facebookFollowersPatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: facebookFollowersPatch });
 }
 
+const socialFollowersMergePatch = 'Utility pod merge: Facebook, Instagram, TikTok, and YouTube audience stats now live in one Social Followers pod with per-network tiles and a shared refresh action.';
+if (!state.changelog.some((c) => c.message === socialFollowersMergePatch)) {
+  state.changelog.unshift({ id: id(), ts: now(), message: socialFollowersMergePatch });
+}
+
 save('startup_patch_seed', { pushShared: false });
 setupSettingsSectionNav();
 setupSettingsPaneDragScroll();
@@ -8617,12 +13763,52 @@ startSystemMonitorPolling();
 startSpeedTestAutoRun();
 fetchSystemMonitorSnapshot();
 setInterval(renderDateTime, 1000);
-setInterval(() => renderFacebookFollowersPod(), 60 * 1000);
-setInterval(() => renderInstagramFollowersPod(), 60 * 1000);
-setInterval(() => renderTikTokFollowersPod(), 60 * 1000);
-setInterval(() => renderYouTubeSubscribersPod(), 60 * 1000);
+setInterval(() => renderSocialFollowersPod(), 60 * 1000);
+setInterval(() => {
+  if (document.hidden) return;
+  if (state.layout?.visibility?.['ebay-traffic'] === false) return;
+  renderEbayTrafficPod();
+}, EBAY_TRAFFIC_POLL_INTERVAL_MS);
 document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => renderWeatherPod({ manual: true }));
 document.getElementById('nbaRefreshBtn')?.addEventListener('click', () => renderNbaPod({ manual: true }));
+document.getElementById('nbaScoresWidget')?.addEventListener('click', (e) => {
+  const viewBtn = getEventClosestTarget(e, '[data-nba-view]');
+  if (viewBtn) {
+    const nextView = String(viewBtn.dataset.nbaView || '').trim();
+    if (NBA_VIEW_MODES.has(nextView) && state.nba.viewMode !== nextView) {
+      state.nba.viewMode = nextView;
+      save('nba_view_changed');
+    }
+    renderNbaPod({ useCached: true });
+    return;
+  }
+
+  const removeBtn = getEventClosestTarget(e, '[data-nba-favorite-remove]');
+  if (removeBtn) {
+    const team = String(removeBtn.dataset.nbaFavoriteRemove || '').trim().toUpperCase();
+    const nextFavorites = state.nba.favoriteTeams.filter((abbr) => abbr !== team);
+    if (nextFavorites.length !== state.nba.favoriteTeams.length) {
+      state.nba.favoriteTeams = nextFavorites;
+      save('nba_favorite_removed');
+    }
+    renderNbaPod({ useCached: true });
+    return;
+  }
+
+  const addBtn = getEventClosestTarget(e, '[data-nba-favorite-add]');
+  if (addBtn) {
+    const select = document.getElementById('nbaFavoriteTeamSelect');
+    const team = String(select?.value || '').trim().toUpperCase();
+    if (team && !state.nba.favoriteTeams.includes(team)) {
+      state.nba.favoriteTeams = normalizeNbaState({
+        ...state.nba,
+        favoriteTeams: [...state.nba.favoriteTeams, team],
+      }).favoriteTeams;
+      save('nba_favorite_added');
+    }
+    renderNbaPod({ useCached: true });
+  }
+});
 document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
   if (Date.now() < cryptoRefreshCooldownUntil) {
     updateCryptoRefreshButton();
@@ -8632,10 +13818,24 @@ document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
   renderCryptoPod({ manual: true });
 });
 document.getElementById('rssRefreshBtn')?.addEventListener('click', () => renderRssPod({ manual: true }));
-document.getElementById('facebookFollowersRefreshBtn')?.addEventListener('click', () => renderFacebookFollowersPod({ manual: true }));
-document.getElementById('instagramFollowersRefreshBtn')?.addEventListener('click', () => renderInstagramFollowersPod({ manual: true }));
-document.getElementById('tiktokFollowersRefreshBtn')?.addEventListener('click', () => renderTikTokFollowersPod({ manual: true }));
-document.getElementById('youtubeSubscribersRefreshBtn')?.addEventListener('click', () => renderYouTubeSubscribersPod({ manual: true }));
+document.getElementById('unreadEmailRefreshBtn')?.addEventListener('click', () => renderUnreadEmailPod({ manual: true }));
+document.getElementById('socialFollowersRefreshBtn')?.addEventListener('click', () => renderSocialFollowersPod({ manual: true }));
+document.getElementById('socialFollowersWidget')?.addEventListener('click', (event) => {
+  const analyticsBtn = getEventClosestTarget(event, '[data-social-analytics-open]');
+  if (!analyticsBtn) return;
+  openSocialAnalyticsDialog(analyticsBtn.dataset.socialAnalyticsOpen);
+});
+document.getElementById('socialAnalyticsDialogBody')?.addEventListener('click', (event) => {
+  const rangeBtn = getEventClosestTarget(event, '[data-social-analytics-range]');
+  if (!rangeBtn) return;
+  const dialog = document.getElementById('socialAnalyticsDialog');
+  const network = String(dialog?.dataset?.network || 'instagram').trim().toLowerCase();
+  setSocialAnalyticsRange(network, String(rangeBtn.dataset.socialAnalyticsRange || '7d').trim().toLowerCase());
+  renderInstagramAnalyticsDialog();
+});
+document.getElementById('socialAnalyticsDialogCloseBtn')?.addEventListener('click', () => document.getElementById('socialAnalyticsDialog')?.close());
+document.getElementById('socialAnalyticsRefreshBtn')?.addEventListener('click', () => refreshSocialAnalyticsDialog());
+document.getElementById('ebayTrafficRefreshBtn')?.addEventListener('click', () => renderEbayTrafficPod({ manual: true }));
 document.getElementById('gasFetchBtn')?.addEventListener('click', async () => {
   const input = String(document.getElementById('gasLocationInput')?.value || '').trim();
   await fetchGasPricesAuto(input);

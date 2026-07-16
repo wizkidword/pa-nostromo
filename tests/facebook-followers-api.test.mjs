@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
+import { createTempRuntime } from './helpers/temp-runtime.mjs';
 
 const ROOT = process.cwd();
-const DATA_PATH = path.join(ROOT, 'data', 'facebook-followers.json');
 
 async function wait(ms){ return new Promise((r) => setTimeout(r, ms)); }
 
@@ -21,10 +21,12 @@ async function waitForServer(port, timeoutMs = 8000) {
 }
 
 async function main(){
-  await fsp.mkdir(path.dirname(DATA_PATH), { recursive: true });
+  const runtime = await createTempRuntime('nostromo-facebook-test-');
+  const dataPath = path.join(runtime.dataDir, 'facebook-followers.json');
+  await fsp.mkdir(path.dirname(dataPath), { recursive: true });
   const staleSuccessAt = new Date(Date.now() - (5 * 60 * 1000)).toISOString();
   const staleFetchedAt = new Date(Date.now() - (5 * 60 * 1000)).toISOString();
-  await fsp.writeFile(DATA_PATH, JSON.stringify({
+  await fsp.writeFile(dataPath, JSON.stringify({
     schemaVersion: 1,
     page: { id: '123', name: 'QA Page' },
     latest: {
@@ -53,9 +55,14 @@ async function main(){
     env: {
       ...process.env,
       PORT: String(port),
+      DATA_DIR: runtime.dataDir,
+      LOG_DIR: runtime.logDir,
       META_GRAPH_PAGE_ID: '',
       META_GRAPH_PAGE_ACCESS_TOKEN: '',
-      META_GRAPH_ALLOW_REMOTE: '1'
+      META_GRAPH_ALLOW_REMOTE: '1',
+      FACEBOOK_PAGE_URL: 'http://127.0.0.1:9/not-running',
+      FACEBOOK_SESSION_SCRIPT_PATH: path.join(runtime.root, 'missing-facebook-session.mjs'),
+      FACEBOOK_SESSION_STORAGE_PATH: path.join(runtime.root, 'missing-facebook-session-storage.json')
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -89,6 +96,7 @@ async function main(){
     console.log('facebook-followers-api: PASS');
   } finally {
     child.kill('SIGTERM');
+    await runtime.cleanup();
   }
 }
 

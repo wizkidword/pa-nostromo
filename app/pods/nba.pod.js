@@ -5,7 +5,7 @@
   if (!registry || typeof registry.register !== 'function') return;
 
   let refreshTimer = null;
-  const NBA_REFRESH_MS = 15 * 60 * 1000;
+  const NBA_REFRESH_MS = 60 * 1000;
 
   function invokeRender(renderLegacy, podId, reason){
     if (typeof renderLegacy !== 'function') return;
@@ -40,8 +40,8 @@
   registry.register({
     id: 'nba-scores',
     title: 'NBA Scores',
-    version: '1.1.1',
-    description: 'Phase 1D.1 adapter pod with lifecycle-safe auto-refresh timer management + debug counters.',
+    version: '2.0.0',
+    description: 'NBA Scores 2.0 adapter with lifecycle-safe 1-minute auto-refresh for favorites-first scoreboard views.',
     render(ctx = {}){
       const renderLegacy = typeof ctx.legacyRender === 'function' ? ctx.legacyRender : global.renderNbaScores;
       invokeRender(renderLegacy, 'nba-scores', 'render_call');

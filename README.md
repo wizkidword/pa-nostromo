@@ -23,6 +23,7 @@
 - **Voice-to-relay workflow**: send dictated text through a local backend relay endpoint
 - **Cross-browser local state sharing**: Brave/Chrome can sync through disk-backed API storage
 - **State safety guardrails**: automatic backups, restore endpoints, and downgrade-protection on risky writes
+- **Themeable cockpit**: Settings includes dark, light, system, Ember, Forest, Terminal, and Aurora themes
 
 ## Quick Start
 
@@ -51,7 +52,7 @@ Edit `.env` with any values you need (especially relay settings if using voice r
 npm start
 ```
 
-Open: `http://localhost:4187`
+Open: `http://127.0.0.1:4287`
 
 ## Configuration (Public-Safe)
 
@@ -63,6 +64,11 @@ Open: `http://localhost:4187`
 
 ### Core relay settings
 
+- `HOST` — server bind address (default `127.0.0.1`; use `0.0.0.0` only behind trusted controls)
+- `DATA_DIR` / `LOG_DIR` — runtime storage roots, mainly useful for tests or portable installs
+- `STATE_API_ALLOW_REMOTE` — keep `0` unless intentionally exposing state API beyond loopback
+- `NOSTROMO_API_TOKEN` — required bearer token for remote state API access when remote state is enabled
+- `REQUEST_BODY_LIMIT_ACTION_BYTES`, `REQUEST_BODY_LIMIT_STATE_BYTES`, `REQUEST_BODY_LIMIT_RSS_BYTES` — request size caps
 - `ROWAN_RELAY_URL` — required for `POST /api/rowan-send`
 - `ROWAN_RELAY_AUTH_BEARER` — optional bearer token for upstream relay
 - `ROWAN_RELAY_AUTH_HEADER` — auth header name (default `Authorization`)
@@ -111,7 +117,7 @@ If Graph credentials are missing/invalid (or Graph fetch fails), the service fet
 Optional watchdog cron (defense-in-depth):
 
 ```bash
-* * * * * curl -fsS -X POST "http://127.0.0.1:4187/api/facebook-followers/refresh?source=cron" >/dev/null 2>&1
+* * * * * curl -fsS -X POST "http://127.0.0.1:4287/api/facebook-followers/refresh?source=cron" >/dev/null 2>&1
 ```
 
 ### Instagram follower pod (Meta Business Suite primary)

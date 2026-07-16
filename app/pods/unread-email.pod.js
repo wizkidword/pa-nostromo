@@ -1,10 +1,11 @@
-(function registerRssFeedPod(global){
+(function registerUnreadEmailPod(global){
   const root = global.MissionControlModules || {};
   const registry = root.podRegistry;
   const debug = root.debug;
   if (!registry || typeof registry.register !== 'function') return;
 
   let refreshTimer = null;
+  const EMAIL_REFRESH_MS = 3 * 60 * 1000;
 
   function invokeRender(renderLegacy, podId, reason){
     if (typeof renderLegacy !== 'function') return;
@@ -19,16 +20,13 @@
     if (refreshTimer) {
       clearInterval(refreshTimer);
       refreshTimer = null;
-      debug?.setRefresh?.('rss-feed', 'intervalMs', 0);
+      debug?.setRefresh?.('unread-email', 'intervalMs', 0);
     }
   }
 
   function scheduleRefresh(ctx = {}){
     clearRefreshTimer();
-    const minsRaw = Number(ctx.state?.rss?.refreshIntervalMin || 60);
-    const mins = Number.isFinite(minsRaw) ? Math.max(5, minsRaw) : 60;
-    const intervalMs = mins * 60 * 1000;
-    debug?.setRefresh?.('rss-feed', 'intervalMs', intervalMs);
+    debug?.setRefresh?.('unread-email', 'intervalMs', EMAIL_REFRESH_MS);
     refreshTimer = setInterval(() => {
       const refreshCtx = {
         ...ctx,
@@ -36,21 +34,21 @@
       };
       const renderLegacy = typeof refreshCtx.legacyRender === 'function'
         ? refreshCtx.legacyRender
-        : (options) => global.renderRss?.(options);
-      invokeRender(renderLegacy, 'rss-feed', 'auto_refresh_tick');
-    }, intervalMs);
+        : (options) => global.renderUnreadEmailPod?.(options);
+      invokeRender(renderLegacy, 'unread-email', 'auto_refresh_tick');
+    }, EMAIL_REFRESH_MS);
   }
 
   registry.register({
-    id: 'rss-feed',
-    title: 'RSS Feed',
-    version: '2.0.0',
-    description: 'RSS Feed 2.0 with an editorial card layout, overview stats, and the same lifecycle-safe auto-refresh handling.',
+    id: 'unread-email',
+    title: 'Unread Email',
+    version: '1.0.0',
+    description: 'Unread email tracker with a local-only Gmail Atom feed bridge, status-safe refresh cadence, and setup guidance when credentials are missing.',
     render(ctx = {}){
       const renderLegacy = typeof ctx.legacyRender === 'function'
         ? ctx.legacyRender
-        : (options) => global.renderRss?.(options);
-      invokeRender(renderLegacy, 'rss-feed', 'render_call');
+        : (options) => global.renderUnreadEmailPod?.(options);
+      invokeRender(renderLegacy, 'unread-email', 'render_call');
     },
     lifecycle: {
       init(ctx = {}){
@@ -59,8 +57,8 @@
       refresh(ctx = {}){
         const renderLegacy = typeof ctx.legacyRender === 'function'
           ? ctx.legacyRender
-          : (options) => global.renderRss?.(options);
-        invokeRender(renderLegacy, 'rss-feed', ctx.trigger === 'auto_refresh' ? 'auto_refresh_dispatch' : 'refresh_call');
+          : (options) => global.renderUnreadEmailPod?.(options);
+        invokeRender(renderLegacy, 'unread-email', ctx.trigger === 'auto_refresh' ? 'auto_refresh_dispatch' : 'refresh_call');
       },
       destroy(){
         clearRefreshTimer();

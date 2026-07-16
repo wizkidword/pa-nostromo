@@ -6,12 +6,17 @@ node_modules/
 logs/
 test-results/
 playwright-report/
+.playwright-cli/
+output/
+tmp-instagram-page.html
 
 data/*.bak
 data/state*.json
 data/backups/
 data/.auth/
+data/ebay-traffic-cache.json
 data/facebook-followers.json
+data/facebook-group-members.json
 data/instagram-followers.json
 data/tiktok-followers.json
 data/youtube-subscribers.json

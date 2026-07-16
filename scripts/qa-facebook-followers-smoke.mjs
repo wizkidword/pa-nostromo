@@ -1,4 +1,4 @@
-const BASE = process.env.MISSION_CONTROL_BASE_URL || 'http://127.0.0.1:4187';
+const BASE = process.env.MISSION_CONTROL_BASE_URL || 'http://127.0.0.1:4287';
 
 async function run(){
   const getRes = await fetch(`${BASE}/api/facebook-followers`);

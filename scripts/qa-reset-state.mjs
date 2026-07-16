@@ -20,9 +20,9 @@ payload.__writeControl = {
   explicitLiveOverride: allowLive,
 };
 
-const baseUrl = process.env.MC_BASE_URL || 'http://localhost:4187';
-if (/localhost:4187$/.test(baseUrl) && !allowLive) {
-  console.error('Refusing to target live default state endpoint (localhost:4187) without --allow-live.');
+const baseUrl = process.env.MC_BASE_URL || 'http://localhost:4287';
+if (/localhost:4287$/.test(baseUrl) && !allowLive) {
+  console.error('Refusing to target live default state endpoint (localhost:4287) without --allow-live.');
   console.error('Use MC_BASE_URL for isolated QA server, or pass --allow-live if you intentionally want live overwrite.');
   process.exit(1);
 }

@@ -42,8 +42,8 @@
   registry.register({
     id: 'crypto-tracker',
     title: 'Crypto Tracker',
-    version: '1.1.1',
-    description: 'Phase 1D.1 adapter pod with lifecycle-safe auto-refresh timer management + debug counters.',
+    version: '2.0.0',
+    description: 'Crypto Tracker 2.0 with richer portfolio snapshot UI, market pulse framing, and lifecycle-safe auto-refresh.',
     render(ctx = {}){
       const renderLegacy = typeof ctx.legacyRender === 'function'
         ? ctx.legacyRender
