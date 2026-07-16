@@ -65,9 +65,11 @@ Open: `http://127.0.0.1:4287`
 ### Core relay settings
 
 - `HOST` — server bind address (default `127.0.0.1`; use `0.0.0.0` only behind trusted controls)
+- `NOSTROMO_ALLOWED_HOSTS` — optional comma-separated Host allowlist for a deliberate deployment hostname; leaving it blank permits only loopback hostnames.
 - `DATA_DIR` / `LOG_DIR` — runtime storage roots. Leave both blank for the private OS app-data location (`%LOCALAPPDATA%\\PA-Nostromo` on Windows); use absolute paths for a portable install.
 - `STATE_API_ALLOW_REMOTE` — keep `0` unless intentionally exposing state API beyond loopback
-- `NOSTROMO_API_TOKEN` — required bearer token for remote state API access when remote state is enabled
+- `NOSTROMO_API_TOKENS_JSON` — scoped bearer-token records for deliberately remote-enabled routes. A route still remains disabled until its own `*_ALLOW_REMOTE=1` flag is set.
+- `NOSTROMO_API_TOKEN` — legacy state-only token compatibility; use the scoped token configuration for new setups.
 - `REQUEST_BODY_LIMIT_ACTION_BYTES`, `REQUEST_BODY_LIMIT_STATE_BYTES`, `REQUEST_BODY_LIMIT_RSS_BYTES` — request size caps
 - `ROWAN_RELAY_URL` — required for `POST /api/rowan-send`
 - `ROWAN_RELAY_AUTH_BEARER` — optional bearer token for upstream relay
@@ -79,6 +81,10 @@ Open: `http://127.0.0.1:4287`
 ### Private runtime storage migration
 
 New installs keep state, backups, logs, caches, and browser-session storage outside the repository. On first start, an existing legacy `./data` or `./logs` directory is copied into the private app-data location and verified; the original folders are not removed. Existing files in the private destination are never overwritten. If the same private file already differs, startup stops so you can choose the authoritative copy (or temporarily set `DATA_DIR` / `LOG_DIR` to the legacy location) rather than silently losing data.
+
+### Browser and remote request protection
+
+Every response carries anti-sniffing, frame, referrer, and same-origin resource headers. Browser mutations first obtain a per-launch token from the same-origin bootstrap endpoint and send it in a custom header; cross-site Origin and `Sec-Fetch-Site: cross-site` requests are rejected. Remote API use requires both the route’s explicit remote-enable flag and a bearer token with that route’s scope. TLS must terminate at a trusted reverse proxy before any non-loopback deployment.
 
 ### Camera snapshot proxy safety
 

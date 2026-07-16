@@ -50,6 +50,9 @@ try {
   assert.match(home.headers['content-type'], /^text\/html/);
   assert.equal(home.headers['cache-control'], 'no-store');
   assert.equal(home.headers['x-content-type-options'], 'nosniff');
+  assert.equal(home.headers['referrer-policy'], 'no-referrer');
+  assert.equal(home.headers['cross-origin-resource-policy'], 'same-origin');
+  assert.equal(home.headers['x-frame-options'], 'DENY');
   assert.match(home.body, /PA Nostromo|Mission Control/i);
   assert.ok(home.headers.etag);
 
@@ -65,6 +68,10 @@ try {
   const method = await request(port, '/', 'POST');
   assert.equal(method.status, 405);
   assert.equal(method.headers.allow, 'GET, HEAD');
+
+  const unexpectedHost = await request(port, '/', 'GET', { Host: 'attacker.example' });
+  assert.equal(unexpectedHost.status, 400);
+  assert.match(unexpectedHost.body, /host_not_allowed/);
 
   for (const protectedPath of [
     '/.env',

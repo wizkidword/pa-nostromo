@@ -36,6 +36,53 @@ const EBAY_TRAFFIC_PROMO_LIFT_WINDOW_KEY = 'mission-control-ebay-traffic-promo-l
 const UNREAD_EMAIL_ACTIVE_ACCOUNT_KEY = 'mission-control-unread-email-active-account-v1';
 const debugCounters = window.MissionControlModules?.debug || null;
 
+const CSRF_BOOTSTRAP_API = '/api/security/bootstrap';
+const CSRF_HEADER_NAME = 'X-PA-Nostromo-CSRF';
+let csrfTokenPromise = null;
+
+function fetchTargetUrl(input){
+  if (input instanceof Request) return new URL(input.url, window.location.href);
+  return new URL(String(input || ''), window.location.href);
+}
+
+async function getCsrfToken(){
+  if (!csrfTokenPromise) {
+    csrfTokenPromise = window.fetch(CSRF_BOOTSTRAP_API, { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Unable to initialize same-origin request protection.');
+        const payload = await response.json();
+        const token = String(payload?.csrfToken || '').trim();
+        if (!token) throw new Error('Same-origin request protection did not return a token.');
+        return token;
+      })
+      .catch((error) => {
+        csrfTokenPromise = null;
+        throw error;
+      });
+  }
+  return csrfTokenPromise;
+}
+
+function installSameOriginCsrfFetch(){
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async (input, init = {}) => {
+    const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    const target = fetchTargetUrl(input);
+    const protectsMutation = !['GET', 'HEAD', 'OPTIONS'].includes(method)
+      && target.origin === window.location.origin
+      && target.pathname.startsWith('/api/')
+      && target.pathname !== CSRF_BOOTSTRAP_API;
+    if (!protectsMutation) return nativeFetch(input, init);
+
+    const token = await getCsrfToken();
+    const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+    headers.set(CSRF_HEADER_NAME, token);
+    return nativeFetch(input, { ...init, headers });
+  };
+}
+
+installSameOriginCsrfFetch();
+
 const COLUMNS = [
   ['inbox', 'Inbox'],
   ['in_progress', 'In Progress'],

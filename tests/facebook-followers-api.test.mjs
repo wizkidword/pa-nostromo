@@ -78,7 +78,15 @@ async function main(){
     assert.equal(getPayload.latest.source, 'graph_api');
     assert.equal(getPayload.status.staleLevel, 'stale');
 
-    const refreshRes = await fetch(`http://127.0.0.1:${port}/api/facebook-followers/refresh?source=qa`, { method: 'POST' });
+    const bootstrapRes = await fetch(`http://127.0.0.1:${port}/api/security/bootstrap`);
+    assert.equal(bootstrapRes.status, 200);
+    const { csrfToken } = await bootstrapRes.json();
+    assert.ok(csrfToken);
+
+    const refreshRes = await fetch(`http://127.0.0.1:${port}/api/facebook-followers/refresh?source=qa`, {
+      method: 'POST',
+      headers: { 'X-PA-Nostromo-CSRF': csrfToken }
+    });
     assert.equal(refreshRes.status, 200);
     const refreshPayload = await refreshRes.json();
     assert.equal(refreshPayload.ok, true);

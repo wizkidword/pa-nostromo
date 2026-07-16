@@ -9,6 +9,8 @@ const { pipeline } = require('stream/promises');
 const os = require('os');
 const { fetchGmailImapMessageBody, fetchGmailImapAccountSnapshot, markGmailImapMessagesRead, markGmailImapMessageRead, moveGmailImapMessageToSpam, moveGmailImapMessageToTrash, moveGmailImapMessagesToSpam, moveGmailImapMessagesToTrash } = require('./lib/email-imap.js');
 const { resolveRuntimeStorage, ensurePrivateRuntimeStorage } = require('./lib/runtime-storage.js');
+const { SECURITY_RESPONSE_HEADERS, createHostPolicy, validateHostHeader, parseScopedTokens, bearerTokenHasScope, hasBrowserMetadata, validateBrowserIntent, createCsrfToken } = require('./lib/route-security.js');
+const { buildRouteManifest, resolveRoute } = require('./lib/route-manifest.js');
 
 const ROOT = __dirname;
 const PUBLIC_ROOT = path.join(ROOT, 'public');
@@ -124,6 +126,10 @@ const EMAIL_UNREAD_IMAP_PORT = Math.max(1, parsePositiveInt(process.env.EMAIL_UN
 const EMAIL_UNREAD_PREVIEW_LIMIT = Math.max(1, Math.min(10, parsePositiveInt(process.env.EMAIL_UNREAD_PREVIEW_LIMIT, 5)));
 const STATE_API_ALLOW_REMOTE = parseBool(process.env.STATE_API_ALLOW_REMOTE);
 const NOSTROMO_API_TOKEN = String(process.env.NOSTROMO_API_TOKEN || '').trim();
+const NOSTROMO_API_TOKENS_JSON = String(process.env.NOSTROMO_API_TOKENS_JSON || '').trim();
+const HOST_POLICY = createHostPolicy(process.env.NOSTROMO_ALLOWED_HOSTS || '');
+const API_TOKEN_CONFIG = parseScopedTokens({ tokensJson: NOSTROMO_API_TOKENS_JSON, legacyStateToken: NOSTROMO_API_TOKEN });
+const CSRF_TOKEN = createCsrfToken();
 const REQUEST_BODY_LIMIT_ACTION_BYTES = Math.max(1024, parsePositiveInt(process.env.REQUEST_BODY_LIMIT_ACTION_BYTES, 64 * 1024));
 const REQUEST_BODY_LIMIT_STATE_BYTES = Math.max(128 * 1024, parsePositiveInt(process.env.REQUEST_BODY_LIMIT_STATE_BYTES, 2 * 1024 * 1024));
 const REQUEST_BODY_LIMIT_RSS_BYTES = Math.max(8 * 1024, parsePositiveInt(process.env.REQUEST_BODY_LIMIT_RSS_BYTES, 256 * 1024));
@@ -234,6 +240,28 @@ const YOUTUBE_SUBSCRIBERS_PATH = path.join(DATA_DIR, 'youtube-subscribers.json')
 const YOUTUBE_SUBSCRIBERS_LOG_PATH = path.join(LOG_DIR, 'youtube-subscribers-poller.log');
 const YOUTUBE_SUBSCRIBERS_HISTORY_LIMIT = 1440;
 const YOUTUBE_POLL_INTERVAL_MS = Math.max(60_000, parsePositiveInt(process.env.YOUTUBE_POLL_INTERVAL_MS, 180_000));
+
+const ROUTE_MANIFEST = buildRouteManifest({
+  limits: {
+    action: REQUEST_BODY_LIMIT_ACTION_BYTES,
+    state: REQUEST_BODY_LIMIT_STATE_BYTES,
+    rss: REQUEST_BODY_LIMIT_RSS_BYTES,
+  },
+  remote: {
+    state: () => STATE_API_ALLOW_REMOTE,
+    relay: () => ROWAN_ALLOW_REMOTE,
+    camera: () => CAMERA_PROXY_ALLOW_REMOTE,
+    rss: () => RSS_FETCH_ALLOW_REMOTE,
+    gas: () => GAS_PROXY_ALLOW_REMOTE,
+    crypto: () => CRYPTO_PROXY_ALLOW_REMOTE,
+    system: () => SYS_MONITOR_ALLOW_REMOTE,
+    speedTest: () => SPEED_TEST_ALLOW_REMOTE,
+    devices: () => HOME_DEVICE_ALLOW_REMOTE,
+    email: () => EMAIL_UNREAD_ALLOW_REMOTE,
+    ebay: () => EBAY_TRAFFIC_ALLOW_REMOTE,
+    social: () => META_GRAPH_ALLOW_REMOTE,
+  },
+});
 
 let facebookFollowersState = {
   schemaVersion: 1,
@@ -4010,9 +4038,6 @@ async function getInstagramContentPayload({ force = false, source = 'auto' } = {
 
 async function handleApiInstagramContent(req, res) {
   const pathname = new URL(req.url || '/api/instagram-content', 'http://localhost:' + PORT).pathname;
-  if (!META_GRAPH_ALLOW_REMOTE && !isLocalRequest(req)) {
-    return sendJson(res, 403, { ok: false, error: 'local_only', message: 'Instagram content endpoint is local-only by default. Set META_GRAPH_ALLOW_REMOTE=1 to allow remote requests.' });
-  }
   if (pathname === '/api/instagram-content/refresh') {
     if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/instagram-content/refresh.' });
     let source = 'manual';
@@ -4073,9 +4098,6 @@ async function getFacebookContentPayload({ force = false, source = 'auto' } = {}
 
 async function handleApiFacebookContent(req, res) {
   const pathname = new URL(req.url || '/api/facebook-content', 'http://localhost:' + PORT).pathname;
-  if (!META_GRAPH_ALLOW_REMOTE && !isLocalRequest(req)) {
-    return sendJson(res, 403, { ok: false, error: 'local_only', message: 'Facebook content endpoint is local-only by default. Set META_GRAPH_ALLOW_REMOTE=1 to allow remote requests.' });
-  }
   if (pathname === '/api/facebook-content/refresh') {
     if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/facebook-content/refresh.' });
     let source = 'manual';
@@ -4318,9 +4340,6 @@ async function initFacebookFollowersService(){
 
 async function handleApiFacebookFollowers(req, res) {
   const pathname = new URL(req.url || '/api/facebook-followers', 'http://localhost:' + PORT).pathname;
-  if (!META_GRAPH_ALLOW_REMOTE && !isLocalRequest(req)) {
-    return sendJson(res, 403, { ok: false, error: 'local_only', message: 'Facebook followers endpoint is local-only by default. Set META_GRAPH_ALLOW_REMOTE=1 to allow remote requests.' });
-  }
   if (pathname === '/api/facebook-followers/refresh') {
     if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/facebook-followers/refresh.' });
     let source = 'manual';
@@ -4447,9 +4466,6 @@ async function initFacebookGroupMembersService(){
 
 async function handleApiFacebookGroupMembers(req, res) {
   const pathname = new URL(req.url || '/api/facebook-group-members', 'http://localhost:' + PORT).pathname;
-  if (!META_GRAPH_ALLOW_REMOTE && !isLocalRequest(req)) {
-    return sendJson(res, 403, { ok: false, error: 'local_only', message: 'Facebook group members endpoint is local-only by default. Set META_GRAPH_ALLOW_REMOTE=1 to allow remote requests.' });
-  }
   if (pathname === '/api/facebook-group-members/refresh') {
     if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/facebook-group-members/refresh.' });
     let source = 'manual';
@@ -4820,9 +4836,6 @@ async function initInstagramFollowersService(){
 
 async function handleApiInstagramFollowers(req, res) {
   const pathname = new URL(req.url || '/api/instagram-followers', 'http://localhost:' + PORT).pathname;
-  if (!META_GRAPH_ALLOW_REMOTE && !isLocalRequest(req)) {
-    return sendJson(res, 403, { ok: false, error: 'local_only', message: 'Instagram followers endpoint is local-only by default. Set META_GRAPH_ALLOW_REMOTE=1 to allow remote requests.' });
-  }
   if (pathname === '/api/instagram-followers/refresh') {
     if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/instagram-followers/refresh.' });
     let source = 'manual';
@@ -5035,9 +5048,6 @@ async function initTikTokFollowersService(){
 
 async function handleApiTikTokFollowers(req, res) {
   const pathname = new URL(req.url || '/api/tiktok-followers', 'http://localhost:' + PORT).pathname;
-  if (!META_GRAPH_ALLOW_REMOTE && !isLocalRequest(req)) {
-    return sendJson(res, 403, { ok: false, error: 'local_only', message: 'TikTok followers endpoint is local-only by default. Set META_GRAPH_ALLOW_REMOTE=1 to allow remote requests.' });
-  }
   if (pathname === '/api/tiktok-followers/refresh') {
     if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/tiktok-followers/refresh.' });
     let source = 'manual';
@@ -5221,9 +5231,6 @@ async function initYoutubeSubscribersService(){
 
 async function handleApiYoutubeSubscribers(req, res) {
   const pathname = new URL(req.url || '/api/youtube-subscribers', 'http://localhost:' + PORT).pathname;
-  if (!META_GRAPH_ALLOW_REMOTE && !isLocalRequest(req)) {
-    return sendJson(res, 403, { ok: false, error: 'local_only', message: 'YouTube subscribers endpoint is local-only by default. Set META_GRAPH_ALLOW_REMOTE=1 to allow remote requests.' });
-  }
   if (pathname === '/api/youtube-subscribers/refresh') {
     if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/youtube-subscribers/refresh.' });
     let source = 'manual';
@@ -5382,14 +5389,6 @@ function readTopProcesses() {
 }
 
 async function handleApiSystemResources(req, res) {
-  if (!isLocalRequest(req) && !SYS_MONITOR_ALLOW_REMOTE) {
-    return sendJson(res, 403, {
-      ok: false,
-      error: 'forbidden_remote',
-      message: 'System monitor endpoint only accepts local requests.',
-    });
-  }
-
   const reqUrl = new URL(req.url || '/api/system-resources', `http://localhost:${PORT}`);
   const allowlist = parseAllowlistInput(reqUrl.searchParams.get('allowlist') || '');
   const memTotal = os.totalmem();
@@ -5492,9 +5491,6 @@ function buildPingArgs(host) {
 
 async function handleApiHomeDevicePing(req, res) {
   if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/home-devices/ping.' });
-  if (!isLocalRequest(req) && !HOME_DEVICE_ALLOW_REMOTE) {
-    return sendJson(res, 403, { ok: false, error: 'forbidden_remote', message: 'Home-device endpoint only accepts local requests.' });
-  }
   const bodyRaw = await readBody(req);
   const parsed = parseJsonSafely(bodyRaw || '{}', 'home_device_ping');
   if (!parsed.ok) return sendJson(res, 400, { ok: false, error: parsed.error, message: parsed.message });
@@ -5511,9 +5507,6 @@ async function handleApiHomeDevicePing(req, res) {
 
 async function handleApiHomeDeviceWake(req, res) {
   if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/home-devices/wake.' });
-  if (!isLocalRequest(req) && !HOME_DEVICE_ALLOW_REMOTE) {
-    return sendJson(res, 403, { ok: false, error: 'forbidden_remote', message: 'Home-device endpoint only accepts local requests.' });
-  }
   const bodyRaw = await readBody(req);
   const parsed = parseJsonSafely(bodyRaw || '{}', 'home_device_wake');
   if (!parsed.ok) return sendJson(res, 400, { ok: false, error: parsed.error, message: parsed.message });
@@ -5689,40 +5682,79 @@ function isLocalRequest(req) {
   return isLoopbackAddress(req.socket?.remoteAddress);
 }
 
-function authorizeLocalOrToken(req, res, { allowRemote = false, mutating = false, requireToken = false, routeLabel = 'endpoint' } = {}) {
-  if (isLocalRequest(req)) return true;
+function applySecurityHeaders(res) {
+  if (typeof res?.setHeader !== 'function') return;
+  for (const [name, value] of Object.entries(SECURITY_RESPONSE_HEADERS)) {
+    res.setHeader(name, value);
+  }
+}
 
-  if (!allowRemote) {
-    sendJson(res, 403, {
-      ok: false,
-      error: 'local_only',
-      message: `${routeLabel} only accepts local requests by default.`,
-    });
+function sendSecurityError(res, status, error, message) {
+  return sendJson(res, status, { ok: false, error, message });
+}
+
+function routeRemoteEnabled(route) {
+  try {
+    return route.remoteAllowed && route.remoteEnabled() === true;
+  } catch {
+    return false;
+  }
+}
+
+function authorizeManifestRoute(req, res, route, host, securityContext = {}) {
+  const apiTokenConfig = securityContext.apiTokenConfig || API_TOKEN_CONFIG;
+  const csrfToken = securityContext.csrfToken || CSRF_TOKEN;
+  const remote = !isLocalRequest(req);
+  if (remote) {
+    if (!route.remoteAllowed || !routeRemoteEnabled(route)) {
+      sendSecurityError(res, 403, 'remote_route_disabled', 'This route is not available for remote access.');
+      return false;
+    }
+    if (route.scope !== 'public') {
+      if (apiTokenConfig.configurationError || !apiTokenConfig.tokens.length) {
+        sendSecurityError(res, 403, 'remote_token_not_configured', 'Remote access requires a configured scoped bearer token.');
+        return false;
+      }
+      const authorization = String(req.headers?.authorization || '');
+      if (!authorization) {
+        sendSecurityError(res, 401, 'auth_required', 'Remote access requires a scoped bearer token.');
+        return false;
+      }
+      if (!bearerTokenHasScope(authorization, route.scope, apiTokenConfig.tokens)) {
+        sendSecurityError(res, 403, 'insufficient_scope', 'The bearer token is not authorized for this route.');
+        return false;
+      }
+    }
+  } else if (!route.localAllowed) {
+    sendSecurityError(res, 403, 'local_route_disabled', 'This route is not available for local access.');
     return false;
   }
 
-  if (requireToken && !NOSTROMO_API_TOKEN) {
-    sendJson(res, 403, {
-      ok: false,
-      error: 'remote_token_not_configured',
-      message: `${routeLabel} remote access requires NOSTROMO_API_TOKEN.`,
-    });
+  const contentLength = Number(req.headers?.['content-length']);
+  if (route.bodyLimit > 0 && Number.isFinite(contentLength) && contentLength > route.bodyLimit) {
+    sendPayloadTooLarge(res, createPayloadTooLargeError(route.bodyLimit));
     return false;
   }
 
-  if (requireToken || (mutating && NOSTROMO_API_TOKEN)) {
-    const expected = `Bearer ${NOSTROMO_API_TOKEN}`;
-    if (String(req.headers?.authorization || '') !== expected) {
-      sendJson(res, 401, {
-        ok: false,
-        error: 'auth_required',
-        message: `${routeLabel} requires a bearer token for remote writes.`,
-      });
+  const csrfRequired = route.sideEffect && (!remote || hasBrowserMetadata(req.headers));
+  if (route.id === 'security.bootstrap') {
+    const bootstrapIntent = validateBrowserIntent(req, { host, requireCsrf: false });
+    if (!bootstrapIntent.ok) {
+      sendSecurityError(res, 403, bootstrapIntent.code, 'The bootstrap request must be same-origin.');
+      return false;
+    }
+  } else if (csrfRequired) {
+    const browserIntent = validateBrowserIntent(req, { host, csrfToken, requireCsrf: true });
+    if (!browserIntent.ok) {
+      sendSecurityError(res, 403, browserIntent.code, 'This browser request was not authorized as same-origin.');
       return false;
     }
   }
-
   return true;
+}
+
+function handleApiSecurityBootstrap(req, res) {
+  return sendJson(res, 200, { ok: true, csrfToken: CSRF_TOKEN });
 }
 
 function stateRichnessScore(state) {
@@ -6140,9 +6172,6 @@ async function rebuildDiaryIndex() {
 
 async function handleApiUnreadEmail(req, res) {
   const pathname = new URL(req.url || '/api/email-unread', `http://localhost:${PORT}`).pathname;
-  if (!isLocalRequest(req) && !EMAIL_UNREAD_ALLOW_REMOTE) {
-    return sendJson(res, 403, { ok: false, error: 'local_only', message: 'Unread email endpoint is local-only by default. Set EMAIL_UNREAD_ALLOW_REMOTE=1 to allow remote requests.' });
-  }
 
   if (pathname === '/api/email-unread/delete') {
     if (req.method !== 'POST') {
@@ -6438,13 +6467,6 @@ async function handleApiUnreadEmail(req, res) {
 
 async function handleApiEbayTraffic(req, res) {
   const pathname = new URL(req.url || '/api/ebay-traffic', `http://localhost:${PORT}`).pathname;
-  if (!isLocalRequest(req) && !EBAY_TRAFFIC_ALLOW_REMOTE) {
-    return sendJson(res, 403, {
-      ok: false,
-      error: 'local_only',
-      message: 'eBay traffic endpoint is local-only by default. Set EBAY_TRAFFIC_ALLOW_REMOTE=1 to allow remote requests.',
-    });
-  }
 
   if (pathname === '/api/ebay-traffic/refresh') {
     if (req.method !== 'POST') {
@@ -6527,15 +6549,6 @@ async function handleApiDiaryIndex(req, res) {
 async function handleApiState(req, res) {
   await ensureDataDir();
   const pathname = new URL(req.url || '/api/state', `http://localhost:${PORT}`).pathname;
-  const isMutating = req.method !== 'GET';
-  if (!authorizeLocalOrToken(req, res, {
-    allowRemote: STATE_API_ALLOW_REMOTE,
-    mutating: isMutating,
-    requireToken: true,
-    routeLabel: 'State API',
-  })) {
-    return;
-  }
 
   if (pathname === '/api/state/backups') {
     if (req.method !== 'GET') return sendJson(res, 405, { error: 'method_not_allowed' });
@@ -6670,14 +6683,6 @@ async function handleApiRowanSend(req, res) {
     return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/rowan-send.' });
   }
 
-  if (!ROWAN_ALLOW_REMOTE && !isLocalRequest(req)) {
-    return sendJson(res, 403, {
-      ok: false,
-      error: 'local_only',
-      message: 'Relay endpoint only accepts local requests by default. Set ROWAN_ALLOW_REMOTE=1 to override.',
-    });
-  }
-
   let parsed;
   try {
     const body = await readBody(req, { maxBytes: REQUEST_BODY_LIMIT_ACTION_BYTES });
@@ -6720,14 +6725,6 @@ async function handleApiRowanSend(req, res) {
 async function handleApiCameraSnapshot(req, res) {
   if (req.method !== 'GET') {
     return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/camera-snapshot?url=...' });
-  }
-
-  if (!CAMERA_PROXY_ALLOW_REMOTE && !isLocalRequest(req)) {
-    return sendJson(res, 403, {
-      ok: false,
-      error: 'local_only',
-      message: 'Camera proxy is local-only by default. Set CAMERA_PROXY_ALLOW_REMOTE=1 to allow remote requests.',
-    });
   }
 
   const reqUrl = new URL(req.url || '/api/camera-snapshot', `http://localhost:${PORT}`);
@@ -6993,14 +6990,6 @@ async function handleApiCryptoProxy(req, res) {
     return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/crypto/*.' });
   }
 
-  if (!CRYPTO_PROXY_ALLOW_REMOTE && !isLocalRequest(req)) {
-    return sendJson(res, 403, {
-      ok: false,
-      error: 'local_only',
-      message: 'Crypto proxy endpoint is local-only by default. Set CRYPTO_PROXY_ALLOW_REMOTE=1 to allow remote requests.',
-    });
-  }
-
   const reqUrl = new URL(req.url || '/api/crypto/coins/list', `http://localhost:${PORT}`);
   const route = CRYPTO_PROXY_TARGETS.find((entry) => reqUrl.pathname === entry.prefix);
   if (!route) {
@@ -7165,14 +7154,6 @@ async function handleApiSpeedTest(req, res) {
     return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/speed-test.' });
   }
 
-  if (!SPEED_TEST_ALLOW_REMOTE && !isLocalRequest(req)) {
-    return sendJson(res, 403, {
-      ok: false,
-      error: 'local_only',
-      message: 'Speed test endpoint is local-only by default. Set SPEED_TEST_ALLOW_REMOTE=1 to allow remote requests.',
-    });
-  }
-
   try {
     const run = await runBackendSpeedTest();
     if (!run.ok) {
@@ -7268,14 +7249,6 @@ async function handleApiGasPrices(req, res) {
     return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/gas-prices?location=ZIP_OR_CITY_STATE.' });
   }
 
-  if (!GAS_PROXY_ALLOW_REMOTE && !isLocalRequest(req)) {
-    return sendJson(res, 403, {
-      ok: false,
-      error: 'local_only',
-      message: 'Gas proxy endpoint is local-only by default. Set GAS_PROXY_ALLOW_REMOTE=1 to allow remote requests.',
-    });
-  }
-
   const reqUrl = new URL(req.url || '/api/gas-prices', `http://localhost:${PORT}`);
   const location = String(reqUrl.searchParams.get('location') || '').trim();
   if (!location) {
@@ -7320,14 +7293,6 @@ async function handleApiGasPrices(req, res) {
 async function handleApiRssFetch(req, res) {
   if (req.method !== 'POST') {
     return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/rss/fetch.' });
-  }
-
-  if (!RSS_FETCH_ALLOW_REMOTE && !isLocalRequest(req)) {
-    return sendJson(res, 403, {
-      ok: false,
-      error: 'local_only',
-      message: 'RSS fetch endpoint is local-only by default. Set RSS_FETCH_ALLOW_REMOTE=1 to allow remote requests.',
-    });
   }
 
   let parsed;
@@ -7467,29 +7432,51 @@ async function handleStatic(req, res) {
   }
 }
 
+async function dispatchApiRoute(req, res, pathname) {
+  if (pathname.startsWith('/api/state')) return handleApiState(req, res);
+  if (pathname === '/api/rowan-send') return handleApiRowanSend(req, res);
+  if (pathname === '/api/camera-snapshot') return handleApiCameraSnapshot(req, res);
+  if (pathname === '/api/rss/fetch') return handleApiRssFetch(req, res);
+  if (pathname === '/api/gas-prices') return handleApiGasPrices(req, res);
+  if (pathname.startsWith('/api/crypto/')) return handleApiCryptoProxy(req, res);
+  if (pathname === '/api/system-resources') return handleApiSystemResources(req, res);
+  if (pathname === '/api/speed-test') return handleApiSpeedTest(req, res);
+  if (pathname === '/api/home-devices/ping') return handleApiHomeDevicePing(req, res);
+  if (pathname === '/api/home-devices/wake') return handleApiHomeDeviceWake(req, res);
+  if (pathname.startsWith('/api/email-unread')) return handleApiUnreadEmail(req, res);
+  if (pathname.startsWith('/api/ebay-traffic')) return handleApiEbayTraffic(req, res);
+  if (pathname.startsWith('/api/diary-index')) return handleApiDiaryIndex(req, res);
+  if (pathname.startsWith('/api/facebook-followers')) return handleApiFacebookFollowers(req, res);
+  if (pathname.startsWith('/api/facebook-group-members')) return handleApiFacebookGroupMembers(req, res);
+  if (pathname.startsWith('/api/facebook-content')) return handleApiFacebookContent(req, res);
+  if (pathname.startsWith('/api/instagram-content')) return handleApiInstagramContent(req, res);
+  if (pathname.startsWith('/api/instagram-followers')) return handleApiInstagramFollowers(req, res);
+  if (pathname.startsWith('/api/tiktok-followers')) return handleApiTikTokFollowers(req, res);
+  if (pathname.startsWith('/api/youtube-subscribers')) return handleApiYoutubeSubscribers(req, res);
+  return sendJson(res, 404, { ok: false, error: 'not_found' });
+}
+
 const server = http.createServer(async (req, res) => {
+  applySecurityHeaders(res);
   try {
-    if ((req.url || '').startsWith('/api/state')) return handleApiState(req, res);
-    if ((req.url || '').startsWith('/api/rowan-send')) return handleApiRowanSend(req, res);
-    if ((req.url || '').startsWith('/api/camera-snapshot')) return handleApiCameraSnapshot(req, res);
-    if ((req.url || '').startsWith('/api/rss/fetch')) return handleApiRssFetch(req, res);
-    if ((req.url || '').startsWith('/api/gas-prices')) return handleApiGasPrices(req, res);
-    if ((req.url || '').startsWith('/api/crypto/')) return handleApiCryptoProxy(req, res);
-    if ((req.url || '').startsWith('/api/system-resources')) return handleApiSystemResources(req, res);
-    if ((req.url || '').startsWith('/api/speed-test')) return handleApiSpeedTest(req, res);
-    if ((req.url || '').startsWith('/api/home-devices/ping')) return handleApiHomeDevicePing(req, res);
-    if ((req.url || '').startsWith('/api/home-devices/wake')) return handleApiHomeDeviceWake(req, res);
-    if ((req.url || '').startsWith('/api/email-unread')) return handleApiUnreadEmail(req, res);
-    if ((req.url || '').startsWith('/api/ebay-traffic')) return handleApiEbayTraffic(req, res);
-    if ((req.url || '').startsWith('/api/diary-index')) return handleApiDiaryIndex(req, res);
-    if ((req.url || '').startsWith('/api/facebook-followers')) return handleApiFacebookFollowers(req, res);
-    if ((req.url || '').startsWith('/api/facebook-group-members')) return handleApiFacebookGroupMembers(req, res);
-    if ((req.url || '').startsWith('/api/facebook-content')) return handleApiFacebookContent(req, res);
-    if ((req.url || '').startsWith('/api/instagram-content')) return handleApiInstagramContent(req, res);
-    if ((req.url || '').startsWith('/api/instagram-followers')) return handleApiInstagramFollowers(req, res);
-    if ((req.url || '').startsWith('/api/tiktok-followers')) return handleApiTikTokFollowers(req, res);
-    if ((req.url || '').startsWith('/api/youtube-subscribers')) return handleApiYoutubeSubscribers(req, res);
-    return handleStatic(req, res);
+    const hostResult = validateHostHeader(req.headers?.host, HOST_POLICY);
+    if (!hostResult.ok) return sendSecurityError(res, 400, hostResult.code, 'The Host header is missing, malformed, or not allowed.');
+
+    const requestUrl = new URL(req.url || '/', `http://${req.headers.host}`);
+    const pathname = requestUrl.pathname;
+    if (!pathname.startsWith('/api/')) return handleStatic(req, res);
+
+    const resolved = resolveRoute(ROUTE_MANIFEST, pathname, req.method || 'GET');
+    if (!resolved.route) {
+      if (resolved.methods.length) {
+        res.writeHead(405, { Allow: resolved.methods.join(', '), 'Cache-Control': 'no-store' });
+        return res.end();
+      }
+      return sendJson(res, 404, { ok: false, error: 'not_found' });
+    }
+    if (!authorizeManifestRoute(req, res, resolved.route, hostResult.host)) return;
+    if (resolved.route.id === 'security.bootstrap') return handleApiSecurityBootstrap(req, res);
+    return dispatchApiRoute(req, res, pathname);
   } catch (err) {
     if (res.writableEnded) return;
     if (isPayloadTooLargeError(err)) return sendPayloadTooLarge(res, err);
@@ -7547,6 +7534,7 @@ module.exports = {
   server,
   HOST,
   PUBLIC_ROOT,
+  ROUTE_MANIFEST,
   DATA_DIR,
   LOG_DIR,
   STATE_PATH,
@@ -7557,7 +7545,7 @@ module.exports = {
   resolveStaticFile,
   readBody,
   isPayloadTooLargeError,
-  authorizeLocalOrToken,
+  authorizeManifestRoute,
   buildPingArgs,
   classifyFacebookFollowerStaleLevel,
   calculateFollowerRollingDelta,

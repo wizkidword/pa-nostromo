@@ -24,9 +24,15 @@ const port = await listenRandom();
 
 try {
   const body = JSON.stringify({ text: 'x'.repeat(3000) });
+  const bootstrap = await fetch(`http://127.0.0.1:${port}/api/security/bootstrap`);
+  assert.equal(bootstrap.status, 200);
+  const { csrfToken } = await bootstrap.json();
   const res = await fetch(`http://127.0.0.1:${port}/api/rowan-send`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-PA-Nostromo-CSRF': csrfToken,
+    },
     body,
   });
   assert.equal(res.status, 413);
