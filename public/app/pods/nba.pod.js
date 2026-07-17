@@ -4,59 +4,35 @@
   const debug = root.debug;
   if (!registry || typeof registry.register !== 'function') return;
 
-  let refreshTimer = null;
-  const NBA_REFRESH_MS = 60 * 1000;
-
-  function invokeRender(renderLegacy, podId, reason){
+  async function invokeRender(renderLegacy, podId, reason){
     if (typeof renderLegacy !== 'function') return;
     try {
       const out = renderLegacy();
-      if (out && typeof out.then === 'function') out.catch(() => {});
+      if (out && typeof out.then === 'function') await out;
       debug?.bumpRefresh?.(podId, reason);
-    } catch {}
-  }
-
-  function clearRefreshTimer(){
-    if (refreshTimer) {
-      clearInterval(refreshTimer);
-      refreshTimer = null;
-      debug?.setRefresh?.('nba-scores', 'intervalMs', 0);
+      return out;
+    } catch {
+      debug?.bumpRefresh?.(podId, 'refresh_failed');
+      throw new Error(`NBA Scores pod ${reason} failed.`);
     }
-  }
-
-  function scheduleRefresh(ctx = {}){
-    clearRefreshTimer();
-    debug?.setRefresh?.('nba-scores', 'intervalMs', NBA_REFRESH_MS);
-    refreshTimer = setInterval(() => {
-      const refreshCtx = {
-        ...ctx,
-        trigger: 'auto_refresh',
-      };
-      const renderLegacy = typeof refreshCtx.legacyRender === 'function' ? refreshCtx.legacyRender : global.renderNbaScores;
-      invokeRender(renderLegacy, 'nba-scores', 'auto_refresh_tick');
-    }, NBA_REFRESH_MS);
   }
 
   registry.register({
     id: 'nba-scores',
     title: 'NBA Scores',
-    version: '2.0.0',
-    description: 'NBA Scores 2.0 adapter with lifecycle-safe 1-minute auto-refresh for favorites-first scoreboard views.',
+    version: '2.1.0',
+    description: 'NBA Scores pod with shared-scheduler refresh cadence for favorites-first scoreboard views.',
     render(ctx = {}){
       const renderLegacy = typeof ctx.legacyRender === 'function' ? ctx.legacyRender : global.renderNbaScores;
-      invokeRender(renderLegacy, 'nba-scores', 'render_call');
+      return invokeRender(renderLegacy, 'nba-scores', 'render_call');
     },
     lifecycle: {
-      init(ctx = {}){
-        scheduleRefresh(ctx);
-      },
+      init(){},
       refresh(ctx = {}){
         const renderLegacy = typeof ctx.legacyRender === 'function' ? ctx.legacyRender : global.renderNbaScores;
-        invokeRender(renderLegacy, 'nba-scores', ctx.trigger === 'auto_refresh' ? 'auto_refresh_dispatch' : 'refresh_call');
+        return invokeRender(renderLegacy, 'nba-scores', ctx.trigger === 'scheduled' ? 'scheduler_refresh' : 'refresh_call');
       },
-      destroy(){
-        clearRefreshTimer();
-      },
+      destroy(){},
       mount(){},
       unmount(){},
     },

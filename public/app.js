@@ -415,8 +415,6 @@ const pollingFailureState = {
   'system-resource-monitor': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
   'speed-test': { count: 0, backoffUntil: 0, lastLogAt: 0, lastReason: '' },
 };
-let systemMonitorTimer = null;
-let speedTestAutoTimer = null;
 let speedTestInFlight = false;
 let systemMonitorLastPayload = null;
 let systemMonitorLastUpdatedAt = '';
@@ -580,6 +578,11 @@ const dashboardActionStore = actionStoreFeature.createActionStore({
   getState: () => state,
   now,
 });
+const dashboardScheduler = window.MissionControlModules.scheduler.createScheduler({
+  isDocumentVisible: () => !document.hidden,
+  isOnline: () => navigator.onLine !== false,
+});
+const SCHEDULED_POD_IDS = new Set(['date-time', 'weather', 'nba-scores', 'crypto-tracker', 'rss-feed', 'unread-email', MERGED_SOCIAL_FOLLOWERS_POD_ID, 'ebay-traffic', 'system-resource-monitor', 'speed-test']);
 
 function renderPersistenceStatus(status = {}){
   const element = document.getElementById('persistenceStatus');
@@ -733,7 +736,6 @@ const shortcutsController = shortcutsFeature.createShortcutsController({
   alert: window.alert.bind(window),
 });
 
-let cameraSnapshotTimer = null;
 let cameraSnapshotBust = 0;
 let cameraLocalStream = null;
 let cameraDeviceList = [];
@@ -1157,7 +1159,10 @@ async function hydrateStateFromSharedApi(){
     if (!remote || typeof remote !== 'object') return false;
     const applied = applyIncomingState(remote, { render: false });
     return !!applied;
-  } catch {
+  } catch (error) {
+    dashboardActionStore.markPersistence(navigator.onLine === false ? 'offline' : 'failed', {
+      error: navigator.onLine === false ? '' : String(error?.message || error),
+    });
     return false;
   }
 }
@@ -3687,7 +3692,7 @@ function renderSocialFollowersPod(options = {}){
       fetchTikTokFollowers(options),
     ];
 
-  Promise.allSettled(loaders).then(() => {
+  return Promise.allSettled(loaders).then(() => {
     const facebook = state.facebookFollowers || {};
     const community = state.facebookGroupMembers || {};
     const instagram = state.instagramFollowers || {};
@@ -7802,10 +7807,50 @@ function cameraSnapshotUrl(url){
 }
 
 function stopCameraSnapshotTimer(){
-  if (cameraSnapshotTimer) {
-    clearInterval(cameraSnapshotTimer);
-    cameraSnapshotTimer = null;
-  }
+  dashboardScheduler.stop('camera-snapshot');
+}
+
+function refreshCameraSnapshot({ signal } = {}){
+  const image = getCameraFeedEls().snapshotImg;
+  const sourceUrl = String(state.cameraFeed.sourceUrl || '').trim();
+  if (!image || !sourceUrl || !state.cameraFeed.active || state.cameraFeed.mode !== 'snapshot') return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let settled = false;
+    const complete = (ok) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener?.('abort', onAbort);
+      resolve(ok);
+    };
+    const onAbort = () => complete(false);
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+    if (signal?.aborted) {
+      complete(false);
+      return;
+    }
+    image.onload = () => {
+      state.cameraFeed.status = 'live';
+      state.cameraFeed.lastError = '';
+      setCameraFeedStatus(`Live (snapshot refresh every ${state.cameraFeed.refreshIntervalSec}s${state.cameraFeed.useProxy ? ' via local proxy' : ''}).`);
+      save();
+      complete(true);
+    };
+    image.onerror = () => {
+      state.cameraFeed.status = 'error';
+      state.cameraFeed.lastError = state.cameraFeed.useProxy
+        ? 'Snapshot fetch failed via local proxy (check allowlist + camera URL).'
+        : 'Snapshot fetch failed (try enabling local proxy or switch source/mode).';
+      setCameraFeedStatus(state.cameraFeed.lastError);
+      save();
+      complete(false);
+    };
+    if (!setSafeMediaSource(image, cameraSnapshotUrl(sourceUrl))) {
+      state.cameraFeed.status = 'error';
+      state.cameraFeed.lastError = 'Snapshot source URL is not allowed.';
+      setCameraFeedStatus(state.cameraFeed.lastError);
+      complete(false);
+    }
+  });
 }
 
 function stopLocalCameraStream(){
@@ -7897,34 +7942,8 @@ function startSnapshotMode(){
   save();
   renderCameraFeedPod();
 
-  const refreshMs = Math.max(1000, Number(state.cameraFeed.refreshIntervalSec || 5) * 1000);
-
-  const tick = () => {
-    const img = getCameraFeedEls().snapshotImg;
-    if (!img || !state.cameraFeed.active || state.cameraFeed.mode !== 'snapshot') return;
-    img.onload = () => {
-      state.cameraFeed.status = 'live';
-      state.cameraFeed.lastError = '';
-      setCameraFeedStatus(`Live (snapshot refresh every ${state.cameraFeed.refreshIntervalSec}s${state.cameraFeed.useProxy ? ' via local proxy' : ''}).`);
-      save();
-    };
-    img.onerror = () => {
-      state.cameraFeed.status = 'error';
-      state.cameraFeed.lastError = state.cameraFeed.useProxy
-        ? 'Snapshot fetch failed via local proxy (check allowlist + camera URL).'
-        : 'Snapshot fetch failed (try enabling local proxy or switch source/mode).';
-      setCameraFeedStatus(state.cameraFeed.lastError);
-      save();
-    };
-    if (!setSafeMediaSource(img, cameraSnapshotUrl(sourceUrl))) {
-      state.cameraFeed.status = 'error';
-      state.cameraFeed.lastError = 'Snapshot source URL is not allowed.';
-      setCameraFeedStatus(state.cameraFeed.lastError);
-    }
-  };
-
-  tick();
-  cameraSnapshotTimer = setInterval(tick, refreshMs);
+  dashboardScheduler.start('camera-snapshot');
+  void dashboardScheduler.refresh('camera-snapshot', { reason: 'camera_started' }).catch(() => {});
 }
 
 function startStreamMode(){
@@ -9868,7 +9887,7 @@ function applySystemMonitorAllowlistPreset(preset){
   if (!next.length) return;
   state.systemMonitor.allowlist = next;
   save(`system_monitor_allowlist_preset_${preset}`);
-  fetchSystemMonitorSnapshot();
+  void refreshScheduledPod('system-resource-monitor');
 }
 
 function renderProcessList(items = [], mode = 'cpu'){
@@ -9899,10 +9918,7 @@ function renderProcessList(items = [], mode = 'cpu'){
 }
 
 function stopSystemMonitorPolling(){
-  if (systemMonitorTimer) {
-    clearInterval(systemMonitorTimer);
-    systemMonitorTimer = null;
-  }
+  dashboardScheduler.stop('system-resource-monitor');
 }
 
 async function fetchSystemMonitorSnapshot(){
@@ -9935,12 +9951,7 @@ async function fetchSystemMonitorSnapshot(){
 }
 
 function startSystemMonitorPolling(){
-  stopSystemMonitorPolling();
-  systemMonitorTimer = setInterval(() => {
-    const backoff = pollingBackoffState('system-resource-monitor').backoffUntil - Date.now();
-    if (backoff > 0) return;
-    fetchSystemMonitorSnapshot();
-  }, 3000);
+  dashboardScheduler.start('system-resource-monitor');
 }
 
 function renderSystemResourceMonitorPod(){
@@ -10088,13 +10099,13 @@ function renderSystemResourceMonitorPod(){
     save('system_monitor_toggle_settings');
     renderSystemResourceMonitorPod();
   });
-  document.getElementById('sysMonRefreshBtn')?.addEventListener('click', () => fetchSystemMonitorSnapshot());
+  document.getElementById('sysMonRefreshBtn')?.addEventListener('click', () => refreshScheduledPod('system-resource-monitor'));
   document.getElementById('sysMonSaveAllowlistBtn')?.addEventListener('click', () => {
     const raw = String(document.getElementById('sysMonAllowlistInput')?.value || '');
     const next = [...new Set(raw.split(',').map((v) => v.trim().toLowerCase()).filter(Boolean))].slice(0, 30);
     state.systemMonitor.allowlist = next.length ? next : ['node', 'chrome', 'openclaw', 'code', 'python'];
     save('system_monitor_allowlist_saved');
-    fetchSystemMonitorSnapshot();
+    void refreshScheduledPod('system-resource-monitor');
   });
   el.querySelectorAll('[data-sysmon-preset]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -10134,23 +10145,11 @@ async function estimateBrowserSpeedFallback(note = ''){
 }
 
 function stopSpeedTestAutoRun(){
-  if (speedTestAutoTimer) {
-    clearInterval(speedTestAutoTimer);
-    speedTestAutoTimer = null;
-  }
+  dashboardScheduler.stop('speed-test');
 }
 
 function startSpeedTestAutoRun(){
-  stopSpeedTestAutoRun();
-  const intervalMin = Number(state.speedTest?.autoIntervalMin || 0);
-  if (!intervalMin) return;
-  if (state.layout?.visibility?.['speed-test'] === false) return;
-  if (document.hidden) return;
-  speedTestAutoTimer = setInterval(() => {
-    if (document.hidden) return;
-    if (state.layout?.visibility?.['speed-test'] === false) return;
-    runSpeedTest({ reason: 'auto_interval' });
-  }, intervalMin * 60 * 1000);
+  dashboardScheduler.start('speed-test');
 }
 
 async function runSpeedTest({ reason = 'manual' } = {}){
@@ -10271,7 +10270,7 @@ function renderSpeedTestPod(){
       : `Last run: ${latestText}${sourceText}`;
   }
 
-  document.getElementById('speedTestRunBtn')?.addEventListener('click', () => runSpeedTest({ reason: 'manual' }));
+  document.getElementById('speedTestRunBtn')?.addEventListener('click', () => refreshScheduledPod('speed-test'));
   document.getElementById('speedTestIntervalSelect')?.addEventListener('change', (e) => {
     state.speedTest.autoIntervalMin = speedTestStateFeature.normalizeInterval(e.target.value);
     save('speed_test_interval_changed');
@@ -10339,25 +10338,31 @@ function renderPodWithFallback(podId, legacyRender, extraCtx = {}){
 
 function renderWeatherPod(options = {}){
   if (options.manual) debugCounters?.bumpRefresh?.('weather', 'manual_refresh');
-  renderPodWithFallback('weather', () => renderWeather(options));
+  return renderPodWithFallback('weather', () => renderWeather(options), { trigger: options.manual ? 'manual' : 'scheduled' });
 }
 
 function renderNbaPod(options = {}){
   if (options.manual) debugCounters?.bumpRefresh?.('nba-scores', 'manual_refresh');
-  renderPodWithFallback('nba-scores', () => renderNbaScores(options));
+  return renderPodWithFallback('nba-scores', () => renderNbaScores(options), { trigger: options.manual ? 'manual' : 'scheduled' });
 }
 
 function renderCryptoPod(options = {}){
   if (options.manual) debugCounters?.bumpRefresh?.('crypto-tracker', 'manual_refresh');
-  renderPodWithFallback('crypto-tracker', () => renderCrypto(options));
+  return renderPodWithFallback('crypto-tracker', () => renderCrypto(options), { trigger: options.manual ? 'manual' : 'scheduled' });
 }
 
 function renderRssPod(options = {}){
   if (options.manual) debugCounters?.bumpRefresh?.('rss-feed', 'manual_refresh');
-  renderPodWithFallback('rss-feed', () => renderRss(options));
+  return renderPodWithFallback('rss-feed', () => renderRss(options), { trigger: options.manual ? 'manual' : 'scheduled' });
+}
+
+function renderUnreadEmailWithLifecycle(options = {}){
+  if (options.manual) debugCounters?.bumpRefresh?.('unread-email', 'manual_refresh');
+  return renderPodWithFallback('unread-email', () => renderUnreadEmailPod(options), { trigger: options.manual ? 'manual' : 'scheduled' });
 }
 
 function getUtilityPodLegacyRenderer(podId){
+  if (podId === 'date-time') return () => renderDateTime();
   if (podId === 'weather') return () => renderWeather();
   if (podId === 'gas-prices') return () => renderGasPricesView();
   if (podId === 'nba-scores') return () => renderNbaScores();
@@ -10379,16 +10384,20 @@ function getUtilityPodLegacyRenderer(podId){
 }
 
 function syncUtilityPodLifecycle(){
-  const managed = ['weather', 'gas-prices', 'nba-scores', 'crypto-tracker', MERGED_SOCIAL_FOLLOWERS_POD_ID, 'facebook-followers', 'instagram-followers', 'tiktok-followers', 'youtube-subscribers', 'ebay-traffic', 'speed-test', 'rss-feed', 'unread-email', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'];
+  const managed = ['date-time', 'weather', 'gas-prices', 'nba-scores', 'crypto-tracker', MERGED_SOCIAL_FOLLOWERS_POD_ID, 'facebook-followers', 'instagram-followers', 'tiktok-followers', 'youtube-subscribers', 'ebay-traffic', 'speed-test', 'rss-feed', 'unread-email', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'];
   managed.forEach((podId) => {
     const visible = state.layout?.visibility?.[podId] !== false;
     const legacyRender = getUtilityPodLegacyRenderer(podId);
+    if (SCHEDULED_POD_IDS.has(podId)) dashboardScheduler.setEnabled(podId, visible);
+    const lifecycleContext = podId === 'date-time'
+      ? { visible, trigger: 'layout_sync', localTimeZone: LOCAL_TZ, updateAlarmStatus }
+      : { visible, trigger: 'layout_sync' };
     if (visible) {
-      runPodLifecycleAction('mount', podId, legacyRender, { visible: true, trigger: 'layout_sync' });
+      runPodLifecycleAction('mount', podId, legacyRender, lifecycleContext);
       if (podId === 'system-resource-monitor') startSystemMonitorPolling();
       if (podId === 'speed-test') startSpeedTestAutoRun();
     } else {
-      runPodLifecycleAction('destroy', podId, legacyRender, { visible: false, trigger: 'layout_sync' });
+      runPodLifecycleAction('destroy', podId, legacyRender, { ...lifecycleContext, visible: false });
       if (podId === 'system-resource-monitor') stopSystemMonitorPolling();
       if (podId === 'speed-test') stopSpeedTestAutoRun();
     }
@@ -10746,8 +10755,7 @@ function renderAll(){
   renderEverydayCalculatorPod();
   renderSystemResourceMonitorPod();
   renderSpeedTestPod();
-  renderEbayTrafficPod();
-  renderUnreadEmailPod();
+  renderUnreadEmailWithLifecycle();
   renderCalendarRemindersPanel();
   renderTodayReminders();
   renderSettings();
@@ -11670,23 +11678,96 @@ if (!state.changelog.some((c) => c.message === socialFollowersMergePatch)) {
   state.changelog.unshift({ id: id(), ts: now(), message: socialFollowersMergePatch });
 }
 
+function isScheduledPodVisible(podId){
+  return state.layout?.visibility?.[podId] !== false;
+}
+
+function registerDashboardSchedulerJobs(){
+  const jobs = [
+    ['date-time', {
+      intervalMs: 1000,
+      enabled: () => isScheduledPodVisible('date-time'),
+      run: () => renderPodWithFallback('date-time', renderDateTime, { localTimeZone: LOCAL_TZ, updateAlarmStatus, trigger: 'scheduled' }),
+    }],
+    ['weather', {
+      intervalMs: () => Math.max(1, Number(state.settings?.weatherIntervalMin || 15)) * 60 * 1000,
+      enabled: () => isScheduledPodVisible('date-time'),
+      run: ({ manual }) => renderWeatherPod({ manual }),
+    }],
+    ['nba-scores', {
+      intervalMs: 60 * 1000,
+      enabled: () => isScheduledPodVisible('nba-scores'),
+      run: ({ manual }) => renderNbaPod({ manual }),
+    }],
+    ['crypto-tracker', {
+      intervalMs: 15 * 60 * 1000,
+      enabled: () => isScheduledPodVisible('crypto-tracker'),
+      run: ({ manual }) => renderCryptoPod({ manual }),
+    }],
+    ['rss-feed', {
+      intervalMs: () => Math.max(5, Number(state.rss?.refreshIntervalMin || RSS_DEFAULT_REFRESH_MIN)) * 60 * 1000,
+      enabled: () => isScheduledPodVisible('rss-feed'),
+      run: ({ manual }) => renderRssPod({ manual }),
+    }],
+    ['unread-email', {
+      intervalMs: 3 * 60 * 1000,
+      enabled: () => isScheduledPodVisible('unread-email'),
+      run: ({ manual }) => renderUnreadEmailWithLifecycle({ manual }),
+    }],
+    [MERGED_SOCIAL_FOLLOWERS_POD_ID, {
+      intervalMs: 60 * 1000,
+      enabled: () => isScheduledPodVisible(MERGED_SOCIAL_FOLLOWERS_POD_ID),
+      run: ({ manual }) => renderSocialFollowersPod({ manual }),
+    }],
+    ['ebay-traffic', {
+      intervalMs: EBAY_TRAFFIC_POLL_INTERVAL_MS,
+      enabled: () => isScheduledPodVisible('ebay-traffic'),
+      run: ({ manual }) => renderEbayTrafficPod({ manual }),
+    }],
+    ['system-resource-monitor', {
+      intervalMs: 3 * 1000,
+      enabled: () => isScheduledPodVisible('system-resource-monitor'),
+      run: () => fetchSystemMonitorSnapshot(),
+    }],
+    ['speed-test', {
+      intervalMs: () => Math.max(0, Number(state.speedTest?.autoIntervalMin || 0)) * 60 * 1000,
+      enabled: () => isScheduledPodVisible('speed-test') && Number(state.speedTest?.autoIntervalMin || 0) > 0,
+      run: ({ manual }) => runSpeedTest({ reason: manual ? 'manual' : 'auto_interval' }),
+    }],
+    ['camera-snapshot', {
+      intervalMs: () => Math.max(1000, Number(state.cameraFeed?.refreshIntervalSec || 5) * 1000),
+      enabled: () => isScheduledPodVisible('camera-feed') && state.cameraFeed?.active === true && state.cameraFeed?.mode === 'snapshot',
+      run: ({ signal }) => refreshCameraSnapshot({ signal }),
+    }],
+  ];
+  for (const [idValue, definition] of jobs) {
+    if (!dashboardScheduler.get(idValue)) dashboardScheduler.register(idValue, definition);
+    dashboardScheduler.start(idValue);
+  }
+}
+
+function refreshScheduledPod(podId){
+  return dashboardScheduler.refresh(podId, { manual: true, reason: 'manual_refresh' }).catch(() => null);
+}
+
+function syncDashboardScheduling(){
+  for (const job of dashboardScheduler.list()) {
+    if (document.hidden || navigator.onLine === false || state.layout?.visibility?.[job.id] === false) dashboardScheduler.stop(job.id);
+    else dashboardScheduler.start(job.id);
+  }
+}
+
 save('startup_patch_seed', { pushShared: false });
 loadApplicationVersion();
 setupSettingsSectionNav();
 setupSettingsPaneDragScroll();
+registerDashboardSchedulerJobs();
 renderAll();
 startSystemMonitorPolling();
 startSpeedTestAutoRun();
-fetchSystemMonitorSnapshot();
-setInterval(() => renderPodWithFallback('date-time', renderDateTime, { localTimeZone: LOCAL_TZ, updateAlarmStatus }), 1000);
-setInterval(() => renderSocialFollowersPod(), 60 * 1000);
-setInterval(() => {
-  if (document.hidden) return;
-  if (state.layout?.visibility?.['ebay-traffic'] === false) return;
-  renderEbayTrafficPod();
-}, EBAY_TRAFFIC_POLL_INTERVAL_MS);
-document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => renderWeatherPod({ manual: true }));
-document.getElementById('nbaRefreshBtn')?.addEventListener('click', () => renderNbaPod({ manual: true }));
+void refreshScheduledPod('system-resource-monitor');
+document.getElementById('weatherRefreshBtn')?.addEventListener('click', () => refreshScheduledPod('weather'));
+document.getElementById('nbaRefreshBtn')?.addEventListener('click', () => refreshScheduledPod('nba-scores'));
 document.getElementById('nbaScoresWidget')?.addEventListener('click', (e) => {
   const viewBtn = getEventClosestTarget(e, '[data-nba-view]');
   if (viewBtn) {
@@ -11731,11 +11812,11 @@ document.getElementById('cryptoRefreshBtn')?.addEventListener('click', () => {
     return;
   }
   startCryptoRefreshCooldown();
-  renderCryptoPod({ manual: true });
+  refreshScheduledPod('crypto-tracker');
 });
-document.getElementById('rssRefreshBtn')?.addEventListener('click', () => renderRssPod({ manual: true }));
-document.getElementById('unreadEmailRefreshBtn')?.addEventListener('click', () => renderUnreadEmailPod({ manual: true }));
-document.getElementById('socialFollowersRefreshBtn')?.addEventListener('click', () => renderSocialFollowersPod({ manual: true }));
+document.getElementById('rssRefreshBtn')?.addEventListener('click', () => refreshScheduledPod('rss-feed'));
+document.getElementById('unreadEmailRefreshBtn')?.addEventListener('click', () => refreshScheduledPod('unread-email'));
+document.getElementById('socialFollowersRefreshBtn')?.addEventListener('click', () => refreshScheduledPod(MERGED_SOCIAL_FOLLOWERS_POD_ID));
 document.getElementById('socialFollowersWidget')?.addEventListener('click', (event) => {
   const analyticsBtn = getEventClosestTarget(event, '[data-social-analytics-open]');
   if (!analyticsBtn) return;
@@ -11751,7 +11832,7 @@ document.getElementById('socialAnalyticsDialogBody')?.addEventListener('click', 
 });
 document.getElementById('socialAnalyticsDialogCloseBtn')?.addEventListener('click', () => document.getElementById('socialAnalyticsDialog')?.close());
 document.getElementById('socialAnalyticsRefreshBtn')?.addEventListener('click', () => refreshSocialAnalyticsDialog());
-document.getElementById('ebayTrafficRefreshBtn')?.addEventListener('click', () => renderEbayTrafficPod({ manual: true }));
+document.getElementById('ebayTrafficRefreshBtn')?.addEventListener('click', () => refreshScheduledPod('ebay-traffic'));
 document.getElementById('gasFetchBtn')?.addEventListener('click', async () => {
   const input = String(document.getElementById('gasLocationInput')?.value || '').trim();
   await fetchGasPricesAuto(input);
@@ -11802,17 +11883,23 @@ window.addEventListener('storage', (event) => {
 });
 
 window.addEventListener('beforeunload', () => {
+  dashboardScheduler.destroy();
   stopSystemMonitorPolling();
   stopSpeedTestAutoRun();
 });
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
+    syncDashboardScheduling();
     stopSpeedTestAutoRun();
   } else {
+    syncDashboardScheduling();
     startSpeedTestAutoRun();
   }
 });
+
+window.addEventListener('online', syncDashboardScheduling);
+window.addEventListener('offline', syncDashboardScheduling);
 
 try {
   if (typeof BroadcastChannel !== 'undefined') {

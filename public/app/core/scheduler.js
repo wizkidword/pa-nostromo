@@ -42,7 +42,10 @@
     }
 
     function intervalFor(runtime) {
-      const base = Math.max(0, Number(runtime.definition.intervalMs || 0));
+      const configuredInterval = typeof runtime.definition.intervalMs === 'function'
+        ? runtime.definition.intervalMs()
+        : runtime.definition.intervalMs;
+      const base = Math.max(0, Number(configuredInterval || 0));
       if (!base) return 0;
       const multiplier = runtime.failures ? Math.min(16, 2 ** runtime.failures) : 1;
       const backoff = Math.min(Number(runtime.definition.maxBackoffMs || 15 * 60 * 1000), base * multiplier);
@@ -53,7 +56,7 @@
 
     function schedule(runtime, delayMs = intervalFor(runtime)) {
       clearScheduled(runtime);
-      if (!runtime.enabled || !delayMs) return;
+      if (!runtime.enabled || runtime.definition.enabled?.() === false || !delayMs) return;
       runtime.nextRefreshAt = now() + delayMs;
       runtime.timer = setTimer(() => {
         runtime.timer = null;

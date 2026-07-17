@@ -4,67 +4,39 @@
   const debug = root.debug;
   if (!registry || typeof registry.register !== 'function') return;
 
-  let refreshTimer = null;
-
-  function invokeRender(renderLegacy, podId, reason){
+  async function invokeRender(renderLegacy, podId, reason){
     if (typeof renderLegacy !== 'function') return;
     try {
       const out = renderLegacy();
-      if (out && typeof out.then === 'function') out.catch(() => {});
+      if (out && typeof out.then === 'function') await out;
       debug?.bumpRefresh?.(podId, reason);
-    } catch {}
-  }
-
-  function clearRefreshTimer(){
-    if (refreshTimer) {
-      clearInterval(refreshTimer);
-      refreshTimer = null;
-      debug?.setRefresh?.('rss-feed', 'intervalMs', 0);
+      return out;
+    } catch {
+      debug?.bumpRefresh?.(podId, 'refresh_failed');
+      throw new Error(`RSS Feed pod ${reason} failed.`);
     }
-  }
-
-  function scheduleRefresh(ctx = {}){
-    clearRefreshTimer();
-    const minsRaw = Number(ctx.state?.rss?.refreshIntervalMin || 60);
-    const mins = Number.isFinite(minsRaw) ? Math.max(5, minsRaw) : 60;
-    const intervalMs = mins * 60 * 1000;
-    debug?.setRefresh?.('rss-feed', 'intervalMs', intervalMs);
-    refreshTimer = setInterval(() => {
-      const refreshCtx = {
-        ...ctx,
-        trigger: 'auto_refresh',
-      };
-      const renderLegacy = typeof refreshCtx.legacyRender === 'function'
-        ? refreshCtx.legacyRender
-        : (options) => global.renderRss?.(options);
-      invokeRender(renderLegacy, 'rss-feed', 'auto_refresh_tick');
-    }, intervalMs);
   }
 
   registry.register({
     id: 'rss-feed',
     title: 'RSS Feed',
-    version: '2.0.0',
-    description: 'RSS Feed 2.0 with an editorial card layout, overview stats, and the same lifecycle-safe auto-refresh handling.',
+    version: '2.1.0',
+    description: 'RSS Feed with feature-owned state, editorial cards, and shared-scheduler refresh cadence.',
     render(ctx = {}){
       const renderLegacy = typeof ctx.legacyRender === 'function'
         ? ctx.legacyRender
         : (options) => global.renderRss?.(options);
-      invokeRender(renderLegacy, 'rss-feed', 'render_call');
+      return invokeRender(renderLegacy, 'rss-feed', 'render_call');
     },
     lifecycle: {
-      init(ctx = {}){
-        scheduleRefresh(ctx);
-      },
+      init(){},
       refresh(ctx = {}){
         const renderLegacy = typeof ctx.legacyRender === 'function'
           ? ctx.legacyRender
           : (options) => global.renderRss?.(options);
-        invokeRender(renderLegacy, 'rss-feed', ctx.trigger === 'auto_refresh' ? 'auto_refresh_dispatch' : 'refresh_call');
+        return invokeRender(renderLegacy, 'rss-feed', ctx.trigger === 'scheduled' ? 'scheduler_refresh' : 'refresh_call');
       },
-      destroy(){
-        clearRefreshTimer();
-      },
+      destroy(){},
       mount(){},
       unmount(){},
     },

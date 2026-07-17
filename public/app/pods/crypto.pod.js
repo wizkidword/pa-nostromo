@@ -4,65 +4,39 @@
   const debug = root.debug;
   if (!registry || typeof registry.register !== 'function') return;
 
-  let refreshTimer = null;
-  const CRYPTO_REFRESH_MS = 15 * 60 * 1000;
-
-  function invokeRender(renderLegacy, podId, reason){
+  async function invokeRender(renderLegacy, podId, reason){
     if (typeof renderLegacy !== 'function') return;
     try {
       const out = renderLegacy();
-      if (out && typeof out.then === 'function') out.catch(() => {});
+      if (out && typeof out.then === 'function') await out;
       debug?.bumpRefresh?.(podId, reason);
-    } catch {}
-  }
-
-  function clearRefreshTimer(){
-    if (refreshTimer) {
-      clearInterval(refreshTimer);
-      refreshTimer = null;
-      debug?.setRefresh?.('crypto-tracker', 'intervalMs', 0);
+      return out;
+    } catch {
+      debug?.bumpRefresh?.(podId, 'refresh_failed');
+      throw new Error(`Crypto Tracker pod ${reason} failed.`);
     }
-  }
-
-  function scheduleRefresh(ctx = {}){
-    clearRefreshTimer();
-    debug?.setRefresh?.('crypto-tracker', 'intervalMs', CRYPTO_REFRESH_MS);
-    refreshTimer = setInterval(() => {
-      const refreshCtx = {
-        ...ctx,
-        trigger: 'auto_refresh',
-      };
-      const renderLegacy = typeof refreshCtx.legacyRender === 'function'
-        ? refreshCtx.legacyRender
-        : (options) => global.renderCrypto?.(options);
-      invokeRender(renderLegacy, 'crypto-tracker', 'auto_refresh_tick');
-    }, CRYPTO_REFRESH_MS);
   }
 
   registry.register({
     id: 'crypto-tracker',
     title: 'Crypto Tracker',
-    version: '2.0.0',
-    description: 'Crypto Tracker 2.0 with richer portfolio snapshot UI, market pulse framing, and lifecycle-safe auto-refresh.',
+    version: '2.1.0',
+    description: 'Crypto Tracker with shared-scheduler refresh cadence and richer portfolio snapshot UI.',
     render(ctx = {}){
       const renderLegacy = typeof ctx.legacyRender === 'function'
         ? ctx.legacyRender
         : (options) => global.renderCrypto?.(options);
-      invokeRender(renderLegacy, 'crypto-tracker', 'render_call');
+      return invokeRender(renderLegacy, 'crypto-tracker', 'render_call');
     },
     lifecycle: {
-      init(ctx = {}){
-        scheduleRefresh(ctx);
-      },
+      init(){},
       refresh(ctx = {}){
         const renderLegacy = typeof ctx.legacyRender === 'function'
           ? ctx.legacyRender
           : (options) => global.renderCrypto?.(options);
-        invokeRender(renderLegacy, 'crypto-tracker', ctx.trigger === 'auto_refresh' ? 'auto_refresh_dispatch' : 'refresh_call');
+        return invokeRender(renderLegacy, 'crypto-tracker', ctx.trigger === 'scheduled' ? 'scheduler_refresh' : 'refresh_call');
       },
-      destroy(){
-        clearRefreshTimer();
-      },
+      destroy(){},
       mount(){},
       unmount(){},
     },

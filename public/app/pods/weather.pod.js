@@ -4,7 +4,6 @@
   const root = global.MissionControlModules = global.MissionControlModules || {};
   const registry = root.podRegistry;
   const debug = root.debug;
-  let refreshTimer = null;
 
   function renderWeatherSnapshot(snapshot, { stale = false, retryInMs = 0, fetchedAt = '' } = {}, ctx = {}) {
     const documentRef = ctx.document || global.document;
@@ -98,54 +97,35 @@
 
   if (!registry || typeof registry.register !== 'function') return;
 
-  function invokeRender(renderLegacy, podId, reason) {
+  async function invokeRender(renderLegacy, podId, reason) {
     if (typeof renderLegacy !== 'function') return;
     try {
       const out = renderLegacy();
-      if (out && typeof out.then === 'function') out.catch(() => {});
+      if (out && typeof out.then === 'function') await out;
       debug?.bumpRefresh?.(podId, reason);
+      return out;
     } catch {
-      // Prevent noisy uncaught errors from pod timers.
+      debug?.bumpRefresh?.(podId, 'refresh_failed');
+      throw new Error(`Weather pod ${reason} failed.`);
     }
-  }
-
-  function clearRefreshTimer() {
-    if (refreshTimer) {
-      clearInterval(refreshTimer);
-      refreshTimer = null;
-      debug?.setRefresh?.('weather', 'intervalMs', 0);
-    }
-  }
-
-  function scheduleRefresh(ctx = {}) {
-    clearRefreshTimer();
-    const minutesRaw = Number(ctx.state?.settings?.weatherIntervalMin || 15);
-    const minutes = Number.isFinite(minutesRaw) ? Math.max(1, minutesRaw) : 15;
-    const intervalMs = minutes * 60 * 1000;
-    debug?.setRefresh?.('weather', 'intervalMs', intervalMs);
-    refreshTimer = setInterval(() => {
-      const refreshCtx = { ...ctx, trigger: 'auto_refresh' };
-      const renderLegacy = typeof refreshCtx.legacyRender === 'function' ? refreshCtx.legacyRender : global.renderWeather;
-      invokeRender(renderLegacy, 'weather', 'auto_refresh_tick');
-    }, intervalMs);
   }
 
   registry.register({
     id: 'weather',
     title: 'Weather',
-    version: '1.2.0',
-    description: 'Weather pod with feature-owned display rendering and lifecycle-safe auto-refresh timer management.',
+    version: '1.3.0',
+    description: 'Weather pod with feature-owned display rendering; the shared scheduler owns refresh cadence.',
     render(ctx = {}) {
       const renderLegacy = typeof ctx.legacyRender === 'function' ? ctx.legacyRender : global.renderWeather;
-      invokeRender(renderLegacy, 'weather', 'render_call');
+      return invokeRender(renderLegacy, 'weather', 'render_call');
     },
     lifecycle: {
-      init(ctx = {}) { scheduleRefresh(ctx); },
+      init() {},
       refresh(ctx = {}) {
         const renderLegacy = typeof ctx.legacyRender === 'function' ? ctx.legacyRender : global.renderWeather;
-        invokeRender(renderLegacy, 'weather', ctx.trigger === 'auto_refresh' ? 'auto_refresh_dispatch' : 'refresh_call');
+        return invokeRender(renderLegacy, 'weather', ctx.trigger === 'scheduled' ? 'scheduler_refresh' : 'refresh_call');
       },
-      destroy() { clearRefreshTimer(); },
+      destroy() {},
       mount() {},
       unmount() {},
     },
