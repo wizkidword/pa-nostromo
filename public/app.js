@@ -128,6 +128,8 @@ const settingsStateFeature = window.MissionControlModules?.settingsState;
 if (!settingsStateFeature) throw new Error('Settings state feature failed to load.');
 const cryptoStateFeature = window.MissionControlModules?.cryptoState;
 if (!cryptoStateFeature) throw new Error('Crypto state feature failed to load.');
+const dateTimePodFeature = window.MissionControlModules?.dateTimePod;
+if (!dateTimePodFeature) throw new Error('Date & Time pod failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = settingsStateFeature.defaults;
@@ -1642,50 +1644,7 @@ function cancelAlarm(){
 }
 
 function renderDateTime(){
-  const el = document.getElementById('dateTimeWidget');
-  if (!el) return;
-  const nowDt = new Date();
-  const hour = nowDt.getHours();
-  const greeting = hour < 5 ? 'Late night' : hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : hour < 21 ? 'Good evening' : 'Night shift';
-  const moodClass = hour < 5 ? 'is-midnight' : hour < 12 ? 'is-morning' : hour < 17 ? 'is-afternoon' : hour < 21 ? 'is-evening' : 'is-night';
-  const timeParts = new Intl.DateTimeFormat('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: true,
-  }).formatToParts(nowDt);
-  const timePart = (type) => timeParts.find((part) => part.type === type)?.value || '';
-  const hourMinute = `${timePart('hour')}:${timePart('minute')}`;
-  const seconds = timePart('second');
-  const meridiem = timePart('dayPeriod');
-  const weekdayLabel = nowDt.toLocaleDateString(undefined, { weekday: 'long' });
-  const fullDateLabel = nowDt.toLocaleDateString(undefined, {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
-  const timeZoneLabel = new Intl.DateTimeFormat('en-US', {
-    timeZone: LOCAL_TZ,
-    timeZoneName: 'short',
-  }).formatToParts(nowDt).find((part) => part.type === 'timeZoneName')?.value || 'Local';
-  el.innerHTML = `
-    <div class="date-time-hero ${moodClass}">
-      <div class="date-time-kicker-row">
-        <span class="date-time-kicker">${greeting}</span>
-        <span class="date-time-chip">${timeZoneLabel}</span>
-      </div>
-      <div class="date-time-clock">
-        <span class="date-time-hour-minute">${hourMinute}</span>
-        <span class="date-time-seconds">:${seconds}</span>
-        <span class="date-time-ampm">${meridiem}</span>
-      </div>
-      <div class="date-time-date-row">
-        <span class="date-time-weekday">${weekdayLabel}</span>
-        <span class="date-time-date">${fullDateLabel}</span>
-      </div>
-    </div>
-  `;
-  updateAlarmStatus();
+  return dateTimePodFeature.renderDateTime({ localTimeZone: LOCAL_TZ, updateAlarmStatus });
 }
 
 function dateKey(d){
@@ -10388,8 +10347,8 @@ function runPodLifecycleAction(action, podId, legacyRender, extraCtx = {}){
   return result;
 }
 
-function renderPodWithFallback(podId, legacyRender){
-  return runPodLifecycleAction('mount', podId, legacyRender);
+function renderPodWithFallback(podId, legacyRender, extraCtx = {}){
+  return runPodLifecycleAction('mount', podId, legacyRender, extraCtx);
 }
 
 function renderWeatherPod(options = {}){
@@ -10795,7 +10754,7 @@ function mountHomeDevicesSettingsEditor(){
 function renderAll(){
   applyTheme();
   applyUtilityLayoutToDom();
-  renderPodWithFallback('date-time', renderDateTime);
+  renderPodWithFallback('date-time', renderDateTime, { localTimeZone: LOCAL_TZ, updateAlarmStatus });
   renderPodWithFallback('calendar', renderCalendar);
   renderGasPricesPod();
   renderEverydayCalculatorPod();
@@ -11711,7 +11670,7 @@ renderAll();
 startSystemMonitorPolling();
 startSpeedTestAutoRun();
 fetchSystemMonitorSnapshot();
-setInterval(renderDateTime, 1000);
+setInterval(() => renderPodWithFallback('date-time', renderDateTime, { localTimeZone: LOCAL_TZ, updateAlarmStatus }), 1000);
 setInterval(() => renderSocialFollowersPod(), 60 * 1000);
 setInterval(() => {
   if (document.hidden) return;
