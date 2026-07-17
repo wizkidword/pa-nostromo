@@ -3107,40 +3107,81 @@ function isInstagramGraphConfigured(){
   return !!(INSTAGRAM_GRAPH_ACCESS_TOKEN && (INSTAGRAM_GRAPH_ACCOUNT_ID || INSTAGRAM_GRAPH_PAGE_ID));
 }
 
-async function fetchMetaGraphJson(endpoint, { timeoutMs = META_GRAPH_TIMEOUT_MS, label = 'meta_graph' } = {}){
+function isRetryableMetaGraphError(error){
+  const status = Number(error?.httpStatus || error?.status || 0);
+  const graphCode = Number(error?.graphErrorCode || error?.details?.code || 0);
+  return error?.code === 'provider_attempt_timeout'
+    || [408, 425, 429, 500, 502, 503, 504].includes(status)
+    || [4, 17, 32, 613].includes(graphCode)
+    || /abort|timeout/i.test(String(error?.message || ''));
+}
+
+function metaGraphRetryDelayMs({ error }){
+  return Math.max(0, Number(error?.retryAfter || 0) * 1000);
+}
+
+async function fetchMetaGraphJsonAttempt(endpoint, { timeoutMs, label, signal } = {}){
+  const res = await coordinatedSafeFetch(endpoint, {
+    method: 'GET',
+    signal,
+    timeoutMs,
+    firstByteTimeoutMs: timeoutMs,
+    maxBytes: 2 * 1024 * 1024,
+    maxRedirects: 1,
+    allowedHosts: ['graph.facebook.com'],
+    headers: { 'Accept': 'application/json' },
+  }, { integration: 'social', key: `social:meta:${new URL(endpoint).pathname}` });
+  const text = await res.text();
+  const parsed = parseJsonSafely(text, label);
+  const body = parsed.ok && parsed.value && typeof parsed.value === 'object' ? parsed.value : {};
+  if (!res.ok) {
+    const detail = String(body?.error?.message || ('HTTP ' + res.status)).trim();
+    const err = new Error(detail || `${label}_http_${res.status}`);
+    err.httpStatus = Number(res.status || 502);
+    err.status = Number(res.status || 502);
+    err.retryAfter = res.headers.get('retry-after') || '';
+    err.responseBody = String(text || '').slice(0, 240);
+    err.graphErrorCode = Number(body?.error?.code || 0);
+    throw err;
+  }
+  if (!parsed.ok || !parsed.value || typeof parsed.value !== 'object') {
+    throw Object.assign(new Error(label + '_invalid_json'), { httpStatus: 502, status: 502 });
+  }
+  if (body?.error?.message) {
+    const err = new Error(String(body.error.message).trim() || `${label}_error`);
+    err.httpStatus = Number(body?.error?.code || 502);
+    err.status = Number(res.status || 502);
+    err.graphErrorCode = Number(body?.error?.code || 0);
+    err.details = body.error;
+    throw err;
+  }
+  return body;
+}
+
+async function fetchMetaGraphJson(endpoint, { timeoutMs = META_GRAPH_TIMEOUT_MS, label = 'meta_graph', signal } = {}){
+  const attemptTimeoutMs = Math.min(
+    META_GRAPH_OPERATION_TIMEOUT_MS,
+    Math.max(1000, Number(timeoutMs) || META_GRAPH_TIMEOUT_MS),
+  );
   try {
-    const res = await coordinatedSafeFetch(endpoint, {
-      method: 'GET',
-      timeoutMs: Math.max(1000, Number(timeoutMs) || META_GRAPH_TIMEOUT_MS),
-      firstByteTimeoutMs: Math.max(1000, Number(timeoutMs) || META_GRAPH_TIMEOUT_MS),
-      maxBytes: 2 * 1024 * 1024,
-      maxRedirects: 1,
-      allowedHosts: ['graph.facebook.com'],
-      headers: { 'Accept': 'application/json' },
-    }, { integration: 'social', key: `social:meta:${new URL(endpoint).pathname}` });
-    const text = await res.text();
-    const parsed = parseJsonSafely(text, label);
-    const body = parsed.ok && parsed.value && typeof parsed.value === 'object' ? parsed.value : {};
-    if (!res.ok) {
-      const detail = String(body?.error?.message || ('HTTP ' + res.status)).trim();
-      const err = new Error(detail || `${label}_http_${res.status}`);
-      err.httpStatus = Number(res.status || 502);
-      err.retryAfter = res.headers.get('retry-after') || '';
-      err.responseBody = String(text || '').slice(0, 240);
-      throw err;
-    }
-    if (!parsed.ok || !parsed.value || typeof parsed.value !== 'object') {
-      throw Object.assign(new Error(label + '_invalid_json'), { httpStatus: 502 });
-    }
-    if (body?.error?.message) {
-      const err = new Error(String(body.error.message).trim() || `${label}_error`);
-      err.httpStatus = Number(body?.error?.code || 502);
-      err.details = body.error;
-      throw err;
-    }
-    return body;
+    const result = await fetchWithFailover({
+      providers: ['meta_graph'],
+      retries: META_GRAPH_MAX_RETRIES - 1,
+      backoffBaseMs: META_GRAPH_BACKOFF_BASE_MS,
+      backoffMaxMs: META_GRAPH_BACKOFF_MAX_MS,
+      operationTimeoutMs: META_GRAPH_OPERATION_TIMEOUT_MS,
+      attemptTimeoutMs,
+      unhealthyCooldownMs: META_GRAPH_UNHEALTHY_COOLDOWN_MS,
+      signal,
+      isRetryableError: isRetryableMetaGraphError,
+      retryDelayMs: metaGraphRetryDelayMs,
+      tryProvider(_provider, _attempt, { signal: attemptSignal }) {
+        return fetchMetaGraphJsonAttempt(endpoint, { timeoutMs: attemptTimeoutMs, label, signal: attemptSignal });
+      },
+    });
+    return result.result;
   } catch (err) {
-    if (err?.code === 'request_timeout') {
+    if (err?.code === 'request_timeout' || err?.code === 'provider_attempt_timeout' || err?.code === 'operation_deadline_exceeded') {
       throw Object.assign(new Error(label + '_timeout'), { httpStatus: 504 });
     }
     throw err;
@@ -4247,22 +4288,15 @@ async function pollFacebookFollowers({ source = 'interval' } = {}){
       facebookFollowersState.status.lastAttemptAt = new Date().toISOString();
       try {
         const graphResult = await fetchWithFailover({
-          providers: ['facebook_graph_followers'],
+          providers: ['meta_graph'],
           retries: attempts - 1,
           backoffBaseMs: META_GRAPH_BACKOFF_BASE_MS,
           backoffMaxMs: META_GRAPH_BACKOFF_MAX_MS,
           operationTimeoutMs: META_GRAPH_OPERATION_TIMEOUT_MS,
           attemptTimeoutMs: META_GRAPH_TIMEOUT_MS,
           unhealthyCooldownMs: META_GRAPH_UNHEALTHY_COOLDOWN_MS,
-          isRetryableError(error) {
-            const status = Number(error?.httpStatus || error?.status || 0);
-            return error?.code === 'provider_attempt_timeout'
-              || [408, 425, 429, 500, 502, 503, 504].includes(status)
-              || /abort|timeout/i.test(String(error?.message || ''));
-          },
-          retryDelayMs({ error }) {
-            return Math.max(0, Number(error?.retryAfter || 0) * 1000);
-          },
+          isRetryableError: isRetryableMetaGraphError,
+          retryDelayMs: metaGraphRetryDelayMs,
           async tryProvider(_provider, attempt, { signal }) {
             const endpoint = 'https://graph.facebook.com/' + encodeURIComponent(META_GRAPH_API_VERSION) + '/' + encodeURIComponent(META_GRAPH_PAGE_ID) + '?fields=followers_count,fan_count,name&access_token=' + encodeURIComponent(META_GRAPH_PAGE_ACCESS_TOKEN);
             const res = await coordinatedSafeFetch(endpoint, {
@@ -4283,6 +4317,7 @@ async function pollFacebookFollowers({ source = 'interval' } = {}){
                 httpStatus: res.status,
                 status: res.status,
                 retryAfter: res.headers.get('retry-after') || '',
+                graphErrorCode: Number(body?.error?.code || 0),
               });
             }
             const followersCount = Number.isFinite(Number(body?.followers_count)) ? Number(body.followers_count) : null;
