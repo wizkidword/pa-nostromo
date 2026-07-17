@@ -73,3 +73,18 @@ and upstream failures with a total deadline, per-attempt deadline, jitter, and
 a short per-account cooldown. `Retry-After` is honored. Authentication and
 Atom parser failures are explicit and are not retried. IMAP mailbox reads and
 all IMAP message actions remain outside this retry policy.
+
+## eBay traffic reads
+
+Only the read-only `GET /sell/analytics/v1/traffic_report` calls use the shared
+retry helper. Transient timeouts and upstream `408`, `425`, and `5xx` responses
+receive bounded, jittered retries with an overall deadline, per-attempt
+deadline, and a short shared eBay traffic cooldown. A provider `Retry-After`
+value is the minimum wait for those retryable failures.
+
+HTTP `429` is deliberately not retried by this helper. The existing eBay
+traffic rate-limit backoff and last-known-good cache remain the authoritative
+behavior for rate limits. OAuth refresh-token requests, Marketing report
+creation/polling/downloads, Trading API calls, and every other eBay operation
+remain outside this retry policy. Configure the traffic-read behavior with the
+`EBAY_TRAFFIC_READ_*` variables in `.env.example`.

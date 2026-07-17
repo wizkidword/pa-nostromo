@@ -52,7 +52,9 @@ try {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
 
-  const pageResponse = await page.goto(`${origin}/`, { waitUntil: 'networkidle' });
+  // The dashboard starts recurring integration and system-monitor requests at
+  // boot, so network idle is not a reliable definition of page readiness.
+  const pageResponse = await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded' });
   assert.equal(pageResponse?.status(), 200);
   assert.match(await page.title(), /Nostromo|Mission Control/i);
   const csp = pageResponse?.headers()['content-security-policy'] || '';

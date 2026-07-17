@@ -180,6 +180,11 @@ const REQUEST_BODY_LIMIT_STATE_BYTES = Math.max(128 * 1024, parsePositiveInt(pro
 const REQUEST_BODY_LIMIT_RSS_BYTES = Math.max(8 * 1024, parsePositiveInt(process.env.REQUEST_BODY_LIMIT_RSS_BYTES, 256 * 1024));
 const EBAY_TRAFFIC_ALLOW_REMOTE = parseBool(process.env.EBAY_TRAFFIC_ALLOW_REMOTE);
 const EBAY_TRAFFIC_TIMEOUT_MS = Math.max(2_000, parsePositiveInt(process.env.EBAY_TRAFFIC_TIMEOUT_MS, 12_000));
+const EBAY_TRAFFIC_READ_MAX_ATTEMPTS = Math.max(1, parsePositiveInt(process.env.EBAY_TRAFFIC_READ_MAX_ATTEMPTS, 2));
+const EBAY_TRAFFIC_READ_BACKOFF_BASE_MS = Math.max(100, parsePositiveInt(process.env.EBAY_TRAFFIC_READ_BACKOFF_BASE_MS, 500));
+const EBAY_TRAFFIC_READ_BACKOFF_MAX_MS = Math.max(EBAY_TRAFFIC_READ_BACKOFF_BASE_MS, parsePositiveInt(process.env.EBAY_TRAFFIC_READ_BACKOFF_MAX_MS, 2_000));
+const EBAY_TRAFFIC_READ_OPERATION_TIMEOUT_MS = Math.max(EBAY_TRAFFIC_TIMEOUT_MS, parsePositiveInt(process.env.EBAY_TRAFFIC_READ_OPERATION_TIMEOUT_MS, 20_000));
+const EBAY_TRAFFIC_READ_UNHEALTHY_COOLDOWN_MS = Math.max(1_000, parsePositiveInt(process.env.EBAY_TRAFFIC_READ_UNHEALTHY_COOLDOWN_MS, 30_000));
 const EBAY_TRAFFIC_RANGE_DAYS = Math.max(1, Math.min(90, parsePositiveInt(process.env.EBAY_TRAFFIC_RANGE_DAYS, 30)));
 const EBAY_TRAFFIC_TOP_LISTINGS_LIMIT = Math.max(3, Math.min(20, parsePositiveInt(process.env.EBAY_TRAFFIC_TOP_LISTINGS_LIMIT, 8)));
 const EBAY_TRAFFIC_CACHE_TTL_MS = Math.max(60_000, parsePositiveInt(process.env.EBAY_TRAFFIC_CACHE_TTL_MS, 30 * 60 * 1000));
@@ -1824,35 +1829,69 @@ async function refreshEbayTrafficAccessToken(store) {
   return accessToken;
 }
 
-async function fetchEbayTrafficReport({ accessToken, dimension, metrics, filter, sort = '' }) {
+function isRetryableEbayTrafficReadError(error){
+  const status = Number(error?.status || error?.httpStatus || 0);
+  return error?.code === 'provider_attempt_timeout'
+    || [408, 425, 500, 502, 503, 504].includes(status)
+    || /abort|timeout|network|temporar/i.test(String(error?.message || ''));
+}
+
+function ebayTrafficReadRetryDelayMs({ error }){
+  return Math.max(0, Number(error?.retryAfter || 0) * 1000);
+}
+
+async function fetchEbayTrafficReport({ accessToken, dimension, metrics, filter, sort = '' }, options = {}) {
   const url = new URL('/sell/analytics/v1/traffic_report', EBAY_TRAFFIC_BASE_URL);
   url.searchParams.set('dimension', dimension);
   url.searchParams.set('metric', metrics.join(','));
   url.searchParams.set('filter', filter);
   if (sort) url.searchParams.set('sort', sort);
-  const response = await coordinatedSafeFetch(url, {
-      method: 'GET',
-      timeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
-      firstByteTimeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
-      maxBytes: 5 * 1024 * 1024,
-      maxRedirects: 2,
-      allowedHosts: EBAY_ALLOWED_HOSTS,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/json',
-        'Accept-Language': 'en-US',
-      },
-  }, { integration: 'ebay', key: `ebay:traffic:${dimension}:${sort || 'default'}` });
-  const text = await response.text();
-  const parsed = parseJsonSafely(text || '{}', 'ebay_traffic_report');
-  const payload = parsed.ok && parsed.value && typeof parsed.value === 'object' ? parsed.value : {};
-  if (!response.ok) {
-    const message = String(payload?.errors?.[0]?.message || payload?.message || `HTTP ${response.status}`).trim();
-    const error = new Error(message || `HTTP ${response.status}`);
-    error.status = response.status;
-    throw error;
-  }
-  return payload;
+  const result = await fetchWithFailover({
+    providers: ['ebay_traffic_read'],
+    retries: EBAY_TRAFFIC_READ_MAX_ATTEMPTS - 1,
+    backoffBaseMs: EBAY_TRAFFIC_READ_BACKOFF_BASE_MS,
+    backoffMaxMs: EBAY_TRAFFIC_READ_BACKOFF_MAX_MS,
+    operationTimeoutMs: EBAY_TRAFFIC_READ_OPERATION_TIMEOUT_MS,
+    attemptTimeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
+    unhealthyCooldownMs: EBAY_TRAFFIC_READ_UNHEALTHY_COOLDOWN_MS,
+    signal: options.signal,
+    healthStore: options.healthStore,
+    random: options.random,
+    delay: options.delay,
+    now: options.now,
+    isRetryableError: isRetryableEbayTrafficReadError,
+    retryDelayMs: ebayTrafficReadRetryDelayMs,
+    async tryProvider(_provider, _attempt, { signal }) {
+      const response = typeof options.fetchResponse === 'function'
+        ? await options.fetchResponse(url, { signal })
+        : await coordinatedSafeFetch(url, {
+          method: 'GET',
+          signal,
+          timeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
+          firstByteTimeoutMs: EBAY_TRAFFIC_TIMEOUT_MS,
+          maxBytes: 5 * 1024 * 1024,
+          maxRedirects: 2,
+          allowedHosts: EBAY_ALLOWED_HOSTS,
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: 'application/json',
+            'Accept-Language': 'en-US',
+          },
+        }, { integration: 'ebay', key: `ebay:traffic:${dimension}:${sort || 'default'}` });
+      const text = await response.text();
+      const parsed = parseJsonSafely(text || '{}', 'ebay_traffic_report');
+      const payload = parsed.ok && parsed.value && typeof parsed.value === 'object' ? parsed.value : {};
+      if (!response.ok) {
+        const message = String(payload?.errors?.[0]?.message || payload?.message || `HTTP ${response.status}`).trim();
+        const error = new Error(message || `HTTP ${response.status}`);
+        error.status = response.status;
+        error.retryAfter = response.headers?.get?.('retry-after') || '';
+        throw error;
+      }
+      return payload;
+    },
+  });
+  return result.result;
 }
 
 async function fetchEbayTrafficStoreSnapshot(store) {
@@ -7616,6 +7655,7 @@ module.exports = {
   parseCompactCount,
   parseEbayTrafficReport,
   parseEbayMarketingReport,
+  fetchEbayTrafficReport,
   parseFeedXml,
   parseAaaCurrentAvgRow,
   extractUnreadEmailAtomFeed,
