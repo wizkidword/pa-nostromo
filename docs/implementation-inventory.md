@@ -36,8 +36,6 @@ All routes are dispatched through `ROUTE_MANIFEST` before reaching their handler
 | `/api/email-unread/spam`, `/spam-batch` | POST | action: 64 KiB | local by default; moves messages to spam | IMAP |
 | `/api/ebay-traffic` | GET | none | local by default; reads cached or fresh commerce payload | eBay OAuth/Analytics/Trading/Marketing APIs |
 | `/api/ebay-traffic/refresh` | POST | action: 64 KiB | local by default; refreshes cache | eBay APIs |
-| `/api/diary-index` | GET | none | currently reads sibling-repository diary reports; Phase 7 removes or contains it | filesystem outside the repository |
-| `/api/diary-index/refresh` | POST | action: 64 KiB | rebuilds the diary index | filesystem outside the repository |
 | `/{facebook,facebook-group,instagram,tiktok,youtube}-followers` | GET | none | local by default; returns persisted social state | provider APIs/public pages/session scripts |
 | corresponding `/refresh` routes | POST | action: 64 KiB | local by default; refreshes social metric | provider APIs/public pages/session scripts |
 | corresponding `/health` routes | GET | none | local by default; returns poller status | none |
@@ -64,7 +62,7 @@ All routes are dispatched through `ROUTE_MANIFEST` before reaching their handler
 - Social history/cache files: Facebook, Facebook group, Instagram, TikTok, YouTube, and eBay cache under `DATA_DIR`; social poller logs under `LOG_DIR`.
 - Browser session storage: Meta/Facebook/Instagram storage defaults to `DATA_DIR/.auth`.
 - `.env` and `.env.local`: read only during server startup.
-- Diary index: `DIARY_INDEX_ROOTS` currently reaches a developer-specific sibling report directory; it is explicitly deferred to Phase 7 and must not be expanded.
+- Diary filesystem indexing was removed in Phase 7. A default installation does not read sibling repositories.
 - Static requests: `resolveStaticFile` resolves only a regular file under the real `PUBLIC_ROOT`; it rejects dotfiles, traversal encodings, directories, and symlink escapes.
 
 ## Timers and recurring work

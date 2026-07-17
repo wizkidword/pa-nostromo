@@ -30,8 +30,6 @@ const expectedRoutes = [
   ['email.spam-batch', 'POST', '/api/email-unread/spam-batch'],
   ['ebay.read', 'GET', '/api/ebay-traffic'],
   ['ebay.refresh', 'POST', '/api/ebay-traffic/refresh'],
-  ['diary.read', 'GET', '/api/diary-index'],
-  ['diary.refresh', 'POST', '/api/diary-index/refresh'],
 ];
 
 for (const integration of ['facebook-followers', 'facebook-group-members', 'facebook-content', 'instagram-content', 'instagram-followers', 'tiktok-followers', 'youtube-subscribers']) {
@@ -48,6 +46,10 @@ assert.equal(new Set(ROUTE_MANIFEST.map((route) => route.id)).size, ROUTE_MANIFE
 for (const [id, method, pathname] of expectedRoutes) {
   const resolved = resolveRoute(ROUTE_MANIFEST, pathname, method);
   assert.equal(resolved.route?.id, id, `${method} ${pathname} must resolve through the manifest.`);
+}
+
+for (const [method, pathname] of [['GET', '/api/diary-index'], ['POST', '/api/diary-index/refresh']]) {
+  assert.equal(resolveRoute(ROUTE_MANIFEST, pathname, method).route, null, `${method} ${pathname} must be unavailable by default.`);
 }
 
 for (const route of ROUTE_MANIFEST) {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { ROUTE_MANIFEST, authorizeManifestRoute } = require('../server.js');
+const { authorizeManifestRoute } = require('../server.js');
 
 function createMockResponse() {
   return {
@@ -14,8 +14,15 @@ function createMockResponse() {
   };
 }
 
-const diaryRefresh = ROUTE_MANIFEST.find((route) => route.id === 'diary.refresh');
-assert.ok(diaryRefresh);
+const localOnlyRoute = {
+  id: 'test.local-only',
+  scope: 'admin',
+  localAllowed: true,
+  remoteAllowed: false,
+  remoteEnabled: () => false,
+  bodyLimit: 0,
+  sideEffect: true,
+};
 const host = { host: '127.0.0.1', port: 4287 };
 const securityContext = {
   csrfToken: 'csrf-test-token',
@@ -30,7 +37,7 @@ const securityContext = {
       origin: 'http://127.0.0.1:4287',
       'x-pa-nostromo-csrf': 'csrf-test-token',
     },
-  }, res, diaryRefresh, host, securityContext);
+  }, res, localOnlyRoute, host, securityContext);
   assert.equal(allowed, true);
   assert.equal(res.writableEnded, false);
 }
@@ -40,7 +47,7 @@ const securityContext = {
   const allowed = authorizeManifestRoute({
     socket: { remoteAddress: '192.168.1.20' },
     headers: { authorization: 'Bearer admin-token' },
-  }, res, diaryRefresh, host, securityContext);
+  }, res, localOnlyRoute, host, securityContext);
   assert.equal(allowed, false);
   assert.equal(res.statusCode, 403);
   assert.match(res.body, /remote_route_disabled/);

@@ -2122,361 +2122,6 @@ function dateKey(d){
   return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
 }
 
-const diaryIndexState = {
-  datesWithEntries: new Set(),
-  entriesByDate: {},
-  generatedAt: '',
-};
-
-function getDiaryEntriesForDate(date){
-  const items = Array.isArray(diaryIndexState.entriesByDate?.[date]) ? diaryIndexState.entriesByDate[date] : [];
-  return [...items].sort((a, b) => new Date(b.time || 0).getTime() - new Date(a.time || 0).getTime());
-}
-
-function toTitleCaseWords(input){
-  return String(input || '')
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(' ');
-}
-
-function formatDiaryEntryTitle(entry = {}){
-  const base = String(entry.title || '')
-    .replace(/\.md$/i, '')
-    .replace(/^\d{4}-\d{2}-\d{2}-/i, '')
-    .replace(/[-_]+/g, ' ')
-    .trim();
-  return base ? toTitleCaseWords(base) : 'Diary Entry';
-}
-
-function buildDiaryPreviewText(rawContent, fallback = ''){
-  const lines = String(rawContent || '')
-    .split('\n')
-    .map((l) => l.replace(/^#{1,6}\s+/, '').trim())
-    .filter(Boolean)
-    .filter((l) => !/^(date|owner)\s*:/i.test(l));
-
-  const candidate = lines.slice(0, 2).join(' ').trim() || String(fallback || '').trim();
-  return candidate.slice(0, 220);
-}
-
-function renderDiaryCleanHtml(rawContent){
-  const lines = String(rawContent || '').split('\n').map((line) => line.trimEnd());
-  const out = [];
-  let inUl = false;
-  let inOl = false;
-
-  const closeLists = () => {
-    if (inUl) { out.push('</ul>'); inUl = false; }
-    if (inOl) { out.push('</ol>'); inOl = false; }
-  };
-
-  let skipTailSection = false;
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (/^##\s+suggested calendar-pod diary usage/i.test(line)) {
-      skipTailSection = true;
-      closeLists();
-      continue;
-    }
-    if (skipTailSection) continue;
-    if (!line) {
-      closeLists();
-      continue;
-    }
-
-    // Skip noisy metadata lines to reduce wall-of-text feel.
-    if (/^#\s+/.test(line)) continue;
-    if (/^(date|owner)\s*:/i.test(line)) continue;
-
-    const h2 = line.match(/^##\s+(.+)/);
-    if (h2) {
-      closeLists();
-      out.push(`<h4 class="diary-section-title">${escapeHtml(h2[1])}</h4>`);
-      continue;
-    }
-
-    const h3 = line.match(/^###\s+(.+)/);
-    if (h3) {
-      closeLists();
-      out.push(`<h5 class="diary-subsection-title">${escapeHtml(h3[1])}</h5>`);
-      continue;
-    }
-
-    const bullet = line.match(/^[-*]\s+(.+)/);
-    if (bullet) {
-      if (inOl) { out.push('</ol>'); inOl = false; }
-      if (!inUl) { out.push('<ul class="diary-list">'); inUl = true; }
-      out.push(`<li>${escapeHtml(bullet[1])}</li>`);
-      continue;
-    }
-
-    const numbered = line.match(/^\d+[\.)]\s+(.+)/);
-    if (numbered) {
-      if (inUl) { out.push('</ul>'); inUl = false; }
-      if (!inOl) { out.push('<ol class="diary-list">'); inOl = true; }
-      out.push(`<li>${escapeHtml(numbered[1])}</li>`);
-      continue;
-    }
-
-    closeLists();
-    out.push(`<p class="diary-paragraph">${escapeHtml(line)}</p>`);
-  }
-
-  closeLists();
-  return out.join('') || '<p class="diary-paragraph">No content.</p>';
-}
-
-function normalizeDiarySummaryLine(line){
-  return String(line || '')
-    .replace(/^#{1,6}\s+/, '')
-    .replace(/^[-*]\s+/, '')
-    .replace(/^\d+[\.)]\s+/, '')
-    .replace(/`+/g, '')
-    .replace(/\*\*/g, '')
-    .replace(/__+/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function extractDiarySummaryBullets(rawContent, maxItems = 5){
-  const lines = String(rawContent || '').split('\n');
-  const bullets = [];
-  let skipTailSection = false;
-
-  for (const rawLine of lines) {
-    const line = String(rawLine || '').trim();
-    if (!line) continue;
-    if (/^##\s+suggested calendar-pod diary usage/i.test(line)) {
-      skipTailSection = true;
-      continue;
-    }
-    if (skipTailSection) continue;
-    if (/^#\s+/.test(line)) continue;
-    if (/^(date|owner)\s*:/i.test(line)) continue;
-
-    let picked = '';
-    const heading = line.match(/^##+\s+(.+)/);
-    const bullet = line.match(/^[-*]\s+(.+)/);
-    const numbered = line.match(/^\d+[\.)]\s+(.+)/);
-    if (heading) picked = heading[1];
-    else if (bullet) picked = bullet[1];
-    else if (numbered) picked = numbered[1];
-    else picked = line;
-
-    const normalized = normalizeDiarySummaryLine(picked);
-    if (!normalized || normalized.length < 3) continue;
-    bullets.push(normalized);
-    if (bullets.length >= maxItems) break;
-  }
-
-  return bullets;
-}
-
-function buildDiaryExecutiveSummary(entry = {}, fallbackDate = ''){
-  const title = formatDiaryEntryTitle(entry);
-  const project = String(entry.project || 'project').trim() || 'project';
-  const dateValue = entry.time ? new Date(entry.time) : null;
-  const dateLabel = Number.isFinite(dateValue?.getTime()) ? dateValue.toLocaleDateString() : String(fallbackDate || '').trim();
-  const bullets = extractDiarySummaryBullets(entry.rawContent || entry.content || '', 5);
-  const bulletLines = bullets.length ? bullets : ['No key updates captured.'];
-
-  return [
-    title,
-    `${dateLabel} · ${project}`,
-    '',
-    ...bulletLines.map((line) => `- ${line}`),
-  ].join('\n').trim();
-}
-
-function buildDiaryFullCleanEntry(entry = {}, fallbackDate = ''){
-  const title = formatDiaryEntryTitle(entry);
-  const project = String(entry.project || 'project').trim() || 'project';
-  const dateValue = entry.time ? new Date(entry.time) : null;
-  const dateLabel = Number.isFinite(dateValue?.getTime()) ? dateValue.toLocaleDateString() : String(fallbackDate || '').trim();
-  const lines = String(entry.rawContent || entry.content || '')
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-  const out = [title, `${dateLabel} · ${project}`, ''];
-  let skipTailSection = false;
-
-  for (const line of lines) {
-    if (/^##\s+suggested calendar-pod diary usage/i.test(line)) {
-      skipTailSection = true;
-      continue;
-    }
-    if (skipTailSection) continue;
-    if (/^#\s+/.test(line)) continue;
-    if (/^(date|owner)\s*:/i.test(line)) continue;
-
-    const heading = line.match(/^##+\s+(.+)/);
-    if (heading) {
-      out.push('');
-      out.push(heading[1].trim());
-      continue;
-    }
-
-    const bullet = line.match(/^[-*]\s+(.+)/);
-    if (bullet) {
-      out.push(`- ${bullet[1].trim()}`);
-      continue;
-    }
-
-    const numbered = line.match(/^(\d+[\.)])\s+(.+)/);
-    if (numbered) {
-      out.push(`${numbered[1]} ${numbered[2].trim()}`);
-      continue;
-    }
-
-    out.push(line);
-  }
-
-  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-}
-
-async function copyTextToClipboard(text){
-  const value = String(text || '');
-  if (!value) throw new Error('Nothing to copy.');
-
-  if (navigator.clipboard?.writeText && window.isSecureContext) {
-    await navigator.clipboard.writeText(value);
-    return;
-  }
-
-  const textarea = document.createElement('textarea');
-  textarea.value = value;
-  textarea.setAttribute('readonly', 'readonly');
-  textarea.style.position = 'fixed';
-  textarea.style.top = '-9999px';
-  textarea.style.left = '-9999px';
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-
-  let ok = false;
-  try {
-    ok = document.execCommand('copy');
-  } finally {
-    textarea.remove();
-  }
-  if (!ok) throw new Error('Clipboard unavailable.');
-}
-
-function setDiaryCopyFeedback(button, message, isError = false){
-  if (!button) return;
-  const statusEl = button.parentElement?.querySelector('[data-diary-copy-status]');
-  const original = button.dataset.originalLabel || 'Copy entry';
-  button.dataset.originalLabel = original;
-  button.textContent = message;
-  button.classList.toggle('is-error', !!isError);
-  if (statusEl) {
-    statusEl.textContent = message;
-    statusEl.classList.toggle('is-error', !!isError);
-  }
-  window.setTimeout(() => {
-    button.textContent = original;
-    button.classList.remove('is-error');
-    if (statusEl) {
-      statusEl.textContent = '';
-      statusEl.classList.remove('is-error');
-    }
-  }, 1400);
-}
-
-function renderDiaryDialog(date){
-  const dialog = document.getElementById('calendarDiaryDialog');
-  const titleEl = document.getElementById('calendarDiaryDialogDate');
-  const listEl = document.getElementById('calendarDiaryDialogList');
-  if (!dialog || !titleEl || !listEl) return;
-
-  const entries = getDiaryEntriesForDate(date);
-  titleEl.textContent = `Diary entries for ${date}`;
-  if (!entries.length) {
-    listEl.innerHTML = '<div class="note-meta">No diary entries for this date.</div>';
-  } else {
-    listEl.innerHTML = entries.map((entry, idx) => {
-      const stamp = entry.time ? new Date(entry.time).toLocaleString() : date;
-      const full = renderDiaryCleanHtml(entry.rawContent || entry.content || '');
-      const preview = escapeHtml(buildDiaryPreviewText(entry.rawContent || entry.content || '', entry.preview || ''));
-      const displayTitle = escapeHtml(formatDiaryEntryTitle(entry));
-      return `<article class="diary-entry-card" data-diary-entry-card>
-        <button type="button" class="diary-entry-toggle" data-diary-toggle>
-          <span class="diary-entry-meta">${escapeHtml(stamp)} · <span class="diary-project-tag">${escapeHtml(entry.project || 'project')}</span></span>
-          <span class="diary-entry-title">${displayTitle}</span>
-          <span class="diary-entry-preview">${preview}</span>
-        </button>
-        <div class="diary-entry-full" hidden>
-          <div class="diary-copy-row">
-            <button type="button" class="btn ghost diary-copy-btn" data-diary-copy-index="${idx}">Copy entry</button>
-            <span class="diary-copy-status" data-diary-copy-status aria-live="polite"></span>
-          </div>
-          ${full.replaceAll('\n', '<br>')}
-        </div>
-      </article>`;
-    }).join('');
-
-    listEl.querySelectorAll('[data-diary-toggle]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const card = btn.closest('[data-diary-entry-card]');
-        if (!card) return;
-        const body = card.querySelector('.diary-entry-full');
-        if (!body) return;
-        const nextHidden = !body.hidden;
-        body.hidden = nextHidden;
-        card.classList.toggle('is-expanded', !nextHidden);
-      });
-    });
-
-    listEl.querySelectorAll('[data-diary-copy-index]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const index = Number(btn.getAttribute('data-diary-copy-index'));
-        if (!Number.isInteger(index) || index < 0 || index >= entries.length) return;
-        const cleanEntry = buildDiaryFullCleanEntry(entries[index], date);
-        try {
-          await copyTextToClipboard(cleanEntry);
-          setDiaryCopyFeedback(btn, 'Copied!');
-        } catch {
-          setDiaryCopyFeedback(btn, 'Copy failed', true);
-        }
-      });
-    });
-  }
-
-  if (typeof dialog.showModal === 'function' && !dialog.open) dialog.showModal();
-}
-
-async function refreshDiaryIndex(options = {}){
-  const manual = !!options.manual;
-  const endpoint = manual ? '/api/diary-index/refresh' : '/api/diary-index';
-  const method = manual ? 'POST' : 'GET';
-  const refreshBtn = document.getElementById('calendarDiaryRefreshBtn');
-
-  if (refreshBtn) {
-    refreshBtn.disabled = true;
-    refreshBtn.textContent = manual ? 'Refreshing…' : 'Loading…';
-  }
-
-  try {
-    const res = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' } });
-    if (!res.ok) throw new Error(`Diary index request failed (${res.status})`);
-    const payload = await res.json();
-    diaryIndexState.generatedAt = payload.generatedAt || '';
-    diaryIndexState.entriesByDate = payload.entriesByDate || {};
-    diaryIndexState.datesWithEntries = new Set(Array.isArray(payload.datesWithEntries) ? payload.datesWithEntries : []);
-    renderCalendar();
-  } catch (err) {
-    logChange(`Diary index unavailable: ${String(err?.message || err)}`);
-  } finally {
-    if (refreshBtn) {
-      refreshBtn.disabled = false;
-      refreshBtn.textContent = 'Refresh Diary Index';
-    }
-  }
-}
-
 function renderCalendar(){
   const el = document.getElementById('calendarWidget');
   if (!el) return;
@@ -2492,9 +2137,7 @@ function renderCalendar(){
   if (!selectedCalendarDate) selectedCalendarDate = todayKey;
 
   const reminderDates = new Set(state.reminders.map((r)=>r.date));
-  const diaryDates = diaryIndexState.datesWithEntries;
   const reminderDayCount = reminderDates.size;
-  const diaryDayCount = diaryDates.size;
   const heads = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<div class="cal-cell cal-head">${d}</div>`).join('');
   let cells = '';
   for (let i=0;i<start;i++) cells += '<div class="cal-cell cal-cell-empty">&nbsp;</div>';
@@ -2503,19 +2146,17 @@ function renderCalendar(){
     const isToday = key===todayKey;
     const isSel = key===selectedCalendarDate;
     const has = reminderDates.has(key);
-    const hasDiary = diaryDates.has(key);
-    cells += `<div class="cal-cell ${isToday?'cal-today':''} ${isSel?'selected':''} ${has?'has-reminder':''} ${hasDiary?'has-diary':''}" data-date="${key}">${d}</div>`;
+    cells += `<div class="cal-cell ${isToday?'cal-today':''} ${isSel?'selected':''} ${has?'has-reminder':''}" data-date="${key}">${d}</div>`;
   }
   el.innerHTML = `
     <div class="calendar-v2-shell">
       <div class="calendar-v2-head">
         <div>
           <div class="calendar-month-label">${nowDt.toLocaleDateString(undefined,{month:'long',year:'numeric'})}</div>
-          <div class="calendar-month-subtitle">Pick a day to manage reminders and spot journal activity.</div>
+          <div class="calendar-month-subtitle">Pick a day to manage reminders.</div>
         </div>
         <div class="calendar-month-stats">
           <span class="calendar-stat-pill">${reminderDayCount} reminder ${reminderDayCount === 1 ? 'day' : 'days'}</span>
-          <span class="calendar-stat-pill">${diaryDayCount} journal ${diaryDayCount === 1 ? 'day' : 'days'}</span>
         </div>
       </div>
       <div class="calendar-grid">${heads}${cells}</div>
@@ -2527,9 +2168,6 @@ function renderCalendar(){
       selectedCalendarDate = cell.dataset.date;
       renderCalendar();
       renderCalendarRemindersPanel();
-      if (diaryIndexState.datesWithEntries.has(selectedCalendarDate)) {
-        renderDiaryDialog(selectedCalendarDate);
-      }
     });
   });
 }
@@ -2541,7 +2179,7 @@ function renderCalendarRemindersPanel(){
   if (!selectedCalendarDate) {
     label.innerHTML = `
       <div class="calendar-agenda-title">Select a date</div>
-      <div class="calendar-agenda-subtitle">Choose any day above to see reminders and journal activity.</div>
+      <div class="calendar-agenda-subtitle">Choose any day above to see reminders.</div>
     `;
     list.innerHTML = '<div class="calendar-empty-state">No reminders yet.</div>';
     return;
@@ -2553,7 +2191,6 @@ function renderCalendarRemindersPanel(){
   tomorrowDt.setDate(tomorrowDt.getDate() + 1);
   const tomorrowKey = dateKey(tomorrowDt);
   const items = state.reminders.filter((r)=>r.date===selectedCalendarDate).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
-  const hasDiary = diaryIndexState.datesWithEntries.has(selectedCalendarDate);
   const dayLabel = selectedDt.toLocaleDateString(undefined, { weekday:'long', month:'long', day:'numeric' });
   const yearLabel = selectedDt.toLocaleDateString(undefined, { year:'numeric' });
   const relativeLabel = selectedCalendarDate === todayKey
@@ -2572,7 +2209,6 @@ function renderCalendarRemindersPanel(){
       </div>
       <div class="calendar-agenda-meta">
         <span class="calendar-agenda-pill">${items.length} ${items.length === 1 ? 'reminder' : 'reminders'}</span>
-        ${hasDiary ? '<span class="calendar-agenda-pill">Journal entry</span>' : ''}
       </div>
     </div>
   `;
@@ -14089,10 +13725,6 @@ document.getElementById('rssShowReadToggle')?.addEventListener('change', (e) => 
 });
 updateCryptoRefreshButton();
 
-document.getElementById('calendarDiaryRefreshBtn')?.addEventListener('click', () => {
-  refreshDiaryIndex({ manual: true });
-});
-
 function closeDialogSmooth(dialog){
   if (!dialog || !dialog.open) return;
   if (dialog.classList.contains('closing')) return;
@@ -14102,23 +13734,6 @@ function closeDialogSmooth(dialog){
     dialog.classList.remove('closing');
   }, 140);
 }
-
-document.getElementById('calendarDiaryDialogCloseBtn')?.addEventListener('click', () => {
-  closeDialogSmooth(document.getElementById('calendarDiaryDialog'));
-});
-
-document.getElementById('calendarDiaryDialog')?.addEventListener('click', (e) => {
-  if (e.target?.id === 'calendarDiaryDialog') {
-    closeDialogSmooth(e.currentTarget);
-  }
-});
-
-document.getElementById('calendarDiaryDialog')?.addEventListener('cancel', (e) => {
-  e.preventDefault();
-  closeDialogSmooth(e.currentTarget);
-});
-
-refreshDiaryIndex();
 
 document.getElementById('addCalendarReminderBtn')?.addEventListener('click', () => {
   if (!selectedCalendarDate) selectedCalendarDate = dateKey(new Date());

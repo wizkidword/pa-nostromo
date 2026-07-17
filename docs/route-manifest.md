@@ -22,7 +22,6 @@ The server resolves a request through this manifest before it reaches an endpoin
 | `system:read` | Resource and speed diagnostics |
 | `devices:read`, `devices:write` | Home device ping and wake actions |
 | `email:read`, `email:write` | Email inbox data and mailbox actions |
-| `admin` | Local diary indexing |
 
 `ratePolicy` and `bodyLimit` are intentionally declared now so a later rate-limiting layer can use a complete, reviewable inventory instead of recreating route knowledge in middleware.
 
@@ -46,8 +45,7 @@ All listed routes allow loopback access. `POST` routes marked **yes** are browse
 | `POST /api/email-unread/read`, `/read-batch`, `/delete`, `/delete-batch`, `/spam`, `/spam-batch` | `email:write` | `EMAIL_UNREAD_ALLOW_REMOTE` | yes |
 | `GET /api/ebay-traffic` | `integrations:read` | `EBAY_TRAFFIC_ALLOW_REMOTE` | no |
 | `POST /api/ebay-traffic/refresh` | `integrations:refresh` | `EBAY_TRAFFIC_ALLOW_REMOTE` | yes |
-| `GET /api/diary-index`, `POST /api/diary-index/refresh` | `admin` | Never remote | refresh only |
 | `GET /api/{facebook-followers,facebook-group-members,facebook-content,instagram-content,instagram-followers,tiktok-followers,youtube-subscribers}` and each `/health` | `integrations:read` | `META_GRAPH_ALLOW_REMOTE` | no |
 | `POST /api/{facebook-followers,facebook-group-members,facebook-content,instagram-content,instagram-followers,tiktok-followers,youtube-subscribers}/refresh` | `integrations:refresh` | `META_GRAPH_ALLOW_REMOTE` | yes |
 
-The diary routes are intentionally local-only because they read and index local filesystem content. All other API routes are remote-capable only when their individual availability flag and scoped-token requirement are both satisfied.
+All API routes are remote-capable only when their individual availability flag and scoped-token requirement are both satisfied.

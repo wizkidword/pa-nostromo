@@ -5260,20 +5260,6 @@ async function handleApiYoutubeSubscribers(req, res) {
   return sendJson(res, 200, youtubeSubscriberResponsePayload());
 }
 
-const DIARY_INDEX_ROOTS = [
-  path.resolve(ROOT, '../taverncollectibles-v2/artifacts/reports'),
-];
-const DIARY_INDEX_ALLOWED_EXT = new Set(['.md', '.markdown']);
-const DIARY_INDEX_FILE_PATTERN = /project-diary-entry/i;
-const DIARY_INDEX_MAX_PREVIEW_LEN = 220;
-let diaryIndexCache = {
-  ok: true,
-  generatedAt: null,
-  datesWithEntries: [],
-  entriesByDate: {},
-  sourceStats: { scannedRoots: 0, scannedFiles: 0, includedEntries: 0, skippedEntries: 0 },
-};
-
 function parseAllowlistInput(value) {
   return [...new Set(String(value || '')
     .split(',')
@@ -5884,158 +5870,6 @@ async function relayRowanMessage(text) {
   }
 }
 
-function normalizeDiaryText(raw) {
-  return String(raw || '')
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
-    .replace(/\[[^\]]+\]\([^)]*\)/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '')
-    .replace(/^\s*[-*+]\s+/gm, '')
-    .replace(/^\s*\d+\.\s+/gm, '')
-    .replace(/\r/g, '')
-    .replace(/\n{2,}/g, '\n')
-    .trim();
-}
-
-function isTemplateOnlyDiary(content) {
-  const lc = String(content || '').toLowerCase();
-  if (!lc) return true;
-  const normalized = lc.replace(/\s+/g, ' ').trim();
-  if (!normalized) return true;
-  if (normalized.length < 30) return true;
-  return (
-    normalized === 'template'
-    || normalized.includes('placeholder')
-    || normalized.includes('todo')
-    || normalized.includes('tbd')
-    || normalized.includes('[insert')
-  ) && normalized.length < 120;
-}
-
-function guessDiaryProject(absPath) {
-  const clean = String(absPath || '').replace(/\\/g, '/');
-  const parts = clean.split('/').filter(Boolean);
-  const idx = parts.indexOf('workspace');
-  if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
-  if (parts.length >= 3) return parts[parts.length - 3];
-  return 'project';
-}
-
-function guessDiaryDate(absPath, rawContent = '') {
-  const fromPath = String(absPath || '').match(/(\d{4}-\d{2}-\d{2})/);
-  if (fromPath) return fromPath[1];
-  const fromContent = String(rawContent || '').match(/(\d{4}-\d{2}-\d{2})/);
-  return fromContent ? fromContent[1] : null;
-}
-
-function formatDateYYYYMMDDLocal(tsMs) {
-  const d = new Date(tsMs);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-async function walkDiaryMarkdownFiles(rootAbs) {
-  const files = [];
-  async function walk(dir) {
-    const entries = await fsp.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await walk(full);
-        continue;
-      }
-      const ext = path.extname(entry.name).toLowerCase();
-      if (DIARY_INDEX_ALLOWED_EXT.has(ext)) files.push(full);
-    }
-  }
-  await walk(rootAbs);
-  return files;
-}
-
-async function rebuildDiaryIndex() {
-  const entriesByDate = {};
-  let scannedFiles = 0;
-  let includedEntries = 0;
-  let skippedEntries = 0;
-
-  for (const rootAbs of DIARY_INDEX_ROOTS) {
-    let stats;
-    try {
-      stats = await fsp.stat(rootAbs);
-    } catch {
-      continue;
-    }
-    if (!stats.isDirectory()) continue;
-
-    const files = await walkDiaryMarkdownFiles(rootAbs);
-    for (const file of files) {
-      scannedFiles += 1;
-      if (!DIARY_INDEX_FILE_PATTERN.test(path.basename(file))) {
-        skippedEntries += 1;
-        continue;
-      }
-      const raw = await fsp.readFile(file, 'utf8');
-      const normalized = normalizeDiaryText(raw);
-      if (isTemplateOnlyDiary(normalized)) {
-        skippedEntries += 1;
-        continue;
-      }
-
-      const guessedDate = guessDiaryDate(file, raw);
-      const stat = await fsp.stat(file);
-      const mtimeLocalDate = formatDateYYYYMMDDLocal(stat.mtimeMs);
-      const bucketDates = [...new Set([guessedDate, mtimeLocalDate].filter(Boolean))];
-      if (!bucketDates.length) {
-        skippedEntries += 1;
-        continue;
-      }
-
-      const primaryDate = guessedDate || mtimeLocalDate;
-      const project = guessDiaryProject(file);
-      const lines = normalized.split('\n').map((line) => line.trim()).filter(Boolean);
-      const preview = lines.join(' ').slice(0, DIARY_INDEX_MAX_PREVIEW_LEN);
-      const entry = {
-        id: crypto.createHash('sha1').update(file).digest('hex').slice(0, 16),
-        date: primaryDate,
-        time: new Date(stat.mtimeMs).toISOString(),
-        project,
-        title: path.basename(file),
-        preview,
-        content: normalized,
-        rawContent: String(raw || ''),
-      };
-
-      for (const bucketDate of bucketDates) {
-        if (!entriesByDate[bucketDate]) entriesByDate[bucketDate] = [];
-        entriesByDate[bucketDate].push(entry);
-      }
-      includedEntries += 1;
-    }
-  }
-
-  for (const date of Object.keys(entriesByDate)) {
-    entriesByDate[date].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
-  }
-
-  const payload = {
-    ok: true,
-    generatedAt: new Date().toISOString(),
-    datesWithEntries: Object.keys(entriesByDate).sort(),
-    entriesByDate,
-    sourceStats: {
-      scannedRoots: DIARY_INDEX_ROOTS.length,
-      scannedFiles,
-      includedEntries,
-      skippedEntries,
-    },
-  };
-  diaryIndexCache = payload;
-  return payload;
-}
-
 async function handleApiUnreadEmail(req, res) {
   const pathname = new URL(req.url || '/api/email-unread', `http://localhost:${PORT}`).pathname;
 
@@ -6396,38 +6230,6 @@ async function handleApiEbayTraffic(req, res) {
       error: status === 400 ? 'invalid_ebay_config' : 'ebay_traffic_failed',
       message: String(error?.message || 'Unable to load eBay traffic').slice(0, 240),
     });
-  }
-}
-
-async function handleApiDiaryIndex(req, res) {
-  const pathname = new URL(req.url || '/api/diary-index', `http://localhost:${PORT}`).pathname;
-
-  if (pathname === '/api/diary-index/refresh') {
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use POST /api/diary-index/refresh.' });
-    }
-    try {
-      const payload = await rebuildDiaryIndex();
-      return sendJson(res, 200, payload);
-    } catch (err) {
-      return sendJson(res, 500, { ok: false, error: 'diary_index_refresh_failed', message: String(err?.message || err) });
-    }
-  }
-
-  if (pathname !== '/api/diary-index') return sendJson(res, 404, { ok: false, error: 'not_found' });
-  if (req.method !== 'GET') {
-    return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/diary-index.' });
-  }
-
-  if (diaryIndexCache.generatedAt) {
-    return sendJson(res, 200, diaryIndexCache);
-  }
-
-  try {
-    const payload = await rebuildDiaryIndex();
-    return sendJson(res, 200, payload);
-  } catch (err) {
-    return sendJson(res, 500, { ok: false, error: 'diary_index_unavailable', message: String(err?.message || err), fallback: diaryIndexCache });
   }
 }
 
@@ -7364,7 +7166,6 @@ async function dispatchApiRoute(req, res, pathname) {
   if (pathname === '/api/home-devices/wake') return handleApiHomeDeviceWake(req, res);
   if (pathname.startsWith('/api/email-unread')) return handleApiUnreadEmail(req, res);
   if (pathname.startsWith('/api/ebay-traffic')) return handleApiEbayTraffic(req, res);
-  if (pathname.startsWith('/api/diary-index')) return handleApiDiaryIndex(req, res);
   if (pathname.startsWith('/api/facebook-followers')) return handleApiFacebookFollowers(req, res);
   if (pathname.startsWith('/api/facebook-group-members')) return handleApiFacebookGroupMembers(req, res);
   if (pathname.startsWith('/api/facebook-content')) return handleApiFacebookContent(req, res);

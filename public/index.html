@@ -199,7 +199,6 @@
       <div class="card utility-card" data-pod-id="calendar">
         <div class="pod-header">
           <h2>🗓️ Calendar <span id="calendarStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
-          <button id="calendarDiaryRefreshBtn" class="btn ghost">Refresh Diary Index</button>
         </div>
         <div id="calendarWidget" class="widget-block calendar-widget"></div>
         <div class="calendar-agenda-panel mt10">
@@ -381,16 +380,6 @@
   <section class="stats" id="stats"></section>
 
   <section class="board" id="board"></section>
-
-  <dialog id="calendarDiaryDialog">
-    <form method="dialog" class="diary-dialog-form">
-      <div class="row-between-wrap">
-        <button id="calendarDiaryDialogCloseBtn" class="btn ghost" type="button">Close</button>
-        <h3 id="calendarDiaryDialogDate" class="m0">Diary entries</h3>
-      </div>
-      <div id="calendarDiaryDialogList" class="diary-dialog-list"></div>
-    </form>
-  </dialog>
 
   <dialog id="socialAnalyticsDialog">
     <form method="dialog" class="social-analytics-dialog-form">
