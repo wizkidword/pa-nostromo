@@ -17,6 +17,7 @@ const { fetchWithFailover } = require('./public/app/core/crypto-failover.js');
 const { StateSchemaError } = require('./lib/state-schema.js');
 const { getReleaseInfo } = require('./lib/release-info.js');
 const { StateStore, StateStoreError } = require('./lib/state-store.js');
+const { createStateApiHandler } = require('./server/routes/state.js');
 const { createRequestId, createPublicErrorPayload, safeErrorCode, createBoundedJsonlLogWriter, configureDiagnosticLogSink, logDiagnostic } = require('./lib/observability.js');
 const { withIntegrationEnvelope } = require('./lib/integration-envelope.js');
 
@@ -6038,21 +6039,22 @@ function handleApiAppInfo(req, res) {
   return sendJson(res, 200, { ok: true, ...getReleaseInfo() });
 }
 
-function stateRichnessScore(state) {
-  const arrLen = (v) => Array.isArray(v) ? v.length : 0;
-  return (
-    arrLen(state?.tasks) * 5 +
-    arrLen(state?.notes) * 3 +
-    arrLen(state?.ideas) * 2 +
-    arrLen(state?.reminders) +
-    arrLen(state?.shortcuts) * 2 +
-    arrLen(state?.changelog)
-  );
-}
-
 function deepClone(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
+
+const handleApiState = createStateApiHandler({
+  stateStore: STATE_STORE,
+  sendJson,
+  readBody,
+  actionBodyLimit: REQUEST_BODY_LIMIT_ACTION_BYTES,
+  stateBodyLimit: REQUEST_BODY_LIMIT_STATE_BYTES,
+  StateStoreError,
+  StateSchemaError,
+  isPayloadTooLargeError,
+  sendPayloadTooLarge,
+  deepClone,
+});
 
 function isAllowedCameraHost(hostname) {
   if (!hostname) return false;
@@ -6541,148 +6543,6 @@ async function handleApiEbayTraffic(req, res) {
       error: status === 400 ? 'invalid_ebay_config' : 'ebay_traffic_failed',
       message: String(error?.message || 'Unable to load eBay traffic').slice(0, 240),
     });
-  }
-}
-
-function parseExpectedStateRevision(req, body) {
-  const header = String(req.headers['if-match'] || '').trim();
-  const fallback = body?.__writeControl?.expectedRevision;
-  const supplied = header || (fallback == null ? '' : String(fallback).trim());
-  if (!supplied) return undefined;
-  const match = supplied.match(/^(?:W\/)?"?(\d+)"?$/i);
-  if (!match) throw new StateStoreError('invalid_revision', 'If-Match must be a non-negative integer revision.');
-  const revision = Number(match[1]);
-  if (!Number.isSafeInteger(revision)) throw new StateStoreError('invalid_revision', 'If-Match revision is not safe.');
-  return revision;
-}
-
-function sendStateStoreError(res, err, { restore = false } = {}) {
-  if (err instanceof StateStoreError) {
-    if (err.code === 'revision_conflict') {
-      return sendJson(res, 409, { ok: false, error: 'state_revision_conflict', message: err.message, currentRevision: err.details?.currentRevision });
-    }
-    if (err.code === 'state_downgrade_blocked') {
-      return sendJson(res, 409, { ok: false, error: err.code, message: err.message, ...err.details });
-    }
-    if (err.code === 'revision_required') {
-      return sendJson(res, 428, { ok: false, error: 'state_revision_required', message: err.message, currentRevision: err.details?.currentRevision });
-    }
-    if (err.code === 'invalid_revision' || err.code === 'invalid_backup_file') {
-      return sendJson(res, 400, { ok: false, error: err.code, message: err.message });
-    }
-    return sendJson(res, restore ? 400 : 500, { ok: false, error: restore ? 'restore_failed' : err.code, message: err.message });
-  }
-  if (err instanceof StateSchemaError) {
-    const status = err.code === 'unsupported_future_schema' ? 409 : 422;
-    return sendJson(res, status, { ok: false, error: err.code, message: err.message });
-  }
-  return sendJson(res, restore ? 400 : 500, { ok: false, error: restore ? 'restore_failed' : 'state_unavailable', message: String(err?.message || err) });
-}
-
-async function handleApiState(req, res) {
-  const pathname = new URL(req.url || '/api/state', `http://localhost:${PORT}`).pathname;
-
-  if (pathname === '/api/state/backups') {
-    if (req.method !== 'GET') return sendJson(res, 405, { error: 'method_not_allowed' });
-    try {
-      const backups = await STATE_STORE.listBackups();
-      return sendJson(res, 200, { ok: true, backups: backups.map(({ mtimeMs, ...rest }) => rest) });
-    } catch (err) {
-      return sendStateStoreError(res, err);
-    }
-  }
-
-  if (pathname === '/api/state/restore') {
-    if (req.method !== 'POST') return sendJson(res, 405, { error: 'method_not_allowed' });
-    try {
-      const body = await readBody(req, { maxBytes: REQUEST_BODY_LIMIT_ACTION_BYTES });
-      const parsed = JSON.parse(body || '{}');
-      const result = await STATE_STORE.restore(parsed?.backupFile, {
-        expectedRevision: parseExpectedStateRevision(req, parsed),
-      });
-      return sendJson(res, 200, {
-        ok: true,
-        restoredFrom: String(parsed?.backupFile || ''),
-        preRestoreSnapshot: result.backupFile,
-        savedAt: result.integrity.savedAt,
-        checksum: result.integrity.checksum,
-        revision: result.integrity.revision,
-        schemaVersion: result.integrity.stateSchemaVersion,
-      });
-    } catch (err) {
-      if (isPayloadTooLargeError(err)) return sendPayloadTooLarge(res, err);
-      return sendStateStoreError(res, err, { restore: true });
-    }
-  }
-
-  if (pathname !== '/api/state') return sendJson(res, 404, { error: 'not_found' });
-
-  if (req.method === 'GET') {
-    try {
-      const result = await STATE_STORE.load();
-      if (!result.state) {
-        if (result.integrity === 'not_found') return sendJson(res, 404, { error: 'state_not_found' });
-        return sendJson(res, 409, { ok: false, error: 'state_corrupt_quarantined', message: 'Invalid saved state was quarantined; a new state can be created.' });
-      }
-      return sendJson(res, 200, result.state);
-    } catch (err) {
-      return sendStateStoreError(res, err);
-    }
-  }
-
-  if (req.method !== 'POST') return sendJson(res, 405, { error: 'method_not_allowed' });
-
-  try {
-    const body = await readBody(req, { maxBytes: REQUEST_BODY_LIMIT_STATE_BYTES });
-    const parsed = JSON.parse(body || '{}');
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return sendJson(res, 400, { error: 'invalid_json', message: 'State payload must be an object.' });
-    }
-
-    const overrideDowngrade = parsed?.__writeControl?.overrideDowngrade === true;
-    const source = String(parsed?.__writeControl?.source || '').trim();
-    const explicitLiveOverride = parsed?.__writeControl?.explicitLiveOverride === true;
-    const allowOverride = overrideDowngrade && (
-      source === 'manual_restore'
-      || source === 'manual_import'
-      || source === 'conflict_overwrite'
-      || (source === 'qa_script' && explicitLiveOverride)
-    );
-    if (source === 'qa_script' && !explicitLiveOverride) {
-      return sendJson(res, 409, {
-        ok: false,
-        error: 'qa_override_requires_explicit_opt_in',
-        message: 'QA/script overwrite is blocked unless __writeControl.explicitLiveOverride=true.',
-      });
-    }
-
-    const cleanIncoming = deepClone(parsed);
-    delete cleanIncoming.__writeControl;
-    const result = await STATE_STORE.write(cleanIncoming, {
-      expectedRevision: parseExpectedStateRevision(req, parsed),
-      source: source || 'api_state_post',
-      reason: 'api_state_post',
-      validateCurrent: (current, incoming) => {
-        if (!current) return;
-        const incomingScore = stateRichnessScore(incoming);
-        const currentScore = stateRichnessScore(current);
-        if (currentScore >= 20 && incomingScore <= Math.floor(currentScore * 0.35) && !allowOverride) {
-          throw new StateStoreError('state_downgrade_blocked', 'Incoming state looks much smaller than current shared state; write blocked to prevent accidental data loss.', { currentScore, incomingScore });
-        }
-      },
-    });
-    return sendJson(res, 200, {
-      ok: true,
-      savedAt: result.integrity.savedAt,
-      checksum: result.integrity.checksum,
-      revision: result.integrity.revision,
-      schemaVersion: result.integrity.stateSchemaVersion,
-      previousStateIntegrity: result.previousStateIntegrity,
-      backupFile: result.backupFile,
-    });
-  } catch (err) {
-    if (isPayloadTooLargeError(err)) return sendPayloadTooLarge(res, err);
-    return sendStateStoreError(res, err);
   }
 }
 
