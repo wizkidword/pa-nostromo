@@ -15,7 +15,7 @@ const { safeFetch } = require('./lib/safe-fetch.js');
 const { createWorkCoordinator } = require('./lib/work-coordinator.js');
 const { StateSchemaError } = require('./lib/state-schema.js');
 const { StateStore, StateStoreError } = require('./lib/state-store.js');
-const { createRequestId, createPublicErrorPayload, safeErrorCode, logDiagnostic } = require('./lib/observability.js');
+const { createRequestId, createPublicErrorPayload, safeErrorCode, createBoundedJsonlLogWriter, configureDiagnosticLogSink, logDiagnostic } = require('./lib/observability.js');
 
 const ROOT = __dirname;
 const PUBLIC_ROOT = path.join(ROOT, 'public');
@@ -57,10 +57,27 @@ const DATA_DIR = RUNTIME_STORAGE.dataDir;
 const LOG_DIR = RUNTIME_STORAGE.logDir;
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
 const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
+const LOG_ROTATION_MAX_BYTES = Math.max(64 * 1024, parsePositiveInt(process.env.LOG_ROTATION_MAX_BYTES, 1024 * 1024));
+const LOG_RETENTION_FILES = Math.max(2, parsePositiveInt(process.env.LOG_RETENTION_FILES, 5));
+const boundedLogWriters = new Map();
 
 function parsePositiveInt(value, fallback) {
   const num = Number(value);
   return Number.isFinite(num) && num > 0 ? Math.floor(num) : fallback;
+}
+
+function appendBoundedJsonLog(filePath, event) {
+  const resolvedPath = path.resolve(filePath);
+  let writer = boundedLogWriters.get(resolvedPath);
+  if (!writer) {
+    writer = createBoundedJsonlLogWriter({
+      filePath: resolvedPath,
+      maxBytes: LOG_ROTATION_MAX_BYTES,
+      maxFiles: LOG_RETENTION_FILES,
+    });
+    boundedLogWriters.set(resolvedPath, writer);
+  }
+  return writer.write(event);
 }
 
 const STATE_STORE = new StateStore({
@@ -436,10 +453,7 @@ async function loadFacebookFollowersState(){
 }
 
 async function appendFacebookFollowersLog(event){
-  try {
-    await fsp.mkdir(path.dirname(FACEBOOK_FOLLOWERS_LOG_PATH), { recursive: true });
-    await fsp.appendFile(FACEBOOK_FOLLOWERS_LOG_PATH, JSON.stringify(event) + '\n', 'utf8');
-  } catch {}
+  await appendBoundedJsonLog(FACEBOOK_FOLLOWERS_LOG_PATH, event);
 }
 
 function ensureFacebookGroupMembersShape(input){
@@ -493,10 +507,7 @@ async function loadFacebookGroupMembersState(){
 }
 
 async function appendFacebookGroupMembersLog(event){
-  try {
-    await fsp.mkdir(path.dirname(FACEBOOK_GROUP_MEMBERS_LOG_PATH), { recursive: true });
-    await fsp.appendFile(FACEBOOK_GROUP_MEMBERS_LOG_PATH, JSON.stringify(event) + '\n', 'utf8');
-  } catch {}
+  await appendBoundedJsonLog(FACEBOOK_GROUP_MEMBERS_LOG_PATH, event);
 }
 
 function getFacebookReasonCode(status, errorMessage){
@@ -4548,10 +4559,7 @@ async function loadInstagramFollowersState(){
 }
 
 async function appendInstagramFollowersLog(event){
-  try {
-    await fsp.mkdir(path.dirname(INSTAGRAM_FOLLOWERS_LOG_PATH), { recursive: true });
-    await fsp.appendFile(INSTAGRAM_FOLLOWERS_LOG_PATH, JSON.stringify(event) + '\n', 'utf8');
-  } catch {}
+  await appendBoundedJsonLog(INSTAGRAM_FOLLOWERS_LOG_PATH, event);
 }
 
 function instagramFollowerResponsePayload(opts = {}){
@@ -4933,10 +4941,7 @@ async function loadTikTokFollowersState(){
 }
 
 async function appendTikTokFollowersLog(event){
-  try {
-    await fsp.mkdir(path.dirname(TIKTOK_FOLLOWERS_LOG_PATH), { recursive: true });
-    await fsp.appendFile(TIKTOK_FOLLOWERS_LOG_PATH, JSON.stringify(event) + '\n', 'utf8');
-  } catch {}
+  await appendBoundedJsonLog(TIKTOK_FOLLOWERS_LOG_PATH, event);
 }
 
 function tiktokFollowerResponsePayload(opts = {}){
@@ -5129,10 +5134,7 @@ async function loadYoutubeSubscribersState(){
 }
 
 async function appendYoutubeSubscribersLog(event){
-  try {
-    await fsp.mkdir(path.dirname(YOUTUBE_SUBSCRIBERS_LOG_PATH), { recursive: true });
-    await fsp.appendFile(YOUTUBE_SUBSCRIBERS_LOG_PATH, JSON.stringify(event) + '\n', 'utf8');
-  } catch {}
+  await appendBoundedJsonLog(YOUTUBE_SUBSCRIBERS_LOG_PATH, event);
 }
 
 function calculateSubscriberDelta(history = [], latestCount = null){
@@ -7238,6 +7240,11 @@ if (require.main === module) {
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
   void (async () => {
+    configureDiagnosticLogSink({
+      filePath: path.join(LOG_DIR, 'server-diagnostics.jsonl'),
+      maxBytes: LOG_ROTATION_MAX_BYTES,
+      maxFiles: LOG_RETENTION_FILES,
+    });
     const migrationResults = await ensureRuntimeStorageReady();
     for (const result of migrationResults) {
       if (result.status === 'migrated') console.log(`Private ${result.label} storage migration verified; legacy files were preserved.`);
@@ -7262,6 +7269,7 @@ if (require.main === module) {
     server.listen(PORT, HOST, () => {
       console.log(`Mission Control running on http://${HOST}:${PORT}`);
       console.log(`Private runtime storage: configured (retain latest ${BACKUP_RETENTION} state backups)`);
+      console.log(`Operational logs: rotate at ${LOG_ROTATION_MAX_BYTES} bytes; retain ${LOG_RETENTION_FILES} files per log`);
       console.log(`State API: enabled (${STATE_API_ALLOW_REMOTE ? 'remote token required' : 'local only'})`);
       console.log(`Voice-to-Rowan relay: ${ROWAN_RELAY_URL ? 'configured' : 'not configured'} (${ROWAN_ALLOW_REMOTE ? 'remote enabled' : 'local only'})`);
       console.log(`Camera snapshot proxy: enabled (${CAMERA_PROXY_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; allowlist entries: ${CAMERA_PROXY_ALLOWLIST.length})`);
