@@ -30,6 +30,7 @@ The browser application is being migrated incrementally from the legacy `public/
 | Crypto Tracker state | `public/app/features/crypto-state.js` | Saved watchlist and holdings normalization plus provider-failover ordering. |
 | Date & Time | `public/app/pods/date-time.pod.js` | Time display rendering, timezone presentation, and alarm-status refresh. |
 | Calendar | `public/app/pods/calendar.pod.js` | Month-grid rendering, selected-date handling, and reminder-date indicators. |
+| Weather | `public/app/pods/weather.pod.js` | Current-condition and forecast display plus cached-result status presentation. |
 
 `public/app.js` remains the composition layer for the migration. It supplies the current application state, logging, persistence callback, and settings rerender callback to a feature controller rather than duplicating the feature's behavior.
 
@@ -43,4 +44,4 @@ The browser application is being migrated incrementally from the legacy `public/
 
 ## Next Candidates
 
-Date & Time and Calendar now own their rendering. Unread Email, eBay Traffic, Social Followers, NBA Scores, Gas Prices, Everyday Calculator, System Monitor, Speed Test, Home Device Controls, Camera Feed, Live Streams, Music Player, RSS, Utility Layout, Settings, and Crypto Tracker are being decomposed incrementally: their state rules live in focused browser modules, while rendering and network actions remain in `public/app.js` for later packages. Other integrations remain in `public/app.js`; extract each feature one view at a time, then move related state helpers and selectors only after behavior is verified.
+Date & Time, Calendar, and Weather now own their rendering. Unread Email, eBay Traffic, Social Followers, NBA Scores, Gas Prices, Everyday Calculator, System Monitor, Speed Test, Home Device Controls, Camera Feed, Live Streams, Music Player, RSS, Utility Layout, Settings, and Crypto Tracker are being decomposed incrementally: their state rules live in focused browser modules, while rendering and network actions remain in `public/app.js` for later packages. Other integrations remain in `public/app.js`; extract each feature one view at a time, then move related state helpers and selectors only after behavior is verified.
