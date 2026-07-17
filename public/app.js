@@ -135,6 +135,8 @@ const settingsStateFeature = window.MissionControlModules?.settingsState;
 if (!settingsStateFeature) throw new Error('Settings state feature failed to load.');
 const productProfilesFeature = window.MissionControlModules?.productProfiles;
 if (!productProfilesFeature) throw new Error('Product Profiles feature failed to load.');
+const sourceReferenceFeature = window.MissionControlModules?.sourceReference;
+if (!sourceReferenceFeature) throw new Error('Source reference feature failed to load.');
 const cryptoStateFeature = window.MissionControlModules?.cryptoState;
 if (!cryptoStateFeature) throw new Error('Crypto state feature failed to load.');
 const integrationHealthFeature = window.MissionControlModules?.integrationHealth;
@@ -851,6 +853,7 @@ const notesController = notesFeature.createNotesController({
   renderFormattedText,
   markdownToolbarButtons,
   bindMarkdownToolbar,
+  sourceReferenceLabel: sourceReferenceFeature.sourceLabel,
   save: () => commitNotesFeature('note_draft_updated', { render: false }),
   commitState: (reason) => commitNotesFeature(reason),
   deleteWithUndo,
@@ -867,6 +870,7 @@ const remindersController = remindersFeature.createRemindersController({
   escapeText,
   escapeHtml,
   escapeAttribute,
+  sourceReferenceLabel: sourceReferenceFeature.sourceLabel,
   commitState: (reason) => commitRemindersFeature(reason),
   deleteWithUndo,
 });
@@ -883,6 +887,7 @@ const tasksController = tasksFeature.createTasksController({
   markdownToolbarButtons,
   bindMarkdownToolbar,
   projectName: (projectId) => projectsController.projectName(projectId),
+  sourceReferenceLabel: sourceReferenceFeature.sourceLabel,
   commitState: (reason) => commitTasksFeature(reason),
   deleteWithUndo,
   logChange,
@@ -979,6 +984,17 @@ function normalizeSettingsState(input){
   return settings;
 }
 
+function normalizeStoredSourceReference(value){
+  return sourceReferenceFeature.normalizeSourceReference(value);
+}
+
+function withNormalizedSourceReference(record){
+  if (!record || typeof record !== 'object') return record;
+  const { sourceRef, ...rest } = record;
+  const normalized = normalizeStoredSourceReference(sourceRef);
+  return normalized ? { ...rest, sourceRef: normalized } : rest;
+}
+
 function getActiveProductProfileId(){
   return productProfilesFeature.normalizeProfileId(state?.settings?.productProfile);
 }
@@ -1049,16 +1065,16 @@ function load(){
     legacy.lastUpdated = now();
   }
   state.notes = Array.isArray(state.notes) ? state.notes : [];
-  state.notes = state.notes.map((n)=>({ pinned: !!n.pinned, ...n }));
+  state.notes = state.notes.map((n)=>withNormalizedSourceReference({ pinned: !!n.pinned, ...n }));
   state.ideas = Array.isArray(state.ideas) ? state.ideas : [];
-  state.reminders = Array.isArray(state.reminders) ? state.reminders : [];
+  state.reminders = Array.isArray(state.reminders) ? state.reminders.map(withNormalizedSourceReference) : [];
   state.todayFocus = todayFocusFeature.normalizeFocusState(state.todayFocus);
   state.settings = normalizeSettingsState(state.settings);
   const migratedIdeasTaskCount = migrateIdeasTasksToNotes(state);
   if (migratedIdeasTaskCount > 0) {
     ensureChangelogPatch(state, `Cleanup: migrated ${migratedIdeasTaskCount} idea task${migratedIdeasTaskCount === 1 ? '' : 's'} into Ideas notes and removed Kanban ideas column usage.`);
   }
-  state.tasks = state.tasks.map((task) => ({
+  state.tasks = state.tasks.map((task) => withNormalizedSourceReference({
     ...task,
     column: normalizeTaskColumn(task?.column),
   }));
@@ -1973,6 +1989,121 @@ function renderCalendarRemindersPanel(){
 
 function renderTodayReminders(){
   return remindersController.renderToday();
+}
+
+const SIGNAL_ACTION_LABELS = Object.freeze({ task: 'Create task', note: 'Create note', reminder: 'Create reminder' });
+let pendingSignalAction = null;
+
+function signalActionProjectOptions(selectedProjectId = ''){
+  const projects = state.projects.filter((project) => String(project?.id || '').trim());
+  if (!projects.length) return '<option value="">No projects available</option>';
+  const defaultProjectId = selectedProjectId || projects.find((project) => project.status !== 'paused')?.id || projects[0]?.id || '';
+  return projects.map((project) => `<option value="${escapeAttribute(project.id)}" ${project.id === defaultProjectId ? 'selected' : ''}>${escapeHtml(project.name || 'Untitled project')}</option>`).join('');
+}
+
+function openSignalActionDialog({ action, sourceRef, projectId = '' } = {}){
+  const validAction = SIGNAL_ACTION_LABELS[action] ? action : '';
+  const normalizedSourceRef = normalizeStoredSourceReference(sourceRef);
+  const dialog = document.getElementById('signalActionDialog');
+  const title = document.getElementById('signalActionDialogTitle');
+  const source = document.getElementById('signalActionSource');
+  const project = document.getElementById('signalActionProject');
+  const createButton = document.getElementById('signalActionCreateBtn');
+  if (!validAction || !normalizedSourceRef || !dialog || !title || !source || !project || !createButton) return false;
+
+  pendingSignalAction = { action: validAction, sourceRef: normalizedSourceRef };
+  title.textContent = SIGNAL_ACTION_LABELS[validAction];
+  source.textContent = sourceReferenceFeature.sourceLabel(normalizedSourceRef);
+  project.innerHTML = signalActionProjectOptions(projectId);
+  createButton.textContent = SIGNAL_ACTION_LABELS[validAction];
+  createButton.disabled = !state.projects.length;
+  if (!dialog.open) dialog.showModal();
+  requestAnimationFrame(() => project.focus({ preventScroll: true }));
+  return true;
+}
+
+function createSignalAction({ action, sourceRef, projectId } = {}){
+  const normalizedSourceRef = normalizeStoredSourceReference(sourceRef);
+  const validAction = SIGNAL_ACTION_LABELS[action] ? action : '';
+  const project = state.projects.find((item) => item.id === projectId) || state.projects[0] || null;
+  if (!normalizedSourceRef || !validAction || !project) return null;
+  const sourceLabel = sourceReferenceFeature.TYPE_LABELS[normalizedSourceRef.type] || 'signal';
+
+  if (validAction === 'task') {
+    const result = tasksFeature.createTask({
+      tasks: state.tasks,
+      id,
+      now,
+      defaultColumn: state.settings.defaultTaskColumn,
+      values: {
+        title: sourceReferenceFeature.actionTitle(normalizedSourceRef, 'task'),
+        projectId: project.id,
+        owner: 'Rowan',
+        nextAction: `Review the linked ${sourceLabel.toLowerCase()} and choose the next step.`,
+      },
+    });
+    if (!result.created) return null;
+    result.task.sourceRef = normalizedSourceRef;
+    commitTasksFeature('signal_task_created');
+    return result.task;
+  }
+
+  if (validAction === 'note') {
+    const note = notesFeature.createNote({ notes: state.notes, id, now, defaultProjectId: project.id });
+    note.title = sourceReferenceFeature.actionTitle(normalizedSourceRef, 'note');
+    note.body = normalizedSourceRef.url ? `Source: ${normalizedSourceRef.url}` : `Source: ${sourceLabel}`;
+    note.sourceRef = normalizedSourceRef;
+    note.updatedAt = now();
+    commitNotesFeature('signal_note_created');
+    return note;
+  }
+
+  const result = remindersFeature.createReminder({
+    reminders: state.reminders,
+    id,
+    now,
+    values: { date: dateKey(new Date()), text: sourceReferenceFeature.actionTitle(normalizedSourceRef, 'reminder') },
+  });
+  if (!result.created) return null;
+  result.reminder.projectId = project.id;
+  result.reminder.sourceRef = normalizedSourceRef;
+  commitRemindersFeature('signal_reminder_created');
+  return result.reminder;
+}
+
+function bindSignalActionDialog(){
+  const dialog = document.getElementById('signalActionDialog');
+  const form = document.getElementById('signalActionForm');
+  const project = document.getElementById('signalActionProject');
+  const cancel = document.getElementById('signalActionCancelBtn');
+  if (!dialog || !form || !project || !cancel || dialog.dataset.bound === '1') return;
+  dialog.dataset.bound = '1';
+  cancel.addEventListener('click', () => {
+    pendingSignalAction = null;
+    dialog.close();
+  });
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const pending = pendingSignalAction;
+    const created = createSignalAction({ ...pending, projectId: String(project.value || '') });
+    if (!created) return;
+    const label = pending?.action === 'note' ? 'note' : pending?.action === 'reminder' ? 'reminder' : 'task';
+    pendingSignalAction = null;
+    dialog.close();
+    announceStatus(`Created ${label} from ${sourceReferenceFeature.TYPE_LABELS[created.sourceRef?.type] || 'signal'}.`, { key: `signal-action:${created.id}` });
+  });
+  document.addEventListener('click', (event) => {
+    const trigger = getEventClosestTarget(event, '[data-signal-action]');
+    if (!trigger || trigger.disabled) return;
+    const sourceRef = {
+      type: trigger.dataset.signalType,
+      externalId: trigger.dataset.signalExternalId,
+      title: trigger.dataset.signalTitle,
+      url: trigger.dataset.signalUrl,
+    };
+    if (!openSignalActionDialog({ action: trigger.dataset.signalAction, sourceRef, projectId: trigger.dataset.signalProjectId })) return;
+    event.preventDefault();
+  });
 }
 
 function getTodayFocusView(){
@@ -4272,6 +4403,7 @@ function formatFacebookFollowerSourceLabel(source){
 
 function renderSocialFollowersTile(config){
   const {
+    key,
     kind,
     forceRollingLabels,
     icon,
@@ -4289,6 +4421,7 @@ function renderSocialFollowersTile(config){
     analyticsKey,
     setupRequired,
     lastError,
+    isAnomaly,
   } = config;
   const stale = String(staleLevel || 'critical');
   const tone = stale === 'fresh' ? 'fresh' : (stale === 'stale' ? 'stale' : 'issue');
@@ -4309,12 +4442,15 @@ function renderSocialFollowersTile(config){
   const analyticsButton = analyticsKey
     ? `<button class="social-followers-analytics-btn" type="button" data-social-analytics-open="${escapeHtml(String(analyticsKey))}">Analytics</button>`
     : '';
+  const anomalyAction = isAnomaly
+    ? `<button class="btn ghost signal-action-btn" type="button" data-signal-action="reminder" data-signal-type="social" data-signal-external-id="${escapeAttribute(String(key || label || 'social'))}" data-signal-title="${escapeAttribute(`${label} audience needs review`)}" data-signal-url="${escapeAttribute(safeExternalUrl(String(href || '')) || '')}">Create reminder</button>`
+    : '';
 
   if (setupRequired && !hasFollowerMetricValue(count)) {
     return `<article class="social-followers-tile social-followers-tile--${tone}">
       <div class="social-followers-tile-head">
         <div class="social-followers-tile-title"><span>${icon}</span><span>${escapeHtml(label)}</span></div>
-        <div class="social-followers-tile-actions">${analyticsButton}<span class="badge social-followers-tile-badge social-followers-tile-badge--${tone}">${statusLabel}</span></div>
+        <div class="social-followers-tile-actions">${analyticsButton}${anomalyAction}<span class="badge social-followers-tile-badge social-followers-tile-badge--${tone}">${statusLabel}</span></div>
       </div>
       <div class="note-meta">Setup required for ${escapeHtml(label.toLowerCase())} tracking.</div>
       ${lastError ? `<div class="note-meta mt6">${escapeHtml(lastError)}</div>` : ''}
@@ -4326,7 +4462,7 @@ function renderSocialFollowersTile(config){
     return `<article class="social-followers-tile social-followers-tile--${tone}">
       <div class="social-followers-tile-head">
         <div class="social-followers-tile-title"><span>${icon}</span><span>${escapeHtml(label)}</span></div>
-        <div class="social-followers-tile-actions">${analyticsButton}<span class="badge social-followers-tile-badge social-followers-tile-badge--${tone}">${statusLabel}</span></div>
+        <div class="social-followers-tile-actions">${analyticsButton}${anomalyAction}<span class="badge social-followers-tile-badge social-followers-tile-badge--${tone}">${statusLabel}</span></div>
       </div>
       <div class="social-followers-tile-subtitle">${escapeHtml(audienceLabel)}</div>
       <div class="social-followers-tile-count social-followers-tile-count--label">Blast From the Ads</div>
@@ -4338,7 +4474,7 @@ function renderSocialFollowersTile(config){
   return `<article class="social-followers-tile social-followers-tile--${tone}">
     <div class="social-followers-tile-head">
       <div class="social-followers-tile-title"><span>${icon}</span><span>${escapeHtml(label)}</span></div>
-      <div class="social-followers-tile-actions">${analyticsButton}<span class="badge social-followers-tile-badge social-followers-tile-badge--${tone}">${statusLabel}</span></div>
+      <div class="social-followers-tile-actions">${analyticsButton}${anomalyAction}<span class="badge social-followers-tile-badge social-followers-tile-badge--${tone}">${statusLabel}</span></div>
     </div>
     <div class="social-followers-tile-subtitle">${escapeHtml(audienceLabel)}</div>
     <div class="social-followers-tile-count">${countText}</div>
@@ -4355,6 +4491,12 @@ function renderSocialFollowersTile(config){
     </div>
     <div class="social-followers-tile-meta">${escapeText(identityLabel || 'Unknown')} <span class="badge">${escapeText(source || 'fallback')}</span>${safeExternalUrl(String(href || '')) ? ` <a class="social-followers-link" href="${escapeAttribute(safeExternalUrl(String(href || '')))}" target="_blank" rel="noopener noreferrer">Open</a>` : ''}</div>
   </article>`;
+}
+
+function hasSocialSignalAnomaly({ staleLevel, delta, rollingDelta1h, rollingDelta24h, lastError } = {}){
+  if (String(staleLevel || '').toLowerCase() !== 'fresh') return true;
+  if (String(lastError || '').trim()) return true;
+  return [delta, rollingDelta1h, rollingDelta24h].some((value) => Number.isFinite(Number(value)) && Number(value) < 0);
 }
 
 function renderSocialFollowersPod(options = {}){
@@ -4392,6 +4534,7 @@ function renderSocialFollowersPod(options = {}){
         identityLabel: facebook.pageName || facebook.pageId || 'Facebook',
         analyticsKey: 'facebook',
         lastError: facebook.lastError,
+        isAnomaly: hasSocialSignalAnomaly({ staleLevel: facebook.staleLevel, delta: facebook.delta, rollingDelta1h: facebook.rollingDelta1h, rollingDelta24h: facebook.rollingDelta24h, lastError: facebook.lastError }),
       },
       {
         key: 'instagram',
@@ -4408,6 +4551,7 @@ function renderSocialFollowersPod(options = {}){
         identityLabel: instagram.profileName || (instagram.profileHandle ? `@${instagram.profileHandle}` : 'Instagram'),
         analyticsKey: 'instagram',
         lastError: instagram.lastError,
+        isAnomaly: hasSocialSignalAnomaly({ staleLevel: instagram.staleLevel, delta: instagram.delta, rollingDelta1h: instagram.rollingDelta1h, rollingDelta24h: instagram.rollingDelta24h, lastError: instagram.lastError }),
       },
       {
         key: 'tiktok',
@@ -4426,6 +4570,7 @@ function renderSocialFollowersPod(options = {}){
         analyticsKey: 'tiktok',
         setupRequired: !!tiktok.setupRequired,
         lastError: tiktok.lastError,
+        isAnomaly: hasSocialSignalAnomaly({ staleLevel: tiktok.staleLevel, delta: tiktok.delta, rollingDelta1h: tiktok.rollingDelta1h, rollingDelta24h: tiktok.rollingDelta24h, lastError: tiktok.lastError }),
       },
       {
         key: 'community',
@@ -4446,6 +4591,7 @@ function renderSocialFollowersPod(options = {}){
         analyticsKey: 'community',
         setupRequired: !!community.setupRequired,
         lastError: community.lastError,
+        isAnomaly: hasSocialSignalAnomaly({ staleLevel: community.staleLevel, delta: community.delta, rollingDelta1h: community.rollingDelta1h, rollingDelta24h: community.rollingDelta24h, lastError: community.lastError }),
       },
     ];
 
@@ -5432,6 +5578,7 @@ function renderEbayTrafficTopListings(store){
             ${activeView === 'watchers' ? '<th>Views</th>' : '<th>Store</th>'}
             <th>Sales</th>
             <th>Conv.</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -5452,6 +5599,7 @@ function renderEbayTrafficTopListings(store){
               <td>${escapeHtml(activeView === 'watchers' ? formatEbayTrafficNumber(entry?.views || 0) : formatEbayTrafficNumber(entry?.storeImpressions || 0))}</td>
               <td>${escapeHtml(formatEbayTrafficNumber(entry?.transactions || 0))}</td>
               <td>${escapeHtml(formatEbayTrafficPercent(entry?.salesConversionRate))}</td>
+              <td><button class="btn ghost signal-action-btn" type="button" data-signal-action="task" data-signal-type="ebay" data-signal-external-id="${escapeAttribute(String(entry?.listingId || ''))}" data-signal-title="${escapeAttribute(String(entry?.title || 'Untitled eBay listing'))}" data-signal-url="${escapeAttribute(safeExternalUrl(buildEbayListingUrl(entry?.listingId, store?.marketplaceId || 'EBAY_US')) || '')}">Create task</button></td>
             </tr>
           `).join('')}
         </tbody>
@@ -6145,6 +6293,8 @@ function renderRssListFromState(){
           ${summary ? `<div class="rss-story-summary">${summary}</div>` : '<div class="rss-story-summary rss-story-summary-empty">Open the story for the full article.</div>'}
           <div class="rss-story-actions">
             ${isRead ? '<span class="rss-read-state">Read</span>' : `<button class="btn ghost rss-mark-read-btn" data-rss-read="${escapeAttribute(item.id)}" type="button">Mark read</button>`}
+            <button class="btn ghost signal-action-btn" type="button" data-signal-action="task" data-signal-type="rss" data-signal-external-id="${escapeAttribute(item.id)}" data-signal-title="${escapeAttribute(String(item.title || 'Untitled RSS item'))}" data-signal-url="${escapeAttribute(safeExternalUrl(item.link) || '')}">Create task</button>
+            <button class="btn ghost signal-action-btn" type="button" data-signal-action="note" data-signal-type="rss" data-signal-external-id="${escapeAttribute(item.id)}" data-signal-title="${escapeAttribute(String(item.title || 'Untitled RSS item'))}" data-signal-url="${escapeAttribute(safeExternalUrl(item.link) || '')}">Create note</button>
             <a class="btn rss-open-link-btn" href="${escapeAttribute(safeExternalUrl(item.link) || '#')}" target="_blank" rel="noopener noreferrer">Open story</a>
           </div>
         </article>
@@ -7089,6 +7239,17 @@ function renderUnreadEmailMessageCard({
                 data-unread-email-issued-at="${escapeHtml(String(entry?.issuedAt || ''))}"
                 ${anyActionInFlight ? 'disabled' : ''}
               >${isFocused ? 'Unfocus' : 'Focus'}</button>
+            ` : ''}
+            ${messageKey ? `
+              <button
+                class="btn ghost signal-action-btn"
+                type="button"
+                data-signal-action="task"
+                data-signal-type="email"
+                data-signal-external-id="${escapeHtml(`${activeAccountId}:${String(entry?.mailbox || '')}:${String(entry?.uid || '')}`)}"
+                data-signal-title="${escapeHtml(String(entry?.title || 'Untitled message'))}"
+                ${anyActionInFlight ? 'disabled' : ''}
+              >Create task</button>
             ` : ''}
             ${canSpam ? `
               <button
@@ -12847,6 +13008,7 @@ save('startup_patch_seed', { pushShared: false });
 loadApplicationVersion();
 setupSettingsSectionNav();
 setupSettingsPaneDragScroll();
+bindSignalActionDialog();
 registerDashboardSchedulerJobs();
 renderAll();
 startSystemMonitorPolling();

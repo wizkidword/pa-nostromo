@@ -147,6 +147,53 @@ try {
   assert.equal(conflictResult.conflictVisible, true);
   assert.equal(conflictResult.draftPreserved, true);
 
+  await page.evaluate(async () => {
+    state.settings.productProfile = 'custom';
+    state.settings.customProfilePodIds = ['rss-feed', 'unread-email', 'ebay-traffic', 'social-followers'];
+    ['rss-feed', 'unread-email', 'ebay-traffic', 'social-followers'].forEach((podId) => {
+      const card = document.querySelector(`[data-pod-id="${podId}"]`);
+      card?.classList.remove('is-hidden');
+      card?.setAttribute('aria-hidden', 'false');
+      if (card) card.inert = false;
+    });
+    state.rss = {
+      ...state.rss,
+      items: [{ id: 'rss-signal-1', title: 'RSS source action', link: 'https://example.test/rss-source-action', feedTitle: 'Signal Feed', publishedAt: new Date().toISOString() }],
+      readItemIds: [],
+    };
+    renderRssListFromState();
+    unreadEmailLastPayload = {
+      ok: true,
+      accounts: [{
+        id: 'account-signal', label: 'Signal inbox', account: 'signal@example.test', unreadCount: 1,
+        entries: [{ uid: '4242', mailbox: 'INBOX', title: 'Email source action', counterpartyName: 'Not retained', issuedAt: new Date().toISOString() }],
+      }],
+    };
+    renderUnreadEmailWidget(unreadEmailLastPayload);
+    renderEbayTrafficWidget({
+      ok: true,
+      stores: [{
+        id: 'store-signal', label: 'Signal Store', marketplaceId: 'EBAY_US', status: 'ok', summary: {}, dailySnapshot: { label: '2026-07-17', metrics: {} },
+        topListings: [{ listingId: 'listing-signal-1', title: 'eBay source action', views: 1, transactions: 0 }],
+      }],
+    });
+    state.facebookFollowers = { followersCount: 12, staleLevel: 'stale', pageName: 'Signal Page', delta: -1, source: 'fixture' };
+    await renderSocialFollowersPod({ skipFetch: true });
+  });
+
+  async function createSourceAction(locator, collection, type, externalId) {
+    await locator.click();
+    assert.equal(await page.locator('#signalActionDialog').evaluate((dialog) => dialog.open), true);
+    await page.locator('#signalActionProject').selectOption({ index: 0 });
+    await page.locator('#signalActionCreateBtn').click();
+    await page.waitForFunction(({ collection, type, externalId }) => state[collection].some((item) => item.sourceRef?.type === type && item.sourceRef?.externalId === externalId), { collection, type, externalId });
+  }
+
+  await createSourceAction(page.locator('[data-signal-type="rss"][data-signal-action="note"]').first(), 'notes', 'rss', 'rss-signal-1');
+  await createSourceAction(page.locator('[data-signal-type="email"][data-signal-external-id="account-signal:INBOX:4242"]'), 'tasks', 'email', 'account-signal:INBOX:4242');
+  await createSourceAction(page.locator('[data-signal-type="ebay"][data-signal-action="task"]').first(), 'tasks', 'ebay', 'listing-signal-1');
+  await createSourceAction(page.locator('[data-signal-type="social"][data-signal-action="reminder"]').first(), 'reminders', 'social', 'facebook');
+
   const hostileContentResult = await page.evaluate(async () => {
     window.__nostromoStoredXss = 0;
     const payload = '<img src=x onerror="window.__nostromoStoredXss=1">';

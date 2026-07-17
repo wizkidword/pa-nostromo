@@ -53,6 +53,7 @@
     escapeText,
     escapeHtml,
     escapeAttribute,
+    sourceReferenceLabel = () => '',
     commitState,
     deleteWithUndo,
   }) {
@@ -125,6 +126,7 @@
           <div class="calendar-reminder-copy">
             <div class="calendar-reminder-time">${escapeText(reminder.time || 'Anytime')}</div>
             <div class="calendar-reminder-text">${escapeHtml(reminder.text)}</div>
+            ${sourceReferenceLabel(reminder.sourceRef) ? `<div class="note-meta">Source: ${escapeText(sourceReferenceLabel(reminder.sourceRef))}</div>` : ''}
           </div>
           <button class="btn note-delete calendar-reminder-delete" data-rem-del="${escapeAttribute(reminder.id)}" type="button">Delete</button>
         </div>
@@ -152,7 +154,7 @@
         return;
       }
       container.innerHTML = items
-        .map((reminder) => `<div class="change-log-item"><strong>${escapeText(reminder.time || 'Anytime')}</strong> — ${escapeHtml(reminder.text)}</div>`)
+        .map((reminder) => `<div class="change-log-item"><strong>${escapeText(reminder.time || 'Anytime')}</strong> — ${escapeHtml(reminder.text)}${sourceReferenceLabel(reminder.sourceRef) ? ` <span class="note-meta">(${escapeText(sourceReferenceLabel(reminder.sourceRef))})</span>` : ''}</div>`)
         .join('');
     }
 

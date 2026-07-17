@@ -81,6 +81,7 @@
     renderFormattedText,
     markdownToolbarButtons,
     bindMarkdownToolbar,
+    sourceReferenceLabel = () => '',
     save,
     commitState,
     deleteWithUndo,
@@ -99,12 +100,14 @@
       const options = projects
         .map((project) => `<option value="${escapeAttribute(project.id)}" ${project.id === note.projectId ? 'selected' : ''}>${escapeText(project.name)}</option>`)
         .join('');
+      const sourceLabel = sourceReferenceLabel(note.sourceRef);
       return `<div class="note-card ${note.pinned ? 'pinned' : ''}" data-note-id="${escapeAttribute(note.id)}">
         <div class="note-top">
           <strong>${escapeText(note.title || 'Quick Note')}</strong>
           <span class="note-meta">${new Date(note.updatedAt).toLocaleString()}</span>
         </div>
         <input data-field="title" value="${escapeHtml(note.title || '')}" placeholder="Note title" />
+        ${sourceLabel ? `<div class="note-meta">Source: ${escapeText(sourceLabel)}</div>` : ''}
         <div class="md-toolbar" data-editor-toolbar>
           ${markdownToolbarButtons()}
         </div>

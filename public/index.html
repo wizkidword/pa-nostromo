@@ -577,6 +577,21 @@
     <div id="commandPaletteResults" class="command-palette-results" role="listbox" aria-label="Search results"></div>
     <p class="command-palette-help">↑ ↓ to choose · Enter to open · Esc to close</p>
   </dialog>
+
+  <dialog id="signalActionDialog" aria-labelledby="signalActionDialogTitle">
+    <form method="dialog" id="signalActionForm" class="signal-action-form">
+      <h3 id="signalActionDialogTitle">Create action</h3>
+      <p id="signalActionSource" class="note-meta"></p>
+      <label>Attach to project
+        <select id="signalActionProject" required></select>
+      </label>
+      <p id="signalActionPrivacy" class="note-meta">Only the source title and safe link reference are saved. Email bodies and sender details are not copied.</p>
+      <menu>
+        <button id="signalActionCancelBtn" type="button" class="btn ghost">Cancel</button>
+        <button id="signalActionCreateBtn" value="default" class="btn primary">Create task</button>
+      </menu>
+    </form>
+  </dialog>
   <script src="app/core/safe-ui.js"></script>
   <script src="app/core/contract.js"></script>
   <script src="app/core/debug.js"></script>
@@ -591,6 +606,7 @@
   <script src="app/features/theme.js"></script>
   <script src="app/features/settings-state.js"></script>
   <script src="app/features/product-profiles.js"></script>
+  <script src="app/features/source-reference.js"></script>
   <script src="app/features/crypto-state.js"></script>
   <script src="app/features/projects.js"></script>
   <script src="app/features/notes.js"></script>

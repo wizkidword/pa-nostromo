@@ -87,6 +87,7 @@
     markdownToolbarButtons,
     bindMarkdownToolbar,
     projectName,
+    sourceReferenceLabel = () => '',
     commitState,
     deleteWithUndo,
     logChange = () => {},
@@ -124,6 +125,8 @@
       if (task.blockerType) {
         chips.push(`<span class="chip ${escapeAttribute(task.blockerType)}">${escapeText(titleCase(task.blockerType))}</span>`);
       }
+      const sourceLabel = sourceReferenceLabel(task.sourceRef);
+      if (sourceLabel) chips.push(`<span class="chip">${escapeText(sourceLabel)}</span>`);
       return `<div class="task" draggable="true" data-id="${escapeAttribute(task.id)}">
         <div class="task-top-row">
           <strong>${escapeHtml(task.title)}</strong>
