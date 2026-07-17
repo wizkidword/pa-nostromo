@@ -132,159 +132,16 @@ const DEFAULT_SETTINGS = {
   defaultTaskColumn: 'inbox',
 };
 
-const MERGED_SOCIAL_FOLLOWERS_POD_ID = 'social-followers';
-const LEGACY_SOCIAL_FOLLOWERS_POD_IDS = [
-  'facebook-followers',
-  'instagram-followers',
-  'tiktok-followers',
-  'youtube-subscribers',
-];
-const MERGED_VOICE_POD_ID = 'voice-desk';
-const LEGACY_VOICE_POD_IDS = [
-  'voice-note',
-  'voice-to-rowan',
-];
-
-const DEFAULT_UTILITY_LAYOUT_ROWS = [
-  ['shortcuts'],
-  ['date-time', 'calendar', 'gas-prices'],
-  ['nba-scores', 'crypto-tracker', MERGED_SOCIAL_FOLLOWERS_POD_ID, 'ebay-traffic', 'speed-test', 'rss-feed', 'unread-email', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'],
-  ['camera-feed', 'live-streams'],
-  [MERGED_VOICE_POD_ID, 'music-player'],
-];
+const layoutStateFeature = window.MissionControlModules?.layout;
+if (!layoutStateFeature) throw new Error('Utility Layout state feature failed to load.');
+const { mergedSocialFollowersPodId: MERGED_SOCIAL_FOLLOWERS_POD_ID, mergedVoicePodId: MERGED_VOICE_POD_ID } = layoutStateFeature;
 
 function createDefaultUtilityLayoutState(){
-  return {
-    utilityRows: DEFAULT_UTILITY_LAYOUT_ROWS.map((row) => [...row]),
-    visibility: Object.fromEntries(DEFAULT_UTILITY_LAYOUT_ROWS.flat().map((podId) => [podId, true])),
-  };
+  return layoutStateFeature.createDefaultLayoutState();
 }
 
 function normalizeUtilityLayoutState(layoutInput, knownPodIds = []){
-  const defaults = createDefaultUtilityLayoutState();
-  const fallbackRows = defaults.utilityRows;
-  const fallbackIds = fallbackRows.flat();
-  const allKnown = [...new Set([
-    ...fallbackIds,
-    ...LEGACY_SOCIAL_FOLLOWERS_POD_IDS,
-    ...LEGACY_VOICE_POD_IDS,
-    ...knownPodIds.map((v) => String(v || '').trim()).filter(Boolean),
-  ])];
-  const allowed = new Set(allKnown);
-  const incomingRows = Array.isArray(layoutInput?.utilityRows) ? layoutInput.utilityRows : fallbackRows;
-  const seen = new Set();
-  const rows = incomingRows
-    .map((row) => Array.isArray(row) ? row.map((v) => String(v || '').trim()).filter(Boolean) : [])
-    .map((row) => row.filter((podId) => {
-      if (!allowed.has(podId)) return false;
-      if (seen.has(podId)) return false;
-      seen.add(podId);
-      return true;
-    }))
-    .filter((row) => row.length > 0);
-
-  const missing = allKnown.filter((podId) => !seen.has(podId));
-  if (!rows.length) rows.push([...fallbackRows[0]]);
-  if (missing.length) {
-    const pending = new Set(missing);
-    for (const baseRow of fallbackRows) {
-      const targets = baseRow.filter((podId) => pending.has(podId));
-      if (!targets.length) continue;
-      const rowIndex = rows.findIndex((row) => row.some((id) => baseRow.includes(id)));
-      if (rowIndex >= 0) {
-        rows[rowIndex].push(...targets);
-      } else {
-        rows.push([...targets]);
-      }
-      for (const podId of targets) pending.delete(podId);
-    }
-    if (pending.size) rows.push([...pending]);
-  }
-
-  // Migration: early gas-prices builds could append this pod as a lone tail row.
-  // Move it into row 2 (with date-time/calendar) unless user already placed it there.
-  const gasPodId = 'gas-prices';
-  const gasRowIndex = rows.findIndex((row) => row.includes(gasPodId));
-  const dateRowIndex = rows.findIndex((row) => row.includes('date-time') || row.includes('calendar'));
-  if (gasRowIndex >= 0 && dateRowIndex >= 0 && gasRowIndex !== dateRowIndex && !rows[dateRowIndex].includes(gasPodId)) {
-    rows[gasRowIndex] = rows[gasRowIndex].filter((podId) => podId !== gasPodId);
-    rows[dateRowIndex].push(gasPodId);
-  }
-
-  const mergedSocialIndex = rows.findIndex((row) => row.includes(MERGED_SOCIAL_FOLLOWERS_POD_ID));
-  let socialInsertRow = mergedSocialIndex;
-  let socialInsertIndex = mergedSocialIndex >= 0 ? rows[mergedSocialIndex].indexOf(MERGED_SOCIAL_FOLLOWERS_POD_ID) : -1;
-  if (socialInsertRow < 0) {
-    rows.some((row, rowIndex) => row.some((podId, podIndex) => {
-      if (!LEGACY_SOCIAL_FOLLOWERS_POD_IDS.includes(podId)) return false;
-      socialInsertRow = rowIndex;
-      socialInsertIndex = podIndex;
-      return true;
-    }));
-  }
-
-  rows.forEach((row, rowIndex) => {
-    rows[rowIndex] = row.filter((podId) => podId !== MERGED_SOCIAL_FOLLOWERS_POD_ID && !LEGACY_SOCIAL_FOLLOWERS_POD_IDS.includes(podId));
-  });
-
-  if (socialInsertRow < 0) {
-    socialInsertRow = fallbackRows.findIndex((row) => row.includes(MERGED_SOCIAL_FOLLOWERS_POD_ID));
-    socialInsertIndex = 0;
-  }
-  if (socialInsertRow < 0) socialInsertRow = Math.max(0, rows.length - 1);
-  while (rows.length <= socialInsertRow) rows.push([]);
-  const socialTargetRow = rows[socialInsertRow];
-  const socialTargetIndex = Number.isInteger(socialInsertIndex) ? Math.max(0, Math.min(socialInsertIndex, socialTargetRow.length)) : socialTargetRow.length;
-  socialTargetRow.splice(socialTargetIndex, 0, MERGED_SOCIAL_FOLLOWERS_POD_ID);
-
-  const mergedVoiceIndex = rows.findIndex((row) => row.includes(MERGED_VOICE_POD_ID));
-  let voiceInsertRow = mergedVoiceIndex;
-  let voiceInsertIndex = mergedVoiceIndex >= 0 ? rows[mergedVoiceIndex].indexOf(MERGED_VOICE_POD_ID) : -1;
-  if (voiceInsertRow < 0) {
-    rows.some((row, rowIndex) => row.some((podId, podIndex) => {
-      if (!LEGACY_VOICE_POD_IDS.includes(podId)) return false;
-      voiceInsertRow = rowIndex;
-      voiceInsertIndex = podIndex;
-      return true;
-    }));
-  }
-
-  rows.forEach((row, rowIndex) => {
-    rows[rowIndex] = row.filter((podId) => podId !== MERGED_VOICE_POD_ID && !LEGACY_VOICE_POD_IDS.includes(podId));
-  });
-
-  if (voiceInsertRow < 0) {
-    voiceInsertRow = fallbackRows.findIndex((row) => row.includes(MERGED_VOICE_POD_ID));
-    voiceInsertIndex = 0;
-  }
-  if (voiceInsertRow < 0) voiceInsertRow = Math.max(0, rows.length - 1);
-  while (rows.length <= voiceInsertRow) rows.push([]);
-  const voiceTargetRow = rows[voiceInsertRow];
-  const voiceTargetIndex = Number.isInteger(voiceInsertIndex) ? Math.max(0, Math.min(voiceInsertIndex, voiceTargetRow.length)) : voiceTargetRow.length;
-  voiceTargetRow.splice(voiceTargetIndex, 0, MERGED_VOICE_POD_ID);
-
-  for (let i = rows.length - 1; i >= 0; i -= 1) {
-    if (!rows[i].length) rows.splice(i, 1);
-  }
-
-  const visibilityInput = (layoutInput && typeof layoutInput.visibility === 'object' && layoutInput.visibility)
-    ? layoutInput.visibility
-    : {};
-  const visibility = {};
-  const rowIds = rows.flat();
-  for (const podId of rowIds) {
-    if (podId === MERGED_SOCIAL_FOLLOWERS_POD_ID) {
-      const legacyVisible = LEGACY_SOCIAL_FOLLOWERS_POD_IDS.some((legacyId) => visibilityInput[legacyId] !== false);
-      visibility[podId] = visibilityInput[podId] !== false && legacyVisible;
-    } else if (podId === MERGED_VOICE_POD_ID) {
-      const legacyVisible = LEGACY_VOICE_POD_IDS.some((legacyId) => visibilityInput[legacyId] !== false);
-      visibility[podId] = visibilityInput[podId] !== false && legacyVisible;
-    } else {
-      visibility[podId] = visibilityInput[podId] !== false;
-    }
-  }
-
-  return { utilityRows: rows, visibility };
+  return layoutStateFeature.normalizeLayoutState(layoutInput, knownPodIds);
 }
 
 function normalizeGasPricesState(input){
