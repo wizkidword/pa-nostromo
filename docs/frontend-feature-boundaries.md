@@ -21,6 +21,7 @@ The browser application is being migrated incrementally from the legacy `public/
 | System Monitor state | `public/app/features/system-monitor-state.js` | Allowlist normalization and presets, load-severity classification, and system rate/uptime formatting. |
 | Speed Test state | `public/app/features/speed-test-state.js` | Saved history and threshold normalization, warning decisions, latest-run selection, and metric formatting. |
 | Home Device Controls state | `public/app/features/home-device-state.js` | Saved device normalization, tag and MAC formatting, and available-action decisions. |
+| Camera Feed state | `public/app/features/camera-feed-state.js` | Saved feed normalization, source and mode labels, and display-state decisions. |
 
 `public/app.js` remains the composition layer for the migration. It supplies the current application state, logging, persistence callback, and settings rerender callback to a feature controller rather than duplicating the feature's behavior.
 
@@ -34,4 +35,4 @@ The browser application is being migrated incrementally from the legacy `public/
 
 ## Next Candidates
 
-Unread Email, eBay Traffic, Social Followers, NBA Scores, Gas Prices, Everyday Calculator, System Monitor, Speed Test, and Home Device Controls are now being decomposed incrementally: their state rules live in feature modules, while rendering and network actions remain in `public/app.js` for later packages. Other integrations remain in `public/app.js`; extract each feature one view at a time, then move related state helpers and selectors only after behavior is verified.
+Unread Email, eBay Traffic, Social Followers, NBA Scores, Gas Prices, Everyday Calculator, System Monitor, Speed Test, Home Device Controls, and Camera Feed are now being decomposed incrementally: their state rules live in feature modules, while rendering and network actions remain in `public/app.js` for later packages. Other integrations remain in `public/app.js`; extract each feature one view at a time, then move related state helpers and selectors only after behavior is verified.

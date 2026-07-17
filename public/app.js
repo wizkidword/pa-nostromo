@@ -116,6 +116,8 @@ const speedTestStateFeature = window.MissionControlModules?.speedTestState;
 if (!speedTestStateFeature) throw new Error('Speed Test state feature failed to load.');
 const homeDeviceStateFeature = window.MissionControlModules?.homeDeviceState;
 if (!homeDeviceStateFeature) throw new Error('Home Device state feature failed to load.');
+const cameraFeedStateFeature = window.MissionControlModules?.cameraFeedState;
+if (!cameraFeedStateFeature) throw new Error('Camera Feed state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -981,34 +983,7 @@ function load(){
     ? Number(state.musicPlayer.sleepTimerMin)
     : 0;
 
-  state.cameraFeed = {
-    sourceUrl: '',
-    mode: 'stream',
-    refreshIntervalSec: 5,
-    active: false,
-    status: 'idle',
-    lastError: '',
-    useProxy: true,
-    deviceId: '',
-    viewportWidth: 640,
-    viewportHeight: 360,
-    ...(state.cameraFeed || {}),
-  };
-  state.cameraFeed.mode = ['stream', 'snapshot', 'local'].includes(state.cameraFeed.mode) ? state.cameraFeed.mode : 'stream';
-  state.cameraFeed.sourceUrl = String(state.cameraFeed.sourceUrl || '').trim();
-  const refresh = Number(state.cameraFeed.refreshIntervalSec ?? 5);
-  state.cameraFeed.refreshIntervalSec = Number.isFinite(refresh) ? Math.min(60, Math.max(1, Math.round(refresh))) : 5;
-  state.cameraFeed.status = ['idle', 'loading', 'live', 'error'].includes(state.cameraFeed.status) ? state.cameraFeed.status : 'idle';
-  state.cameraFeed.active = !!state.cameraFeed.active;
-  state.cameraFeed.lastError = String(state.cameraFeed.lastError || '').slice(0, 300);
-  state.cameraFeed.useProxy = state.cameraFeed.useProxy !== false;
-  state.cameraFeed.deviceId = String(state.cameraFeed.deviceId || '');
-  state.cameraFeed.viewportWidth = Number.isFinite(Number(state.cameraFeed.viewportWidth))
-    ? Math.min(1200, Math.max(280, Math.round(Number(state.cameraFeed.viewportWidth))))
-    : 640;
-  state.cameraFeed.viewportHeight = Number.isFinite(Number(state.cameraFeed.viewportHeight))
-    ? Math.min(900, Math.max(180, Math.round(Number(state.cameraFeed.viewportHeight))))
-    : 360;
+  state.cameraFeed = cameraFeedStateFeature.normalizeState(state.cameraFeed);
 
   state.liveStreams = {
     sourceType: 'youtube',
@@ -8176,117 +8151,21 @@ function getCameraFeedEls(){
 }
 
 function cameraFeedModeLabel(mode = state.cameraFeed.mode){
-  const map = {
-    stream: 'Embed stream',
-    snapshot: 'Snapshot refresh',
-    local: 'Local webcam',
-  };
-  return map[String(mode || '').toLowerCase()] || 'Camera feed';
+  return cameraFeedStateFeature.modeLabel(mode);
 }
 
 function cameraFeedCompactSourceLabel(raw){
-  const value = String(raw || '').trim();
-  if (!value) return 'No source configured yet';
-  try {
-    const u = new URL(value);
-    const host = u.hostname.replace(/^www\./i, '');
-    const path = u.pathname && u.pathname !== '/' ? u.pathname : '';
-    return `${host}${path}`.slice(0, 64);
-  } catch {
-    return value.slice(0, 64);
-  }
+  return cameraFeedStateFeature.compactSourceLabel(raw);
 }
 
 function getCameraFeedPresentation(statusText = ''){
-  const mode = ['stream', 'snapshot', 'local'].includes(state.cameraFeed.mode) ? state.cameraFeed.mode : 'stream';
-  const status = String(state.cameraFeed.status || (state.cameraFeed.active ? 'loading' : 'idle')).toLowerCase();
-  const interval = Math.max(1, Math.min(60, Number(state.cameraFeed.refreshIntervalSec || 5) || 5));
-  const isActive = !!state.cameraFeed.active;
-  const useProxy = !!state.cameraFeed.useProxy;
-  const sourceUrl = String(state.cameraFeed.sourceUrl || '').trim();
   const deviceId = String(state.cameraFeed.deviceId || '');
   const deviceLabel = cameraDeviceList.find((d) => String(d.deviceId || '') === deviceId)?.label || 'Default browser camera';
-  const modeLabel = cameraFeedModeLabel(mode);
-
-  let tone = 'idle';
-  let signal = 'neutral';
-  let signalDetail = mode === 'local' ? 'browser' : mode === 'snapshot' ? `${interval}s` : 'embed';
-  let badge = 'Ready';
-  let heroTitle = mode === 'local' ? 'Ready to start your webcam' : sourceUrl ? 'Ready to load this camera feed' : 'Add a camera source to begin';
-  let fallbackMeta = mode === 'local'
-    ? 'Choose a device if needed, then request browser camera access.'
-    : mode === 'snapshot'
-      ? 'Use snapshot mode when a camera blocks embedding or needs a safer fallback.'
-      : 'Embed mode is best for camera pages or stream URLs that allow framing.';
-
-  if (status === 'live') {
-    tone = 'live';
-    signal = 'fresh';
-    signalDetail = mode === 'local' ? 'webcam live' : mode === 'snapshot' ? `${interval}s cycle` : 'feed live';
-    badge = 'Live';
-    heroTitle = mode === 'local' ? 'Local webcam is live' : mode === 'snapshot' ? 'Snapshot monitor is running' : 'Embedded camera feed is live';
-    fallbackMeta = mode === 'local'
-      ? `Watching ${deviceLabel}.`
-      : mode === 'snapshot'
-        ? `Refreshing every ${interval}s${useProxy ? ' via the local proxy' : ''}.`
-        : 'Embed loaded successfully.';
-  } else if (status === 'loading') {
-    tone = 'loading';
-    signal = 'degraded';
-    signalDetail = 'warming up';
-    badge = 'Loading';
-    heroTitle = mode === 'local' ? 'Requesting webcam access' : mode === 'snapshot' ? 'Refreshing snapshot feed' : 'Loading embedded feed';
-    fallbackMeta = mode === 'local'
-      ? 'Waiting for browser permission and camera readiness.'
-      : mode === 'snapshot'
-        ? `Preparing snapshot refresh${useProxy ? ' through the local proxy' : ''}.`
-        : 'Waiting for the camera page to load.';
-  } else if (status === 'error') {
-    tone = 'error';
-    signal = 'error';
-    signalDetail = 'attention';
-    badge = 'Issue';
-    heroTitle = 'Camera feed needs attention';
-    fallbackMeta = state.cameraFeed.lastError || 'Something blocked the current camera source.';
-  } else if (isActive) {
-    tone = 'loading';
-    signal = 'degraded';
-    signalDetail = 'active';
-    badge = 'Active';
-    heroTitle = mode === 'local' ? 'Webcam session is active' : 'Camera feed is active';
-  }
-
-  const chips = [
-    modeLabel,
-    isActive ? 'Session active' : 'Idle',
-  ];
-  if (mode === 'snapshot') chips.push(`${interval}s refresh`);
-  if (mode === 'snapshot' && useProxy) chips.push('Proxy on');
-  if (mode === 'local') chips.push(deviceLabel);
-
-  return {
-    tone,
-    signal,
-    signalDetail,
-    badge,
-    heroTitle,
-    heroMeta: String(statusText || fallbackMeta || '').trim(),
-    sourceHeadline: mode === 'local' ? deviceLabel : cameraFeedCompactSourceLabel(sourceUrl),
-    sourceHint: mode === 'local'
-      ? 'Uses browser camera permissions, so no URL is required in local mode.'
-      : mode === 'snapshot'
-        ? 'Snapshot mode is a reliable fallback when embeds fail or a camera blocks framing.'
-        : 'Use a camera page or embeddable stream URL when direct framing is supported.',
-    controlHeadline: mode === 'local' ? 'Browser capture controls' : 'Source and refresh controls',
-    stageTitle: mode === 'local' ? 'Local webcam preview' : mode === 'snapshot' ? 'Snapshot monitor' : 'Embedded feed stage',
-    stageMeta: mode === 'snapshot'
-      ? `Resize the frame as needed. Current snapshot cadence: ${interval}s${useProxy ? ' with proxy assist' : ''}.`
-      : mode === 'local'
-        ? 'Resize the preview to fit your room, desk, or scene.'
-        : 'Resize the stage and keep Snapshot mode handy if the source blocks embedding.',
-    chips,
-    footnote: `One active feed at a time. Snapshot mode helps when embeds fail. Local webcam uses browser permission${navigator?.mediaDevices?.getUserMedia ? '' : ' and may be unavailable in this browser/context'}.`,
-  };
+  return cameraFeedStateFeature.getPresentation(state.cameraFeed, {
+    statusText,
+    deviceLabel,
+    cameraAvailable: typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia,
+  });
 }
 
 function syncCameraFeedUiStatus(statusText = ''){
