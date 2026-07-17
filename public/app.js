@@ -104,6 +104,8 @@ const ebayTrafficStateFeature = window.MissionControlModules?.ebayTrafficState;
 if (!ebayTrafficStateFeature) throw new Error('eBay Traffic state feature failed to load.');
 const socialFollowersAnalyticsFeature = window.MissionControlModules?.socialFollowersAnalytics;
 if (!socialFollowersAnalyticsFeature) throw new Error('Social Followers analytics feature failed to load.');
+const nbaScoreStateFeature = window.MissionControlModules?.nbaScoreState;
+if (!nbaScoreStateFeature) throw new Error('NBA Scores state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -397,51 +399,11 @@ function normalizeHomeDeviceControlState(input){
   };
 }
 
-const NBA_VIEW_MODES = new Set(['my-teams', 'live', 'all', 'recap']);
-const NBA_TEAM_OPTIONS = [
-  { abbr: 'ATL', name: 'Atlanta Hawks' },
-  { abbr: 'BOS', name: 'Boston Celtics' },
-  { abbr: 'BKN', name: 'Brooklyn Nets' },
-  { abbr: 'CHA', name: 'Charlotte Hornets' },
-  { abbr: 'CHI', name: 'Chicago Bulls' },
-  { abbr: 'CLE', name: 'Cleveland Cavaliers' },
-  { abbr: 'DAL', name: 'Dallas Mavericks' },
-  { abbr: 'DEN', name: 'Denver Nuggets' },
-  { abbr: 'DET', name: 'Detroit Pistons' },
-  { abbr: 'GS', name: 'Golden State Warriors' },
-  { abbr: 'HOU', name: 'Houston Rockets' },
-  { abbr: 'IND', name: 'Indiana Pacers' },
-  { abbr: 'LAC', name: 'LA Clippers' },
-  { abbr: 'LAL', name: 'Los Angeles Lakers' },
-  { abbr: 'MEM', name: 'Memphis Grizzlies' },
-  { abbr: 'MIA', name: 'Miami Heat' },
-  { abbr: 'MIL', name: 'Milwaukee Bucks' },
-  { abbr: 'MIN', name: 'Minnesota Timberwolves' },
-  { abbr: 'NO', name: 'New Orleans Pelicans' },
-  { abbr: 'NY', name: 'New York Knicks' },
-  { abbr: 'OKC', name: 'Oklahoma City Thunder' },
-  { abbr: 'ORL', name: 'Orlando Magic' },
-  { abbr: 'PHI', name: 'Philadelphia 76ers' },
-  { abbr: 'PHX', name: 'Phoenix Suns' },
-  { abbr: 'POR', name: 'Portland Trail Blazers' },
-  { abbr: 'SAC', name: 'Sacramento Kings' },
-  { abbr: 'SA', name: 'San Antonio Spurs' },
-  { abbr: 'TOR', name: 'Toronto Raptors' },
-  { abbr: 'UTAH', name: 'Utah Jazz' },
-  { abbr: 'WSH', name: 'Washington Wizards' },
-];
+const NBA_VIEW_MODES = nbaScoreStateFeature.viewModes;
+const NBA_TEAM_OPTIONS = nbaScoreStateFeature.teamOptions;
 
 function normalizeNbaState(input){
-  const favoriteTeams = Array.isArray(input?.favoriteTeams)
-    ? [...new Set(input.favoriteTeams.map((team) => String(team || '').trim().toUpperCase()).filter(Boolean))]
-        .filter((team) => NBA_TEAM_OPTIONS.some((option) => option.abbr === team))
-        .slice(0, 6)
-    : [];
-  const requestedView = String(input?.viewMode || '').trim();
-  return {
-    viewMode: NBA_VIEW_MODES.has(requestedView) ? requestedView : 'live',
-    favoriteTeams,
-  };
+  return nbaScoreStateFeature.normalizeState(input);
 }
 
 function normalizeUnreadEmailBlockedSenders(input){
@@ -2962,33 +2924,15 @@ function normalizeNbaEvent(event, favoriteTeams = new Set()){
 }
 
 function compareNbaGames(a, b){
-  const bucketScoreA = a.statusBucket === 'live' ? 0 : (a.statusBucket === 'upcoming' ? 1 : 2);
-  const bucketScoreB = b.statusBucket === 'live' ? 0 : (b.statusBucket === 'upcoming' ? 1 : 2);
-  if ((a.favorite ? 0 : 1) !== (b.favorite ? 0 : 1)) return (a.favorite ? 0 : 1) - (b.favorite ? 0 : 1);
-  if (bucketScoreA !== bucketScoreB) return bucketScoreA - bucketScoreB;
-  const closeScoreA = a.scoreDiff == null ? 99 : a.scoreDiff;
-  const closeScoreB = b.scoreDiff == null ? 99 : b.scoreDiff;
-  if (closeScoreA !== closeScoreB) return closeScoreA - closeScoreB;
-  return String(a.startDate || '').localeCompare(String(b.startDate || ''));
+  return nbaScoreStateFeature.compareGames(a, b);
 }
 
 function pickFeaturedNbaGame(games, viewMode){
-  if (!games.length) return null;
-  if (viewMode === 'recap') return games.find((game) => game.statusBucket === 'final') || games[0];
-  if (viewMode === 'live') return games.find((game) => game.statusBucket === 'live') || games[0];
-  if (viewMode === 'my-teams') return games.find((game) => game.favorite && game.statusBucket === 'live')
-    || games.find((game) => game.favorite)
-    || games[0];
-  return games.find((game) => game.favorite && game.statusBucket === 'live')
-    || games.find((game) => game.statusBucket === 'live')
-    || games[0];
+  return nbaScoreStateFeature.pickFeaturedGame(games, viewMode);
 }
 
 function filterNbaGamesByView(games, viewMode){
-  if (viewMode === 'my-teams') return games.filter((game) => game.favorite);
-  if (viewMode === 'live') return games.filter((game) => game.statusBucket === 'live');
-  if (viewMode === 'recap') return games.filter((game) => game.statusBucket === 'final');
-  return games;
+  return nbaScoreStateFeature.filterGamesByView(games, viewMode);
 }
 
 function renderNbaFavoriteTeamOptions(selectedTeams){
