@@ -47,22 +47,23 @@
     return 400 + (titleTokenMatches * 30) + (tokens.length * 5);
   }
 
-  function createDefaultCommands({ profilesAvailable = false } = {}) {
-    return [
+  function createDefaultCommands({ profilesAvailable = false, emailAvailable = true, integrationHealthAvailable = true } = {}) {
+    const commands = [
       { id: 'create-task', title: 'Create task…', detail: 'Open the existing task form.', action: 'create-task', searchText: 'new task add task' },
       { id: 'capture-note', title: 'Capture note…', detail: 'Create a local quick note.', action: 'capture-note', searchText: 'new note quick note' },
       { id: 'open-project', title: 'Open project…', detail: 'Browse the Project Directory.', action: 'browse-projects', searchText: 'project directory' },
-      { id: 'refresh-email', title: 'Refresh email', detail: 'Refresh the existing local inbox snapshot.', action: 'refresh-email', searchText: 'unread inbox mail' },
-      { id: 'show-integration-health', title: 'Show integration health', detail: 'Open the Integration Health settings view.', action: 'show-integration-health', searchText: 'settings diagnostics status' },
-      {
+    ];
+    if (emailAvailable) commands.push({ id: 'refresh-email', title: 'Refresh email', detail: 'Refresh the existing local inbox snapshot.', action: 'refresh-email', searchText: 'unread inbox mail' });
+    if (integrationHealthAvailable) commands.push({ id: 'show-integration-health', title: 'Show integration health', detail: 'Open the Integration Health settings view.', action: 'show-integration-health', searchText: 'settings diagnostics status' });
+    commands.push({
         id: 'switch-profile',
         title: 'Switch profile',
         detail: profilesAvailable ? 'Choose the dashboard profile.' : 'Available when Product Profiles ships in Phase 11.4.',
         action: 'switch-profile',
         searchText: 'core seller creator home custom',
         disabled: !profilesAvailable,
-      },
-    ];
+    });
+    return commands;
   }
 
   function createRow({ type, sourceId, title, detail = '', searchText = '', action = '', score = 0, disabled = false, ...rest }) {
@@ -92,12 +93,14 @@
     return new Map((Array.isArray(projects) ? projects : []).map((project) => [text(project?.id), text(project?.name) || 'Unknown project']));
   }
 
-  function contentRows({ state = {}, emailPayload = null, integrations = [] } = {}) {
+  function contentRows({ state = {}, emailPayload = null, integrations = [], enabledTypes = null } = {}) {
     const projects = Array.isArray(state?.projects) ? state.projects : [];
     const projectNames = projectNameMap(projects);
     const rows = [];
+    const enabled = enabledTypes ? new Set(enabledTypes) : null;
+    const typeEnabled = (type) => !enabled || enabled.has(type);
 
-    projects.forEach((project) => {
+    if (typeEnabled('project')) projects.forEach((project) => {
       rows.push(createRow({
         type: 'project',
         sourceId: project?.id,
@@ -108,7 +111,7 @@
       }));
     });
 
-    (Array.isArray(state?.tasks) ? state.tasks : []).forEach((task) => {
+    if (typeEnabled('task')) (Array.isArray(state?.tasks) ? state.tasks : []).forEach((task) => {
       if (text(task?.column) === 'done') return;
       const projectName = projectNames.get(text(task?.projectId)) || 'Unknown project';
       rows.push(createRow({
@@ -121,7 +124,7 @@
       }));
     });
 
-    (Array.isArray(state?.notes) ? state.notes : []).forEach((note) => {
+    if (typeEnabled('note')) (Array.isArray(state?.notes) ? state.notes : []).forEach((note) => {
       const projectName = projectNames.get(text(note?.projectId)) || 'Quick note';
       rows.push(createRow({
         type: 'note',
@@ -133,7 +136,7 @@
       }));
     });
 
-    (Array.isArray(state?.reminders) ? state.reminders : []).forEach((reminder) => {
+    if (typeEnabled('reminder')) (Array.isArray(state?.reminders) ? state.reminders : []).forEach((reminder) => {
       const projectName = projectNames.get(text(reminder?.projectId)) || 'Calendar';
       rows.push(createRow({
         type: 'reminder',
@@ -146,7 +149,7 @@
       }));
     });
 
-    (Array.isArray(state?.shortcuts) ? state.shortcuts : []).forEach((shortcut) => {
+    if (typeEnabled('shortcut')) (Array.isArray(state?.shortcuts) ? state.shortcuts : []).forEach((shortcut) => {
       if (shortcut?.enabled === false) return;
       rows.push(createRow({
         type: 'shortcut',
@@ -158,7 +161,7 @@
       }));
     });
 
-    (Array.isArray(state?.rss?.items) ? state.rss.items : []).forEach((item) => {
+    if (typeEnabled('rss')) (Array.isArray(state?.rss?.items) ? state.rss.items : []).forEach((item) => {
       rows.push(createRow({
         type: 'rss',
         sourceId: item?.id,
@@ -171,7 +174,7 @@
     });
 
     const seenEmailKeys = new Set();
-    (Array.isArray(emailPayload?.accounts) ? emailPayload.accounts : []).forEach((account) => {
+    if (typeEnabled('email')) (Array.isArray(emailPayload?.accounts) ? emailPayload.accounts : []).forEach((account) => {
       const accountId = text(account?.id);
       if (!accountId) return;
       const accountLabel = text(account?.label) || text(account?.account) || 'Email';
@@ -202,7 +205,7 @@
       });
     });
 
-    (Array.isArray(integrations) ? integrations : []).forEach((integration) => {
+    if (typeEnabled('integration')) (Array.isArray(integrations) ? integrations : []).forEach((integration) => {
       const status = text(integration?.status) || 'unknown';
       const configured = text(integration?.configured).replace(/_/g, ' ') || 'configuration unknown';
       rows.push(createRow({
@@ -230,9 +233,9 @@
     return left.title.localeCompare(right.title) || left.sourceId.localeCompare(right.sourceId);
   }
 
-  function buildSearchResults({ query = '', state = {}, emailPayload = null, integrations = [], commands = null, profilesAvailable = false, limit = RESULT_LIMIT } = {}) {
+  function buildSearchResults({ query = '', state = {}, emailPayload = null, integrations = [], commands = null, profilesAvailable = false, emailAvailable = true, integrationHealthAvailable = true, enabledTypes = null, limit = RESULT_LIMIT } = {}) {
     const normalizedQuery = normalizeQuery(query);
-    const commandRows = (Array.isArray(commands) ? commands : createDefaultCommands({ profilesAvailable }))
+    const commandRows = (Array.isArray(commands) ? commands : createDefaultCommands({ profilesAvailable, emailAvailable, integrationHealthAvailable }))
       .map((command, commandOrder) => createRow({
         type: 'command',
         sourceId: command?.id,
@@ -247,7 +250,7 @@
       .map((row) => matchRow(row, normalizedQuery))
       .filter(Boolean);
     const sourceRows = normalizedQuery
-      ? contentRows({ state, emailPayload, integrations }).map((row) => matchRow(row, normalizedQuery)).filter(Boolean)
+      ? contentRows({ state, emailPayload, integrations, enabledTypes }).map((row) => matchRow(row, normalizedQuery)).filter(Boolean)
       : [];
     const safeLimit = Math.max(1, Math.min(100, Number(limit) || RESULT_LIMIT));
     const rows = [...commandRows, ...sourceRows].sort(compareRows).slice(0, safeLimit);

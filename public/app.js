@@ -39,6 +39,8 @@ const debugCounters = window.MissionControlModules?.debug || null;
 const CSRF_BOOTSTRAP_API = '/api/security/bootstrap';
 const APP_INFO_API = '/api/app-info';
 const CSRF_HEADER_NAME = 'X-PA-Nostromo-CSRF';
+const PRODUCT_PROFILE_HEADER_NAME = 'X-PA-Nostromo-Product-Profile';
+const PRODUCT_PROFILE_PODS_HEADER_NAME = 'X-PA-Nostromo-Product-Pods';
 let csrfTokenPromise = null;
 
 function fetchTargetUrl(input){
@@ -69,14 +71,19 @@ function installSameOriginCsrfFetch(){
   window.fetch = async (input, init = {}) => {
     const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
     const target = fetchTargetUrl(input);
+    const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+    const isSameOriginApi = target.origin === window.location.origin && target.pathname.startsWith('/api/');
+    if (isSameOriginApi) {
+      const profileContext = getActiveProductProfileRequestContext();
+      headers.set(PRODUCT_PROFILE_HEADER_NAME, profileContext.profileId);
+      headers.set(PRODUCT_PROFILE_PODS_HEADER_NAME, profileContext.customPodIds.join(','));
+    }
     const protectsMutation = !['GET', 'HEAD', 'OPTIONS'].includes(method)
-      && target.origin === window.location.origin
-      && target.pathname.startsWith('/api/')
+      && isSameOriginApi
       && target.pathname !== CSRF_BOOTSTRAP_API;
-    if (!protectsMutation) return nativeFetch(input, init);
+    if (!protectsMutation) return nativeFetch(input, { ...init, headers });
 
     const token = await getCsrfToken();
-    const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
     headers.set(CSRF_HEADER_NAME, token);
     return nativeFetch(input, { ...init, headers });
   };
@@ -126,6 +133,8 @@ const rssStateFeature = window.MissionControlModules?.rssState;
 if (!rssStateFeature) throw new Error('RSS state feature failed to load.');
 const settingsStateFeature = window.MissionControlModules?.settingsState;
 if (!settingsStateFeature) throw new Error('Settings state feature failed to load.');
+const productProfilesFeature = window.MissionControlModules?.productProfiles;
+if (!productProfilesFeature) throw new Error('Product Profiles feature failed to load.');
 const cryptoStateFeature = window.MissionControlModules?.cryptoState;
 if (!cryptoStateFeature) throw new Error('Crypto state feature failed to load.');
 const integrationHealthFeature = window.MissionControlModules?.integrationHealth;
@@ -666,11 +675,16 @@ function getIntegrationHealthConfiguration(definition){
 }
 
 function getIntegrationHealthEntries(){
-  return integrationHealthFeature.buildIntegrationHealthEntries(INTEGRATION_HEALTH_DEFINITIONS, {
+  const entries = integrationHealthFeature.buildIntegrationHealthEntries(INTEGRATION_HEALTH_DEFINITIONS, {
     getScheduler: (schedulerId) => dashboardScheduler.get(schedulerId),
     getSignal: (signalId) => integrationHealthSignals.get(signalId),
     getConfiguration: getIntegrationHealthConfiguration,
   });
+  return entries.filter((entry) => productProfilesFeature.isIntegrationEnabled(
+    getActiveProductProfileId(),
+    entry.id,
+    getActiveCustomProfilePodIds(),
+  ));
 }
 
 function renderPersistenceStatus(status = {}){
@@ -954,7 +968,34 @@ function ensureChangelogPatch(stateObj, message){
   stateObj.changelog = stateObj.changelog.slice(0, 200);
 }
 function normalizeSettingsState(input){
-  return settingsStateFeature.normalizeState(input, { normalizeThemePreference, normalizeTaskColumn });
+  const settings = settingsStateFeature.normalizeState(input, { normalizeThemePreference, normalizeTaskColumn });
+  const hasProfile = !!input && Object.prototype.hasOwnProperty.call(input, 'productProfile');
+  settings.productProfile = hasProfile
+    ? productProfilesFeature.normalizeProfileId(settings.productProfile)
+    : 'custom';
+  settings.customProfilePodIds = productProfilesFeature.normalizeCustomPodIds(
+    hasProfile ? settings.customProfilePodIds : productProfilesFeature.ALL_POD_IDS,
+  );
+  return settings;
+}
+
+function getActiveProductProfileId(){
+  return productProfilesFeature.normalizeProfileId(state?.settings?.productProfile);
+}
+
+function getActiveCustomProfilePodIds(){
+  return productProfilesFeature.normalizeCustomPodIds(state?.settings?.customProfilePodIds);
+}
+
+function isProductProfilePodEnabled(podId){
+  return productProfilesFeature.isPodEnabled(getActiveProductProfileId(), podId, getActiveCustomProfilePodIds());
+}
+
+function getActiveProductProfileRequestContext(){
+  return {
+    profileId: getActiveProductProfileId(),
+    customPodIds: getActiveCustomProfilePodIds(),
+  };
 }
 
 function migrateIdeasTasksToNotes(stateObj){
@@ -2218,6 +2259,101 @@ function renderThemeChoices(){
   return themeController.renderChoices();
 }
 
+function renderProductProfileSettings(){
+  const choices = document.getElementById('productProfileChoices');
+  const customSettings = document.getElementById('customProfilePodSettings');
+  const customList = document.getElementById('customProfilePodList');
+  const summary = document.getElementById('productProfileSummary');
+  if (!choices || !customSettings || !customList || !summary) return;
+
+  const profileId = getActiveProductProfileId();
+  const customPodIds = getActiveCustomProfilePodIds();
+  choices.innerHTML = productProfilesFeature.PROFILE_IDS.map((idValue) => {
+    const profile = productProfilesFeature.PROFILE_DEFINITIONS[idValue];
+    const active = idValue === profileId;
+    return `<button type="button" class="btn ghost product-profile-choice ${active ? 'is-active' : ''}" data-product-profile-choice="${escapeHtml(idValue)}" role="radio" aria-checked="${active ? 'true' : 'false'}"><strong>${escapeHtml(profile.name)}</strong><span>${escapeHtml(profile.description)}</span></button>`;
+  }).join('');
+  choices.querySelectorAll('[data-product-profile-choice]').forEach((button) => {
+    button.addEventListener('click', () => setProductProfile(button.dataset.productProfileChoice));
+  });
+
+  customSettings.hidden = profileId !== 'custom';
+  if (profileId === 'custom') {
+    const optionalPodIds = productProfilesFeature.ALL_POD_IDS.filter((podId) => !productProfilesFeature.CORE_POD_IDS.includes(podId));
+    customList.innerHTML = optionalPodIds.map((podId) => {
+      const checked = customPodIds.includes(podId);
+      return `<label><input type="checkbox" data-custom-profile-pod="${escapeHtml(podId)}" ${checked ? 'checked' : ''} /> <span>${escapeHtml(getUtilityPodTitle(podId))}</span></label>`;
+    }).join('');
+    customList.querySelectorAll('[data-custom-profile-pod]').forEach((input) => {
+      input.addEventListener('change', () => setCustomProfilePodEnabled(input.dataset.customProfilePod, input.checked));
+    });
+  } else {
+    customList.innerHTML = '';
+  }
+
+  const enabledCount = productProfilesFeature.getEnabledPodIds(profileId, customPodIds).length;
+  summary.textContent = `${productProfilesFeature.PROFILE_DEFINITIONS[profileId].name} shows ${enabledCount} utility pod${enabledCount === 1 ? '' : 's'} plus the core workspace.`;
+}
+
+function stopDisabledProductProfileResources(){
+  if (!isProductProfilePodEnabled('system-resource-monitor')) stopSystemMonitorPolling();
+  if (!isProductProfilePodEnabled('speed-test')) stopSpeedTestAutoRun();
+  if (!isProductProfilePodEnabled('camera-feed') && state.cameraFeed?.active) stopCameraFeed({ keepStatus: true });
+  if (!isProductProfilePodEnabled('live-streams') && state.liveStreams?.active) stopLiveStream({ keepStatus: true });
+  if (!isProductProfilePodEnabled('music-player') && state.musicPlayer?.isPlaying) stopMusic();
+  if (!isProductProfilePodEnabled('voice-desk')) {
+    voiceNoteManualStop = true;
+    voiceToRowanManualStop = true;
+    voiceNoteRecognizer?.stop?.();
+    voiceToRowanRecognizer?.stop?.();
+  }
+}
+
+function setProductProfile(profileId){
+  const nextProfile = productProfilesFeature.normalizeProfileId(profileId);
+  if (nextProfile === getActiveProductProfileId()) return;
+  state.settings.productProfile = nextProfile;
+  state.settings.customProfilePodIds = productProfilesFeature.normalizeCustomPodIds(state.settings.customProfilePodIds);
+  stopDisabledProductProfileResources();
+  logChange(`Product profile changed to ${productProfilesFeature.PROFILE_DEFINITIONS[nextProfile].name}`);
+  commitState('product_profile_changed');
+  setActiveSettingsSection('profiles', { preserveScroll: true });
+  announceStatus(`${productProfilesFeature.PROFILE_DEFINITIONS[nextProfile].name} profile is active.`, { key: 'product-profile' });
+}
+
+function setCustomProfilePodEnabled(podId, enabled){
+  const idValue = productProfilesFeature.resolvePodId(podId);
+  if (!productProfilesFeature.ALL_POD_IDS.includes(idValue) || productProfilesFeature.CORE_POD_IDS.includes(idValue)) return;
+  const selected = new Set(getActiveCustomProfilePodIds());
+  if (enabled) selected.add(idValue);
+  else selected.delete(idValue);
+  state.settings.customProfilePodIds = [...selected];
+  stopDisabledProductProfileResources();
+  commitState('custom_profile_pods_changed');
+  setActiveSettingsSection('profiles', { preserveScroll: true });
+}
+
+function applyProductProfileSettingsVisibility(){
+  document.querySelectorAll('[data-profile-pods]').forEach((element) => {
+    const podIds = String(element.dataset.profilePods || '').split(/\s+/).filter(Boolean);
+    element.hidden = !podIds.some((podId) => isProductProfilePodEnabled(podId));
+  });
+  const dataFeedsSection = document.querySelector('[data-settings-section="data-feeds"]');
+  const dataFeedsButton = document.querySelector('[data-settings-section-btn="data-feeds"]');
+  const dataFeedsAvailable = !!dataFeedsSection?.querySelector('[data-profile-pods]:not([hidden])');
+  if (dataFeedsButton) dataFeedsButton.hidden = !dataFeedsAvailable;
+  if (dataFeedsSection && !dataFeedsAvailable) dataFeedsSection.hidden = true;
+
+  const healthSection = document.querySelector('[data-settings-section="integration-health"]');
+  const healthButton = document.querySelector('[data-settings-section-btn="integration-health"]');
+  const healthAvailable = getIntegrationHealthEntries().length > 0;
+  if (healthButton) healthButton.hidden = !healthAvailable;
+  if (healthSection && !healthAvailable) healthSection.hidden = true;
+
+  const activeButton = document.querySelector(`[data-settings-section-btn="${activeSettingsSection}"]`);
+  if (activeButton?.hidden) setActiveSettingsSection('general', { preserveScroll: true });
+}
+
 function renderSettings(){
   const theme = document.getElementById('settingTheme');
   const weather = document.getElementById('settingWeatherInterval');
@@ -2234,6 +2370,8 @@ function renderSettings(){
 
   tasksController.applyDefaultColumn();
 
+  renderProductProfileSettings();
+  applyProductProfileSettingsVisibility();
   renderPodVisibilitySettings();
   renderIntegrationHealthCenter();
   mountRssSettingsFeeds();
@@ -10554,7 +10692,7 @@ function stopSystemMonitorPolling(){
 
 async function fetchSystemMonitorSnapshot(){
   if (systemMonitorInFlight) return;
-  const visible = state.layout?.visibility?.['system-resource-monitor'] !== false;
+  const visible = isProductProfilePodEnabled('system-resource-monitor') && state.layout?.visibility?.['system-resource-monitor'] !== false;
   const cardVisible = !!document.querySelector('[data-pod-id="system-resource-monitor"]:not(.is-hidden)');
   if (!visible || !cardVisible) return;
 
@@ -11017,7 +11155,7 @@ function getUtilityPodLegacyRenderer(podId){
 function syncUtilityPodLifecycle(){
   const managed = ['date-time', 'weather', 'gas-prices', 'nba-scores', 'crypto-tracker', MERGED_SOCIAL_FOLLOWERS_POD_ID, 'facebook-followers', 'instagram-followers', 'tiktok-followers', 'youtube-subscribers', 'ebay-traffic', 'speed-test', 'rss-feed', 'unread-email', 'everyday-calculator', 'system-resource-monitor', 'home-device-control'];
   managed.forEach((podId) => {
-    const visible = state.layout?.visibility?.[podId] !== false;
+    const visible = isProductProfilePodEnabled(podId) && state.layout?.visibility?.[podId] !== false;
     const legacyRender = getUtilityPodLegacyRenderer(podId);
     if (SCHEDULED_POD_IDS.has(podId)) dashboardScheduler.setEnabled(podId, visible);
     const lifecycleContext = podId === 'date-time'
@@ -11080,9 +11218,10 @@ function applyUtilityLayoutToDom(){
 
   getUtilityPodCards().forEach((card) => {
     const podId = String(card.dataset.podId || '').trim();
-    const visible = state.layout.visibility?.[podId] !== false;
+    const visible = isProductProfilePodEnabled(podId) && state.layout.visibility?.[podId] !== false;
     card.classList.toggle('is-hidden', !visible);
     card.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    card.inert = !visible;
   });
 
   syncUtilityPodLifecycle();
@@ -11096,6 +11235,7 @@ function renderPodVisibilitySettings(){
   const rows = state.layout.utilityRows;
   wrap.innerHTML = rows.map((row, rowIndex) => {
     const items = row.map((podId, podIndex) => {
+      if (!isProductProfilePodEnabled(podId)) return '';
       const checked = state.layout.visibility?.[podId] !== false ? 'checked' : '';
       const upDisabled = podIndex === 0 ? 'disabled' : '';
       const downDisabled = podIndex === row.length - 1 ? 'disabled' : '';
@@ -11380,13 +11520,13 @@ function mountHomeDevicesSettingsEditor(){
 function renderAll(){
   applyTheme();
   applyUtilityLayoutToDom();
-  renderPodWithFallback('date-time', renderDateTime, { localTimeZone: LOCAL_TZ, updateAlarmStatus });
-  renderPodWithFallback('calendar', renderCalendar);
-  renderGasPricesPod();
-  renderEverydayCalculatorPod();
-  renderSystemResourceMonitorPod();
-  renderSpeedTestPod();
-  renderUnreadEmailWithLifecycle();
+  if (isProductProfilePodEnabled('date-time')) renderPodWithFallback('date-time', renderDateTime, { localTimeZone: LOCAL_TZ, updateAlarmStatus });
+  if (isProductProfilePodEnabled('calendar')) renderPodWithFallback('calendar', renderCalendar);
+  if (isProductProfilePodEnabled('gas-prices')) renderGasPricesPod();
+  if (isProductProfilePodEnabled('everyday-calculator')) renderEverydayCalculatorPod();
+  if (isProductProfilePodEnabled('system-resource-monitor')) renderSystemResourceMonitorPod();
+  if (isProductProfilePodEnabled('speed-test')) renderSpeedTestPod();
+  if (isProductProfilePodEnabled('unread-email')) renderUnreadEmailWithLifecycle();
   renderCalendarRemindersPanel();
   renderTodayReminders();
   renderTodayFocus();
@@ -11396,12 +11536,14 @@ function renderAll(){
   renderIdeas();
   renderNotes();
   renderBoard();
-  renderMusicPlayer();
-  renderCameraFeedPod();
-  renderLiveStreamsPod();
-  renderVoiceDeskPod();
-  renderShortcutsPod();
-  renderShortcutsSettings();
+  if (isProductProfilePodEnabled('music-player')) renderMusicPlayer();
+  if (isProductProfilePodEnabled('camera-feed')) renderCameraFeedPod();
+  if (isProductProfilePodEnabled('live-streams')) renderLiveStreamsPod();
+  if (isProductProfilePodEnabled('voice-desk')) renderVoiceDeskPod();
+  if (isProductProfilePodEnabled('shortcuts')) {
+    renderShortcutsPod();
+    renderShortcutsSettings();
+  }
   syncUtilityPodLifecycle();
   populateProjectSelect();
 }
@@ -11809,11 +11951,22 @@ function commandPaletteElementByData(attributeName, value){
 
 function renderCommandPalette(){
   if (!commandPaletteResults || !commandPaletteSummary) return;
+  const enabledTypes = new Set(['project', 'task', 'note', 'reminder', 'shortcut']);
+  const rssAvailable = isProductProfilePodEnabled('rss-feed');
+  const emailAvailable = isProductProfilePodEnabled('unread-email');
+  const integrations = getIntegrationHealthEntries();
+  if (rssAvailable) enabledTypes.add('rss');
+  if (emailAvailable) enabledTypes.add('email');
+  if (integrations.length) enabledTypes.add('integration');
   const result = commandPaletteFeature.buildSearchResults({
     query: commandPaletteInput?.value || '',
     state,
-    emailPayload: unreadEmailLastPayload,
-    integrations: getIntegrationHealthEntries(),
+    emailPayload: emailAvailable ? unreadEmailLastPayload : null,
+    integrations,
+    profilesAvailable: true,
+    emailAvailable,
+    integrationHealthAvailable: integrations.length > 0,
+    enabledTypes,
   });
   commandPaletteRows = result.rows;
   commandPaletteSelectedIndex = commandPaletteRows.length
@@ -11949,6 +12102,11 @@ function executeCommandPaletteRow(row){
   if (row.action === 'show-integration-health') {
     openSettingsPanel();
     setActiveSettingsSection('integration-health');
+    return;
+  }
+  if (row.action === 'switch-profile') {
+    openSettingsPanel();
+    setActiveSettingsSection('profiles');
   }
 }
 
@@ -12574,7 +12732,8 @@ if (!state.changelog.some((c) => c.message === socialFollowersMergePatch)) {
 }
 
 function isScheduledPodVisible(podId){
-  return state.layout?.visibility?.[podId] !== false;
+  const featurePodId = productProfilesFeature.resolvePodId(podId);
+  return isProductProfilePodEnabled(featurePodId) && state.layout?.visibility?.[featurePodId] !== false;
 }
 
 function registerDashboardSchedulerJobs(){
@@ -12659,6 +12818,10 @@ function registerDashboardSchedulerJobs(){
 
 function refreshScheduledPod(podId){
   const label = getUtilityPodTitle(podId);
+  if (!isScheduledPodVisible(podId)) {
+    announceStatus(`${label} is unavailable in the active product profile.`, { key: `refresh:${podId}` });
+    return Promise.resolve({ ok: false, reason: 'disabled' });
+  }
   announceStatus(`Refreshing ${label}.`, { key: `refresh:${podId}` });
   return dashboardScheduler.refresh(podId, { manual: true, reason: 'manual_refresh' })
     .then((result) => {
@@ -12675,7 +12838,7 @@ function refreshScheduledPod(podId){
 
 function syncDashboardScheduling(){
   for (const job of dashboardScheduler.list()) {
-    if (document.hidden || navigator.onLine === false || state.layout?.visibility?.[job.id] === false) dashboardScheduler.stop(job.id);
+    if (document.hidden || navigator.onLine === false || !isScheduledPodVisible(job.id)) dashboardScheduler.stop(job.id);
     else dashboardScheduler.start(job.id);
   }
 }

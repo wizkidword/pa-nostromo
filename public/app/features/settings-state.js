@@ -5,6 +5,8 @@
     theme: 'dark',
     weatherIntervalMin: 15,
     defaultTaskColumn: 'inbox',
+    productProfile: 'core',
+    customProfilePodIds: [],
   };
 
   function normalizeState(input, { normalizeThemePreference = (value) => value, normalizeTaskColumn = (value) => value } = {}) {
@@ -13,6 +15,9 @@
     settings.defaultTaskColumn = normalizeTaskColumn(settings.defaultTaskColumn);
     settings.shortcutsFilterProjectIds = Array.isArray(settings.shortcutsFilterProjectIds)
       ? settings.shortcutsFilterProjectIds
+      : [];
+    settings.customProfilePodIds = Array.isArray(settings.customProfilePodIds)
+      ? settings.customProfilePodIds
       : [];
     return settings;
   }

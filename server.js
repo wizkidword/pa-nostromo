@@ -11,6 +11,7 @@ const { fetchGmailImapMessageBody, fetchGmailImapAccountSnapshot, markGmailImapM
 const { resolveRuntimeStorage, ensurePrivateRuntimeStorage } = require('./lib/runtime-storage.js');
 const { SECURITY_RESPONSE_HEADERS, createHostPolicy, validateHostHeader, parseScopedTokens, bearerTokenHasScope, hasBrowserMetadata, validateBrowserIntent, createCsrfToken } = require('./lib/route-security.js');
 const { buildRouteManifest, resolveRoute } = require('./lib/route-manifest.js');
+const productProfilesFeature = require('./public/app/features/product-profiles.js');
 const { safeFetch } = require('./lib/safe-fetch.js');
 const { createWorkCoordinator } = require('./lib/work-coordinator.js');
 const { fetchWithFailover } = require('./public/app/core/crypto-failover.js');
@@ -5894,6 +5895,43 @@ function routeRemoteEnabled(route) {
   }
 }
 
+function getProductProfileRequestContext(req) {
+  const profileHeader = String(req?.headers?.['x-pa-nostromo-product-profile'] || '').trim();
+  if (!profileHeader) return null;
+  const customPodIds = String(req?.headers?.['x-pa-nostromo-product-pods'] || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return {
+    profileId: productProfilesFeature.normalizeProfileId(profileHeader),
+    customPodIds: productProfilesFeature.normalizeCustomPodIds(customPodIds),
+  };
+}
+
+function productProfileRouteAllowed(req, route) {
+  const productFeature = String(route?.productFeature || '').trim();
+  if (!productFeature) return { allowed: true, context: null };
+  const context = getProductProfileRequestContext(req);
+  if (!context) return { allowed: true, context: null };
+  return {
+    allowed: productProfilesFeature.isPodEnabled(context.profileId, productFeature, context.customPodIds),
+    context,
+  };
+}
+
+function authorizeProductProfileRoute(req, res, route) {
+  const result = productProfileRouteAllowed(req, route);
+  if (result.allowed) return true;
+  sendJson(res, 403, {
+    ok: false,
+    error: 'product_profile_disabled',
+    profile: result.context.profileId,
+    feature: String(route?.productFeature || ''),
+    message: 'This feature is disabled by the active product profile.',
+  });
+  return false;
+}
+
 function authorizeManifestRoute(req, res, route, host, securityContext = {}) {
   const apiTokenConfig = securityContext.apiTokenConfig || API_TOKEN_CONFIG;
   const csrfToken = securityContext.csrfToken || CSRF_TOKEN;
@@ -7208,6 +7246,7 @@ const server = http.createServer(async (req, res) => {
     }
     res.__nostromoRoute = resolved.route;
     if (!authorizeManifestRoute(req, res, resolved.route, hostResult.host)) return;
+    if (!authorizeProductProfileRoute(req, res, resolved.route)) return;
     if (resolved.route.id === 'security.bootstrap') return handleApiSecurityBootstrap(req, res);
     return dispatchApiRoute(req, res, pathname);
   } catch (err) {
@@ -7302,6 +7341,9 @@ module.exports = {
   readBody,
   isPayloadTooLargeError,
   authorizeManifestRoute,
+  getProductProfileRequestContext,
+  productProfileRouteAllowed,
+  authorizeProductProfileRoute,
   buildPingArgs,
   classifyFacebookFollowerStaleLevel,
   calculateFollowerRollingDelta,

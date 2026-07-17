@@ -59,6 +59,22 @@ const profileResult = buildSearchResults({ query: 'switch profile', state, email
 assert.equal(profileResult.rows.length, 1);
 assert.equal(profileResult.rows[0].disabled, true);
 
+const coreCommands = createDefaultCommands({ profilesAvailable: true, emailAvailable: false, integrationHealthAvailable: false });
+assert.deepEqual(coreCommands.map((command) => command.id), ['create-task', 'capture-note', 'open-project', 'switch-profile']);
+assert.equal(coreCommands.find((command) => command.id === 'switch-profile')?.disabled, false);
+
+const coreSearch = buildSearchResults({
+  query: 'target',
+  state,
+  emailPayload,
+  integrations,
+  profilesAvailable: true,
+  emailAvailable: false,
+  integrationHealthAvailable: false,
+  enabledTypes: new Set(['project', 'task', 'note', 'reminder', 'shortcut']),
+});
+assert.equal(coreSearch.rows.some((row) => ['rss', 'email', 'integration'].includes(row.type)), false, 'disabled profile sources must not appear in local search');
+
 const cappedResults = buildSearchResults({
   query: 'bulk',
   state: { ...state, projects: Array.from({ length: 40 }, (_, index) => ({ id: `bulk-${index}`, name: `Bulk project ${index}`, status: 'active' })) },

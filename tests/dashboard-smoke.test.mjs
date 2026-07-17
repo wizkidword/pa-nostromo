@@ -62,6 +62,27 @@ try {
   assert.match(csp, /script-src 'self' https:\/\/www\.youtube\.com/);
   assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval/);
 
+  const disabledProfileRoute = await page.evaluate(async () => {
+    const response = await fetch('/api/email-unread', { cache: 'no-store' });
+    return { status: response.status, body: await response.json() };
+  });
+  assert.equal(disabledProfileRoute.status, 403);
+  assert.equal(disabledProfileRoute.body.error, 'product_profile_disabled');
+
+  const legacyProfileMigration = await page.evaluate(() => {
+    const legacy = { ...state };
+    delete legacy.settings;
+    applyIncomingState(legacy);
+    return {
+      profile: state.settings.productProfile,
+      cameraEnabled: state.settings.customProfilePodIds.includes('camera-feed'),
+      emailEnabled: state.settings.customProfilePodIds.includes('unread-email'),
+    };
+  });
+  assert.equal(legacyProfileMigration.profile, 'custom');
+  assert.equal(legacyProfileMigration.cameraEnabled, true);
+  assert.equal(legacyProfileMigration.emailEnabled, true);
+
   const stateResult = await page.evaluate(async () => {
     const read = async () => {
       const response = await fetch('/api/state');
@@ -130,6 +151,7 @@ try {
     window.__nostromoStoredXss = 0;
     const payload = '<img src=x onerror="window.__nostromoStoredXss=1">';
     applyIncomingState({
+      settings: { productProfile: 'home' },
       projects: [{
         id: 'project-x',
         name: payload,

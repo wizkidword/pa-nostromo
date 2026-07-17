@@ -43,6 +43,7 @@
     <div class="settings-shell">
       <nav class="settings-nav" aria-label="Settings sections">
         <button type="button" class="settings-nav-btn is-active" data-settings-section-btn="general">General</button>
+        <button type="button" class="settings-nav-btn" data-settings-section-btn="profiles">Profiles</button>
         <button type="button" class="settings-nav-btn" data-settings-section-btn="pods-layout">Pods &amp; Layout</button>
         <button type="button" class="settings-nav-btn" data-settings-section-btn="data-feeds">Data &amp; Feeds</button>
         <button type="button" class="settings-nav-btn" data-settings-section-btn="integration-health">Integration Health</button>
@@ -71,7 +72,7 @@
               <span>Fullscreen mode</span>
               <input id="settingFullscreen" type="checkbox" class="w-auto" />
             </label>
-            <label>Weather refresh interval
+            <label data-profile-pods="date-time">Weather refresh interval
               <select id="settingWeatherInterval">
                 <option value="5">Every 5 minutes</option>
                 <option value="15">Every 15 minutes</option>
@@ -89,6 +90,18 @@
             </label>
           </section>
 
+          <section class="settings-section" data-settings-section="profiles" hidden>
+            <h3 class="m0">Product Profiles</h3>
+            <p class="note-meta">Profiles focus the dashboard without deleting data. Disabled tools are hidden, stop refreshing, and are unavailable to this app's API requests.</p>
+            <div id="productProfileChoices" class="product-profile-grid" role="radiogroup" aria-label="Choose a product profile"></div>
+            <div id="customProfilePodSettings" class="product-profile-custom" hidden>
+              <h4 class="mt14 mb8">Custom tools</h4>
+              <p class="note-meta">Core tools stay enabled. Select any optional utility pods you want in this profile.</p>
+              <div id="customProfilePodList" class="product-profile-pod-list"></div>
+            </div>
+            <p id="productProfileSummary" class="note-meta" role="status" aria-live="polite"></p>
+          </section>
+
           <section class="settings-section" data-settings-section="pods-layout" hidden>
             <h3 class="m0">Pods &amp; Layout</h3>
             <p class="note-meta">Show/hide utility pods, use arrows for row-local moves, and drag pods between utility rows.</p>
@@ -97,6 +110,7 @@
 
           <section class="settings-section" data-settings-section="data-feeds" hidden>
             <h3 class="m0">Data &amp; Feeds</h3>
+            <div data-profile-pods="rss-feed">
             <label>RSS auto-refresh interval
               <select id="settingRssInterval">
                 <option value="15">Every 15 minutes</option>
@@ -110,12 +124,15 @@
               <button id="addRssFeedBtn" class="btn">+ Add Feed</button>
             </div>
             <div id="settingsRssFeedsList" class="change-log-list"></div>
+            </div>
+            <div data-profile-pods="home-device-control">
             <h4 class="mt10 mb8">Home Device Inventory</h4>
             <div class="row-wrap">
               <button id="addHomeDeviceBtn" class="btn">+ Add Device</button>
               <button id="scanHomeDevicesBtn" class="btn ghost">Scan Reachability</button>
             </div>
             <div id="settingsHomeDevicesList" class="change-log-list"></div>
+            </div>
           </section>
 
           <section class="settings-section" data-settings-section="integration-health" hidden>
@@ -573,6 +590,7 @@
   <script src="app/core/nba-scoreboard.js"></script>
   <script src="app/features/theme.js"></script>
   <script src="app/features/settings-state.js"></script>
+  <script src="app/features/product-profiles.js"></script>
   <script src="app/features/crypto-state.js"></script>
   <script src="app/features/projects.js"></script>
   <script src="app/features/notes.js"></script>

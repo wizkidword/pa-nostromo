@@ -88,7 +88,7 @@ try {
   await page.keyboard.press('Control+K');
   assert.equal(await page.locator('#commandPaletteDialog').evaluate((dialog) => dialog.open), true);
   assert.equal(await page.evaluate(() => document.activeElement?.id), 'commandPaletteInput');
-  assert.equal(await page.locator('#commandPaletteResults [role="option"]').count(), 6);
+  assert.equal(await page.locator('#commandPaletteResults [role="option"]').count(), 4);
   await page.locator('#commandPaletteInput').fill('Mission Control Dashboard');
   await page.locator('#commandPaletteInput').press('Enter');
   assert.equal(await page.locator('#commandPaletteDialog').evaluate((dialog) => dialog.open), false);
@@ -123,8 +123,11 @@ try {
   await page.getByRole('button', { name: /settings/i }).press('Enter');
   assert.equal(await page.locator('#settingsPanel').evaluate((panel) => panel.classList.contains('open')), true);
   assert.equal(await page.evaluate(() => document.activeElement?.id), 'closeSettingsBtn');
+  await page.getByRole('button', { name: 'Profiles' }).press('Enter');
+  await page.getByRole('radio', { name: /seller/i }).press('Enter');
+  assert.equal(await page.locator('#productProfileSummary').textContent().then((text) => text.includes('Seller')), true);
   await page.getByRole('button', { name: 'Integration Health' }).press('Enter');
-  assert.equal(await page.locator('#integrationHealthList .integration-health-card').count(), 8);
+  assert.equal(await page.locator('#integrationHealthList .integration-health-card').count(), 2);
   await page.locator('[data-integration-health-id="unread-email"] [data-integration-health-configure]').press('Enter');
   assert.equal(await page.locator('[data-integration-health-id="unread-email"] details').evaluate((details) => details.open), true);
   await page.getByRole('button', { name: 'Pods & Layout' }).press('Enter');

@@ -27,10 +27,12 @@ The empty palette starts with these bounded commands:
 - Open project…
 - Refresh email
 - Show integration health
+- Switch profile
 
-`Switch profile` is listed but disabled with an explanation until Product
-Profiles is implemented in Phase 11.4. It does not imply an unimplemented
-profile-switching path.
+The available commands follow the active Product Profile. For example, when
+email is disabled, Refresh email and email search results are not shown; when
+no integrations are enabled, Integration Health is not shown. Switch profile
+opens the Profiles settings section.
 
 Use the arrow keys to choose a result, Enter to run it, and Escape to close the
 palette. The result list is capped at 30 rows and is recomputed from current

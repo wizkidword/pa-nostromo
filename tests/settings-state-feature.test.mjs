@@ -8,6 +8,8 @@ assert.deepEqual(defaults, {
   theme: 'dark',
   weatherIntervalMin: 15,
   defaultTaskColumn: 'inbox',
+  productProfile: 'core',
+  customProfilePodIds: [],
 });
 
 const projectIds = ['project-a'];
@@ -28,5 +30,6 @@ assert.equal(state.defaultTaskColumn, 'inbox');
 assert.equal(state.shortcutsFilterProjectIds, projectIds);
 assert.equal(state.customSetting, 'kept');
 assert.deepEqual(normalizeState({ shortcutsFilterProjectIds: 'invalid' }).shortcutsFilterProjectIds, []);
+assert.deepEqual(normalizeState({ customProfilePodIds: 'invalid' }).customProfilePodIds, []);
 
 console.log('settings-state-feature: PASS');

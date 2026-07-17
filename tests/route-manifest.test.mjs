@@ -63,6 +63,11 @@ for (const route of ROUTE_MANIFEST) {
   assert.equal(typeof route.bodyLimit, 'number');
   assert.equal(typeof route.ratePolicy, 'string');
   assert.equal(typeof route.sideEffect, 'boolean');
+  assert.equal(typeof route.productFeature, 'string');
 }
+
+assert.equal(ROUTE_MANIFEST.find((route) => route.id === 'email.unread')?.productFeature, 'unread-email');
+assert.equal(ROUTE_MANIFEST.find((route) => route.id === 'ebay.read')?.productFeature, 'ebay-traffic');
+assert.equal(ROUTE_MANIFEST.find((route) => route.id === 'facebook-followers.read')?.productFeature, 'social-followers');
 
 console.log('route-manifest: PASS');
