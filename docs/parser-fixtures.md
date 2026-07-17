@@ -10,6 +10,7 @@ production URLs, imported user data, or full copies of third-party pages.
 | --- | --- | --- | --- |
 | RSS and Atom feeds | `rss-atom-v1` | `tests/fixtures/parsers/rss-valid.xml`, `atom-valid.xml` | `rss-missing-channel.xml`, `rss-item-missing-link.xml` |
 | AAA gas prices | `aaa-gas-v1` | `tests/fixtures/parsers/aaa-current-avg-valid.html` | `aaa-current-avg-missing-column.html` |
+| Public social follower profiles | `social-followers-v1` | `social-{facebook,instagram,tiktok,youtube}-valid.html` | `social-follower-signal-missing.html` |
 
 Run `npm test` to execute the fixture checks. The checks assert the fields the
 dashboard needs and require a stable parser error code when a source loses

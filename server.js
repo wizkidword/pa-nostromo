@@ -2802,9 +2802,13 @@ function calculateFollowerRollingDelta(history = [], latestCount = null, latestF
   return latest - baseline.followersCount;
 }
 
+function missingSocialFollowerSignal(){
+  return { count: null, signal: '', errorCode: 'social_follower_signal_not_found' };
+}
+
 function extractFacebookPublicFollowerEstimate(html){
   const text = String(html || '');
-  if (!text) return { count: null, signal: '' };
+  if (!text) return missingSocialFollowerSignal();
   const candidates = [];
   const push = (raw, signal) => {
     const compact = parseCompactCount(String(raw || '').replace(/,/g, ''));
@@ -2822,14 +2826,14 @@ function extractFacebookPublicFollowerEstimate(html){
     let m;
     while ((m = p.rx.exec(text)) !== null) push(m[1], p.signal);
   }
-  if (!candidates.length) return { count: null, signal: '' };
+  if (!candidates.length) return missingSocialFollowerSignal();
   candidates.sort((a, b) => b.count - a.count);
   return candidates[0];
 }
 
 function extractInstagramPublicFollowerEstimate(html){
   const text = String(html || '');
-  if (!text) return { count: null, signal: '' };
+  if (!text) return missingSocialFollowerSignal();
   const candidates = [];
   const push = (raw, signal) => {
     const compact = parseCompactCount(String(raw || '').replace(/,/g, ''));
@@ -2868,14 +2872,14 @@ function extractInstagramPublicFollowerEstimate(html){
     while ((m = p.rx.exec(text)) !== null) push(m[1], p.signal);
   }
 
-  if (!candidates.length) return { count: null, signal: '' };
+  if (!candidates.length) return missingSocialFollowerSignal();
   candidates.sort((a, b) => b.count - a.count);
   return candidates[0];
 }
 
 function extractTikTokPublicFollowerEstimate(html){
   const text = String(html || '');
-  if (!text) return { count: null, signal: '' };
+  if (!text) return missingSocialFollowerSignal();
   const candidates = [];
   const push = (raw, signal) => {
     const compact = parseCompactCount(String(raw || '').replace(/,/g, ''));
@@ -2917,14 +2921,14 @@ function extractTikTokPublicFollowerEstimate(html){
     while ((m = p.rx.exec(text)) !== null) push(m[1], p.signal);
   }
 
-  if (!candidates.length) return { count: null, signal: '' };
+  if (!candidates.length) return missingSocialFollowerSignal();
   candidates.sort((a, b) => b.count - a.count);
   return candidates[0];
 }
 
 function extractYouTubePublicSubscriberEstimate(html){
   const text = String(html || '');
-  if (!text) return { count: null, signal: '' };
+  if (!text) return missingSocialFollowerSignal();
   const candidates = [];
   const push = (raw, signal) => {
     const compact = parseCompactCount(String(raw || '').replace(/,/g, ''));
@@ -2971,7 +2975,7 @@ function extractYouTubePublicSubscriberEstimate(html){
     while ((m = p.rx.exec(text)) !== null) push(String(m[1]).replace(/\s*subscribers?\b/i, ''), p.signal);
   }
 
-  if (!candidates.length) return { count: null, signal: '' };
+  if (!candidates.length) return missingSocialFollowerSignal();
   const priority = {
     yt_initial_data_subscriberCountText: 1,
     yt_initial_player_subscriberCountText: 1,
