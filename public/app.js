@@ -118,6 +118,8 @@ const homeDeviceStateFeature = window.MissionControlModules?.homeDeviceState;
 if (!homeDeviceStateFeature) throw new Error('Home Device state feature failed to load.');
 const cameraFeedStateFeature = window.MissionControlModules?.cameraFeedState;
 if (!cameraFeedStateFeature) throw new Error('Camera Feed state feature failed to load.');
+const liveStreamsStateFeature = window.MissionControlModules?.liveStreamsState;
+if (!liveStreamsStateFeature) throw new Error('Live Streams state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -985,58 +987,7 @@ function load(){
 
   state.cameraFeed = cameraFeedStateFeature.normalizeState(state.cameraFeed);
 
-  state.liveStreams = {
-    sourceType: 'youtube',
-    inputs: {
-      youtube: '',
-      twitch: '',
-      kick: '',
-      vaughn: '',
-      rumble: '',
-      xlive: '',
-      facebook: '',
-      generic: '',
-      local: '',
-    },
-    active: false,
-    status: 'idle',
-    lastError: '',
-    embedUrl: '',
-    externalUrl: '',
-    renderMode: 'iframe',
-    presets: [],
-    ...(state.liveStreams || {}),
-  };
-  state.liveStreams.sourceType = ['youtube', 'twitch', 'kick', 'vaughn', 'rumble', 'xlive', 'facebook', 'generic', 'local'].includes(state.liveStreams.sourceType)
-    ? state.liveStreams.sourceType
-    : 'youtube';
-  const liveInputs = (state.liveStreams.inputs && typeof state.liveStreams.inputs === 'object') ? state.liveStreams.inputs : {};
-  state.liveStreams.inputs = {
-    youtube: String(liveInputs.youtube || '').trim(),
-    twitch: String(liveInputs.twitch || '').trim(),
-    kick: String(liveInputs.kick || '').trim(),
-    vaughn: String(liveInputs.vaughn || '').trim(),
-    rumble: String(liveInputs.rumble || '').trim(),
-    xlive: String(liveInputs.xlive || '').trim(),
-    facebook: String(liveInputs.facebook || '').trim(),
-    generic: String(liveInputs.generic || '').trim(),
-    local: String(liveInputs.local || '').trim(),
-  };
-  state.liveStreams.active = !!state.liveStreams.active;
-  state.liveStreams.status = ['idle', 'loading', 'live', 'error'].includes(state.liveStreams.status) ? state.liveStreams.status : 'idle';
-  state.liveStreams.lastError = String(state.liveStreams.lastError || '').slice(0, 300);
-  state.liveStreams.embedUrl = String(state.liveStreams.embedUrl || '').trim();
-  state.liveStreams.externalUrl = String(state.liveStreams.externalUrl || '').trim();
-  state.liveStreams.renderMode = ['iframe', 'video'].includes(state.liveStreams.renderMode) ? state.liveStreams.renderMode : 'iframe';
-  state.liveStreams.presets = Array.isArray(state.liveStreams.presets)
-    ? state.liveStreams.presets.slice(0, 20).map((p) => ({
-      id: String(p?.id || id()),
-      name: String(p?.name || '').trim().slice(0, 40),
-      sourceType: ['youtube', 'twitch', 'kick', 'vaughn', 'rumble', 'xlive', 'facebook', 'generic', 'local'].includes(p?.sourceType) ? p.sourceType : 'youtube',
-      value: String(p?.value || '').trim().slice(0, 500),
-      createdAt: String(p?.createdAt || now()),
-    })).filter((p) => p.name && p.value)
-    : [];
+  state.liveStreams = liveStreamsStateFeature.normalizeState(state.liveStreams, { createId: id, getNow: now });
   state.rss = {
     feeds: [],
     items: [],
@@ -9122,82 +9073,13 @@ function getLiveStreamsEls(){
 }
 
 function liveStreamsCompactValueLabel(raw){
-  const value = String(raw || '').trim();
-  if (!value) return 'No source loaded yet';
-  try {
-    const u = new URL(value);
-    const host = u.hostname.replace(/^www\./i, '');
-    const path = u.pathname && u.pathname !== '/' ? u.pathname : '';
-    return `${host}${path}`.slice(0, 68);
-  } catch {
-    return value.slice(0, 68);
-  }
+  return liveStreamsStateFeature.compactValueLabel(raw);
 }
 
 function getLiveStreamsPresentation(statusText = ''){
   const sourceType = String(state.liveStreams.sourceType || 'youtube');
   const providerLabel = liveSourceLabel(sourceType);
-  const sourceValue = String(state.liveStreams.inputs[sourceType] || '').trim();
-  const presetCount = Array.isArray(state.liveStreams.presets) ? state.liveStreams.presets.length : 0;
-  const status = String(state.liveStreams.status || (state.liveStreams.active ? 'loading' : 'idle')).toLowerCase();
-  const renderMode = String(state.liveStreams.renderMode || 'iframe').toLowerCase();
-  const hasExternal = !!state.liveStreams.externalUrl;
-
-  let tone = 'idle';
-  let signal = 'neutral';
-  let signalDetail = providerLabel;
-  let badge = 'Ready';
-  let heroTitle = `Queue up ${providerLabel}`;
-  let fallbackMeta = 'Choose a source, paste a channel or URL, then start the stream deck.';
-
-  if (status === 'live') {
-    tone = 'live';
-    signal = 'fresh';
-    signalDetail = renderMode === 'video' ? 'direct media' : 'live';
-    badge = 'Live';
-    heroTitle = `${providerLabel} is on deck`;
-    fallbackMeta = hasExternal
-      ? 'If the embed blanks out, the fallback buttons are ready.'
-      : 'Live playback is active in the embedded stage.';
-  } else if (status === 'loading') {
-    tone = 'loading';
-    signal = 'degraded';
-    signalDetail = 'loading';
-    badge = 'Loading';
-    heroTitle = `Loading ${providerLabel}`;
-    fallbackMeta = 'Some providers take a few seconds to reveal whether framing is allowed.';
-  } else if (status === 'error') {
-    tone = 'error';
-    signal = 'error';
-    signalDetail = 'fallback ready';
-    badge = 'Blocked';
-    heroTitle = `${providerLabel} needs a fallback path`;
-    fallbackMeta = state.liveStreams.lastError || 'This source likely blocks in-app embedding.';
-  }
-
-  return {
-    tone,
-    signal,
-    signalDetail,
-    badge,
-    heroTitle,
-    heroMeta: String(statusText || fallbackMeta || '').trim(),
-    providerLabel,
-    sourceHeadline: liveStreamsCompactValueLabel(sourceValue),
-    sourceHint: 'Drop in a handle, channel name, or direct stream URL. Different providers normalize differently behind the scenes.',
-    presetMeta: presetCount ? `${presetCount} saved preset${presetCount === 1 ? '' : 's'} ready to reuse.` : 'No presets saved yet. Save your favorite channels for quick launch.',
-    stageTitle: renderMode === 'video' ? 'Direct media player' : 'Embedded stream stage',
-    stageMeta: hasExternal
-      ? 'When a provider blocks framing or the player stays blank, use Pop-out or Open in new tab.'
-      : 'This source is best experienced directly inside the dashboard when embedding cooperates.',
-    chips: [
-      providerLabel,
-      state.liveStreams.active ? 'Session active' : 'Idle',
-      renderMode === 'video' ? 'Direct media' : 'Embed mode',
-      hasExternal ? 'Fallback ready' : 'In-dashboard only',
-    ],
-    footnote: 'Providers differ wildly on iframe policy. The pod keeps fallback routes close so a blocked embed does not kill the experience.',
-  };
+  return liveStreamsStateFeature.getPresentation(state.liveStreams, { statusText, providerLabel });
 }
 
 function syncLiveStreamsUiStatus(statusText = ''){
