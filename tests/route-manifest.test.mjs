@@ -7,6 +7,7 @@ const { resolveRoute } = require('../lib/route-manifest.js');
 
 const expectedRoutes = [
   ['security.bootstrap', 'GET', '/api/security/bootstrap'],
+  ['app.info', 'GET', '/api/app-info'],
   ['state.read', 'GET', '/api/state'],
   ['state.write', 'POST', '/api/state'],
   ['state.backups', 'GET', '/api/state/backups'],

@@ -17,8 +17,8 @@ independent checks:
 - Gitleaks secret scanning.
 
 Coverage is reported and retained as a workflow artifact, not used as a global
-percentage gate yet. The initial 2026-07-16 baseline is 71.08% statements,
-72.28% branches, and 85.47% functions across `lib/` and `public/app/core/`.
+percentage gate yet. The initial 2026-07-16 baseline is 71.25% statements,
+72.22% branches, and 85.18% functions across `lib/` and `public/app/core/`.
 This is intentional: the baseline includes a large legacy dashboard, while new
 security-sensitive modules must continue to receive focused tests. Raise a
 scoped coverage requirement only after the baseline has been reviewed and

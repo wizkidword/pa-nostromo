@@ -34,7 +34,7 @@
 ### 1) Install
 
 ```bash
-cd project-mission-control-lite
+cd pa-nostromo
 npm install
 ```
 
@@ -53,6 +53,9 @@ npm start
 ```
 
 Open: `http://127.0.0.1:4287`
+
+See [versioning and releases](docs/versioning.md) for the app-version, release,
+and state-migration policy.
 
 ## Configuration (Public-Safe)
 

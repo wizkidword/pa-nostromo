@@ -37,6 +37,7 @@ const UNREAD_EMAIL_ACTIVE_ACCOUNT_KEY = 'mission-control-unread-email-active-acc
 const debugCounters = window.MissionControlModules?.debug || null;
 
 const CSRF_BOOTSTRAP_API = '/api/security/bootstrap';
+const APP_INFO_API = '/api/app-info';
 const CSRF_HEADER_NAME = 'X-PA-Nostromo-CSRF';
 let csrfTokenPromise = null;
 
@@ -1341,14 +1342,34 @@ function extractStateRevision(obj){
 
 function applySharedWriteIntegrity(target, result){
   if (!target || typeof target !== 'object' || !result?.ok) return;
-  target.schemaVersion = 2;
+  const schemaVersion = Number(result.schemaVersion || result?.integrity?.stateSchemaVersion || target.schemaVersion || 1);
+  target.schemaVersion = Number.isInteger(schemaVersion) && schemaVersion > 0 ? schemaVersion : 1;
   target.__integrity = {
     ...(target.__integrity || {}),
     revision: Number(result.revision || 0),
     savedAt: String(result.savedAt || now()),
     checksum: String(result.checksum || ''),
-    stateSchemaVersion: 2,
+    stateSchemaVersion: target.schemaVersion,
   };
+}
+
+async function loadApplicationVersion(){
+  const el = document.getElementById('appVersion');
+  if (!el) return;
+  try {
+    const response = await fetch(APP_INFO_API, { cache: 'no-store' });
+    if (!response.ok) throw new Error('app_info_unavailable');
+    const info = await response.json();
+    const appVersion = String(info?.appVersion || '').trim();
+    const schemaVersion = Number(info?.stateSchemaVersion);
+    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(appVersion) || !Number.isInteger(schemaVersion) || schemaVersion < 1) {
+      throw new Error('app_info_invalid');
+    }
+    el.textContent = `v${appVersion} · state schema ${schemaVersion}`;
+    document.title = `PA Nostromo v${appVersion}`;
+  } catch {
+    el.textContent = 'Version unavailable';
+  }
 }
 
 function clearSharedStateConflict(){
@@ -13687,6 +13708,7 @@ if (!state.changelog.some((c) => c.message === socialFollowersMergePatch)) {
 }
 
 save('startup_patch_seed', { pushShared: false });
+loadApplicationVersion();
 setupSettingsSectionNav();
 setupSettingsPaneDragScroll();
 renderAll();

@@ -1,4 +1,7 @@
-# PA Nostromo Dashboard v1.0.0
+# Historical Phase 1 release notes
+
+> This is an archived Phase 1 milestone record, not the current PA Nostromo
+> application-version authority. See [versioning and releases](docs/versioning.md).
 
 ## Phase 1 Complete: Stable Modular Foundation
 

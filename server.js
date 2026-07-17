@@ -15,6 +15,7 @@ const { safeFetch } = require('./lib/safe-fetch.js');
 const { createWorkCoordinator } = require('./lib/work-coordinator.js');
 const { fetchWithFailover } = require('./public/app/core/crypto-failover.js');
 const { StateSchemaError } = require('./lib/state-schema.js');
+const { getReleaseInfo } = require('./lib/release-info.js');
 const { StateStore, StateStoreError } = require('./lib/state-store.js');
 const { createRequestId, createPublicErrorPayload, safeErrorCode, createBoundedJsonlLogWriter, configureDiagnosticLogSink, logDiagnostic } = require('./lib/observability.js');
 const { withIntegrationEnvelope } = require('./lib/integration-envelope.js');
@@ -6033,6 +6034,10 @@ function handleApiSecurityBootstrap(req, res) {
   return sendJson(res, 200, { ok: true, csrfToken: CSRF_TOKEN });
 }
 
+function handleApiAppInfo(req, res) {
+  return sendJson(res, 200, { ok: true, ...getReleaseInfo() });
+}
+
 function stateRichnessScore(state) {
   const arrLen = (v) => Array.isArray(v) ? v.length : 0;
   return (
@@ -6602,6 +6607,7 @@ async function handleApiState(req, res) {
         savedAt: result.integrity.savedAt,
         checksum: result.integrity.checksum,
         revision: result.integrity.revision,
+        schemaVersion: result.integrity.stateSchemaVersion,
       });
     } catch (err) {
       if (isPayloadTooLargeError(err)) return sendPayloadTooLarge(res, err);
@@ -6670,6 +6676,7 @@ async function handleApiState(req, res) {
       savedAt: result.integrity.savedAt,
       checksum: result.integrity.checksum,
       revision: result.integrity.revision,
+      schemaVersion: result.integrity.stateSchemaVersion,
       previousStateIntegrity: result.previousStateIntegrity,
       backupFile: result.backupFile,
     });
@@ -7556,6 +7563,7 @@ async function handleStatic(req, res) {
 }
 
 async function dispatchApiRoute(req, res, pathname) {
+  if (pathname === '/api/app-info') return handleApiAppInfo(req, res);
   if (pathname.startsWith('/api/state')) return handleApiState(req, res);
   if (pathname === '/api/rowan-send') return handleApiRowanSend(req, res);
   if (pathname === '/api/camera-snapshot') return handleApiCameraSnapshot(req, res);
