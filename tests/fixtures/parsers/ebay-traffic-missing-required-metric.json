@@ -1,0 +1,15 @@
+{
+  "header": {
+    "metrics": [
+      { "key": "TOTAL_IMPRESSION_TOTAL" },
+      { "key": "LISTING_VIEWS_TOTAL" },
+      { "key": "LISTING_IMPRESSION_TOTAL" }
+    ]
+  },
+  "records": [
+    {
+      "dimensionValues": [{ "value": "2026-07-16" }],
+      "metricValues": [{ "value": "1000" }, { "value": "50" }, { "value": "400" }]
+    }
+  ]
+}

@@ -35,7 +35,7 @@ for (const [, parser] of parserCases) {
   });
 }
 
-assert.equal(parserVersionForRoute({ id: 'facebook.followers' }), 'social-followers-v1');
-assert.equal(parserVersionForRoute({ id: 'youtube.subscribers' }), 'social-followers-v1');
+assert.equal(parserVersionForRoute({ id: 'facebook.followers' }), 'social-followers-v2');
+assert.equal(parserVersionForRoute({ id: 'youtube.subscribers' }), 'social-followers-v2');
 
 console.log('social-parser-fixtures: PASS');

@@ -207,6 +207,28 @@ const EBAY_TRAFFIC_RATE_LIMIT_BACKOFF_MS = Math.max(60_000, parsePositiveInt(pro
 const EBAY_MARKETING_REPORT_CACHE_TTL_MS = Math.max(60_000, parsePositiveInt(process.env.EBAY_MARKETING_REPORT_CACHE_TTL_MS, 15 * 60 * 1000));
 const EBAY_MARKETING_REPORT_TASK_REUSE_MS = Math.max(60_000, parsePositiveInt(process.env.EBAY_MARKETING_REPORT_TASK_REUSE_MS, 30 * 60 * 1000));
 const EBAY_TRAFFIC_CACHE_PATH = path.join(DATA_DIR, 'ebay-traffic-cache.json');
+const EBAY_TRAFFIC_DAY_METRICS = Object.freeze([
+  'TOTAL_IMPRESSION_TOTAL',
+  'LISTING_VIEWS_TOTAL',
+  'LISTING_IMPRESSION_TOTAL',
+  'LISTING_IMPRESSION_STORE',
+  'LISTING_IMPRESSION_SEARCH_RESULTS_PAGE',
+  'LISTING_VIEWS_SOURCE_SEARCH_RESULTS_PAGE',
+  'LISTING_VIEWS_SOURCE_STORE',
+  'LISTING_VIEWS_SOURCE_DIRECT',
+  'LISTING_VIEWS_SOURCE_OTHER_EBAY',
+  'LISTING_VIEWS_SOURCE_OFF_EBAY',
+  'TRANSACTION',
+  'CLICK_THROUGH_RATE',
+  'SALES_CONVERSION_RATE',
+]);
+const EBAY_TRAFFIC_LISTING_METRICS = Object.freeze([
+  'LISTING_VIEWS_TOTAL',
+  'LISTING_IMPRESSION_STORE',
+  'TRANSACTION',
+  'CLICK_THROUGH_RATE',
+  'SALES_CONVERSION_RATE',
+]);
 
 const META_GRAPH_API_VERSION = String(process.env.META_GRAPH_API_VERSION || 'v22.0').trim() || 'v22.0';
 const META_GRAPH_PAGE_ID = String(process.env.META_GRAPH_PAGE_ID || '').trim();
@@ -827,21 +849,37 @@ function parseNumericMetric(value) {
   return Number.isFinite(num) ? num : null;
 }
 
-function parseEbayTrafficReport(report) {
+function ebayTrafficParserError(){
+  return Object.assign(new Error('ebay_traffic_parser_required_fields_missing'), {
+    code: 'ebay_traffic_parser_required_fields_missing',
+    status: 502,
+  });
+}
+
+function parseEbayTrafficReport(report, { requiredMetricKeys = [] } = {}) {
   const metricKeys = Array.isArray(report?.header?.metrics)
     ? report.header.metrics.map((metric) => String(metric?.key || '').trim()).filter(Boolean)
     : [];
+  const required = [...new Set((Array.isArray(requiredMetricKeys) ? requiredMetricKeys : [])
+    .map((key) => String(key || '').trim())
+    .filter(Boolean))];
+  if (!metricKeys.length || required.some((key) => !metricKeys.includes(key))) throw ebayTrafficParserError();
   const records = Array.isArray(report?.records) ? report.records : [];
+  const parsedRecords = records.map((record) => {
+    const dimensionValue = String(record?.dimensionValues?.[0]?.value || '').trim();
+    const metrics = {};
+    metricKeys.forEach((key, index) => {
+      metrics[key] = parseNumericMetric(record?.metricValues?.[index]?.value);
+    });
+    return { dimensionValue, metrics };
+  });
+  if ((records.length > 0 && parsedRecords.some((record) => !record.dimensionValue))
+    || parsedRecords.some((record) => required.some((key) => !Number.isFinite(record.metrics[key])))) {
+    throw ebayTrafficParserError();
+  }
   return {
     metricKeys,
-    records: records.map((record) => {
-      const dimensionValue = String(record?.dimensionValues?.[0]?.value || '').trim();
-      const metrics = {};
-      metricKeys.forEach((key, index) => {
-        metrics[key] = parseNumericMetric(record?.metricValues?.[index]?.value);
-      });
-      return { dimensionValue, metrics };
-    }).filter((record) => record.dimensionValue),
+    records: parsedRecords,
   };
 }
 
@@ -1619,8 +1657,8 @@ async function enrichEbayTopListingsWithWatchCounts(accessToken, topListings = [
 }
 
 function normalizeEbayTrafficStoreSnapshot(store, dayReport, listingReport, options = {}) {
-  const parsedDay = parseEbayTrafficReport(dayReport);
-  const parsedListing = parseEbayTrafficReport(listingReport);
+  const parsedDay = parseEbayTrafficReport(dayReport, { requiredMetricKeys: EBAY_TRAFFIC_DAY_METRICS });
+  const parsedListing = parseEbayTrafficReport(listingReport, { requiredMetricKeys: EBAY_TRAFFIC_LISTING_METRICS });
   const listingTitles = parseEbayListingMetadata(listingReport);
   const sortedDayRecords = sortEbayTrafficRecordsByDay(parsedDay.records);
   const views = sumEbayMetric(parsedDay.records, 'LISTING_VIEWS_TOTAL');
@@ -1783,33 +1821,13 @@ async function fetchEbayTrafficStoreSnapshot(store) {
   const dayReport = await fetchEbayTrafficReport({
     accessToken,
     dimension: 'DAY',
-    metrics: [
-      'TOTAL_IMPRESSION_TOTAL',
-      'LISTING_VIEWS_TOTAL',
-      'LISTING_IMPRESSION_TOTAL',
-      'LISTING_IMPRESSION_STORE',
-      'LISTING_IMPRESSION_SEARCH_RESULTS_PAGE',
-      'LISTING_VIEWS_SOURCE_SEARCH_RESULTS_PAGE',
-      'LISTING_VIEWS_SOURCE_STORE',
-      'LISTING_VIEWS_SOURCE_DIRECT',
-      'LISTING_VIEWS_SOURCE_OTHER_EBAY',
-      'LISTING_VIEWS_SOURCE_OFF_EBAY',
-      'TRANSACTION',
-      'CLICK_THROUGH_RATE',
-      'SALES_CONVERSION_RATE',
-    ],
+    metrics: EBAY_TRAFFIC_DAY_METRICS,
     filter,
   });
   const listingReport = await fetchEbayTrafficReport({
     accessToken,
     dimension: 'LISTING',
-    metrics: [
-      'LISTING_VIEWS_TOTAL',
-      'LISTING_IMPRESSION_STORE',
-      'TRANSACTION',
-      'CLICK_THROUGH_RATE',
-      'SALES_CONVERSION_RATE',
-    ],
+    metrics: EBAY_TRAFFIC_LISTING_METRICS,
     filter,
     sort: '-LISTING_VIEWS_TOTAL',
   });
@@ -7331,6 +7349,7 @@ module.exports = {
   extractTikTokPublicFollowerEstimate,
   extractYouTubePublicSubscriberEstimate,
   parseCompactCount,
+  parseEbayTrafficReport,
   parseFeedXml,
   parseAaaCurrentAvgRow,
   extractUnreadEmailAtomFeed,

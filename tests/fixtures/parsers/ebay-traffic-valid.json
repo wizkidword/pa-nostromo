@@ -1,0 +1,30 @@
+{
+  "header": {
+    "metrics": [
+      { "key": "TOTAL_IMPRESSION_TOTAL" },
+      { "key": "LISTING_VIEWS_TOTAL" },
+      { "key": "LISTING_IMPRESSION_TOTAL" },
+      { "key": "LISTING_IMPRESSION_STORE" },
+      { "key": "LISTING_IMPRESSION_SEARCH_RESULTS_PAGE" },
+      { "key": "LISTING_VIEWS_SOURCE_SEARCH_RESULTS_PAGE" },
+      { "key": "LISTING_VIEWS_SOURCE_STORE" },
+      { "key": "LISTING_VIEWS_SOURCE_DIRECT" },
+      { "key": "LISTING_VIEWS_SOURCE_OTHER_EBAY" },
+      { "key": "LISTING_VIEWS_SOURCE_OFF_EBAY" },
+      { "key": "TRANSACTION" },
+      { "key": "CLICK_THROUGH_RATE" },
+      { "key": "SALES_CONVERSION_RATE" }
+    ]
+  },
+  "records": [
+    {
+      "dimensionValues": [{ "value": "2026-07-16" }],
+      "metricValues": [
+        { "value": "1000" }, { "value": "50" }, { "value": "400" },
+        { "value": "300" }, { "value": "600" }, { "value": "25" },
+        { "value": "15" }, { "value": "5" }, { "value": "3" },
+        { "value": "2" }, { "value": "4" }, { "value": "5" }, { "value": "8" }
+      ]
+    }
+  ]
+}
