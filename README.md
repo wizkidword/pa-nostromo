@@ -102,6 +102,8 @@ Every response carries anti-sniffing, frame, referrer, and same-origin resource 
 - `RSS_FETCH_MAX_FEEDS`
 - `RSS_FETCH_MAX_ENTRIES`
 - `RSS_FETCH_CACHE_TTL_MS` (last-known-good feed cache; a failed refresh returns a visible stale result)
+- `RSS_FETCH_MAX_ATTEMPTS`, `RSS_FETCH_BACKOFF_BASE_MS`, and `RSS_FETCH_BACKOFF_MAX_MS`
+- `RSS_FETCH_OPERATION_TIMEOUT_MS` and `RSS_FETCH_UNHEALTHY_COOLDOWN_MS`
 
 ### Outbound network safety
 

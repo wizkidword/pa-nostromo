@@ -132,6 +132,11 @@ const RSS_FETCH_MAX_BYTES = Math.max(128 * 1024, parsePositiveInt(process.env.RS
 const RSS_FETCH_MAX_FEEDS = Math.max(1, parsePositiveInt(process.env.RSS_FETCH_MAX_FEEDS, 12));
 const RSS_FETCH_MAX_ENTRIES = Math.max(1, Math.min(100, parsePositiveInt(process.env.RSS_FETCH_MAX_ENTRIES, 40)));
 const RSS_FETCH_CACHE_TTL_MS = Math.max(5_000, parsePositiveInt(process.env.RSS_FETCH_CACHE_TTL_MS, 5 * 60_000));
+const RSS_FETCH_MAX_ATTEMPTS = Math.max(1, parsePositiveInt(process.env.RSS_FETCH_MAX_ATTEMPTS, 2));
+const RSS_FETCH_BACKOFF_BASE_MS = Math.max(100, parsePositiveInt(process.env.RSS_FETCH_BACKOFF_BASE_MS, 500));
+const RSS_FETCH_BACKOFF_MAX_MS = Math.max(RSS_FETCH_BACKOFF_BASE_MS, parsePositiveInt(process.env.RSS_FETCH_BACKOFF_MAX_MS, 2_000));
+const RSS_FETCH_OPERATION_TIMEOUT_MS = Math.max(RSS_FETCH_TIMEOUT_MS, parsePositiveInt(process.env.RSS_FETCH_OPERATION_TIMEOUT_MS, 20_000));
+const RSS_FETCH_UNHEALTHY_COOLDOWN_MS = Math.max(1_000, parsePositiveInt(process.env.RSS_FETCH_UNHEALTHY_COOLDOWN_MS, 30_000));
 const OUTBOUND_MAX_CONCURRENCY = Math.max(1, Math.min(16, parsePositiveInt(process.env.OUTBOUND_MAX_CONCURRENCY, 4)));
 const OUTBOUND_PER_HOST_CONCURRENCY = Math.max(1, Math.min(8, parsePositiveInt(process.env.OUTBOUND_PER_HOST_CONCURRENCY, 1)));
 const MANUAL_REFRESH_COOLDOWN_MS = Math.max(0, parsePositiveInt(process.env.MANUAL_REFRESH_COOLDOWN_MS, 3_000));
@@ -6856,6 +6861,43 @@ function parseFeedXml(xmlRaw, feedUrl) {
   return items;
 }
 
+function isRetryableRssRefreshError(error){
+  const status = Number(error?.status || error?.httpStatus || 0);
+  return error?.code === 'provider_attempt_timeout'
+    || [408, 425, 429, 500, 502, 503, 504].includes(status)
+    || /abort|timeout|network|temporar/i.test(String(error?.message || ''));
+}
+
+function rssRetryDelayMs({ error }){
+  return Math.max(0, Number(error?.retryAfter || 0) * 1000);
+}
+
+async function fetchRssResponse(normalized, key, options, { signal, attempt }){
+  if (typeof options.fetchResponse === 'function') {
+    return options.fetchResponse(normalized, { signal, attempt });
+  }
+  return WORK_COORDINATOR.run({
+    key: `rss:${key}`,
+    integration: 'rss',
+    host: normalized.hostname,
+    signal,
+    timeoutMs: RSS_FETCH_TIMEOUT_MS,
+    manual: options.manual === true && attempt === 1,
+    cooldownMs: MANUAL_REFRESH_COOLDOWN_MS,
+  }, ({ signal: requestSignal }) => safeFetch(normalized, {
+    method: 'GET',
+    signal: requestSignal,
+    timeoutMs: RSS_FETCH_TIMEOUT_MS,
+    firstByteTimeoutMs: RSS_FETCH_TIMEOUT_MS,
+    maxBytes: RSS_FETCH_MAX_BYTES,
+    maxRedirects: 3,
+    headers: {
+      'User-Agent': 'mission-control-lite-rss/1.0',
+      'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5',
+    },
+  }));
+}
+
 async function fetchFeedXml(url, options = {}) {
   let normalized;
   try {
@@ -6869,27 +6911,34 @@ async function fetchFeedXml(url, options = {}) {
   if (cachedFresh) return { xml: cached.xml, stale: false, cached: true, fetchedAt: cached.fetchedAt };
 
   try {
-    const response = await WORK_COORDINATOR.run({
-      key: `rss:${key}`,
-      integration: 'rss',
-      host: normalized.hostname,
+    const result = await fetchWithFailover({
+      providers: [`rss:${key}`],
+      retries: RSS_FETCH_MAX_ATTEMPTS - 1,
+      backoffBaseMs: RSS_FETCH_BACKOFF_BASE_MS,
+      backoffMaxMs: RSS_FETCH_BACKOFF_MAX_MS,
+      operationTimeoutMs: RSS_FETCH_OPERATION_TIMEOUT_MS,
+      attemptTimeoutMs: RSS_FETCH_TIMEOUT_MS,
+      unhealthyCooldownMs: RSS_FETCH_UNHEALTHY_COOLDOWN_MS,
       signal: options.signal,
-      timeoutMs: RSS_FETCH_TIMEOUT_MS,
-      manual: options.manual === true,
-      cooldownMs: MANUAL_REFRESH_COOLDOWN_MS,
-    }, ({ signal }) => safeFetch(normalized, {
-      method: 'GET',
-      signal,
-      timeoutMs: RSS_FETCH_TIMEOUT_MS,
-      firstByteTimeoutMs: RSS_FETCH_TIMEOUT_MS,
-      maxBytes: RSS_FETCH_MAX_BYTES,
-      maxRedirects: 3,
-      headers: {
-        'User-Agent': 'mission-control-lite-rss/1.0',
-        'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5',
+      healthStore: options.healthStore,
+      random: options.random,
+      delay: options.delay,
+      now: options.now,
+      isRetryableError: isRetryableRssRefreshError,
+      retryDelayMs: rssRetryDelayMs,
+      async tryProvider(_provider, attempt, { signal }) {
+        const response = await fetchRssResponse(normalized, key, options, { signal, attempt });
+        if (!response.ok) {
+          throw Object.assign(new Error('rss_upstream_http_error'), {
+            code: 'rss_upstream_http_error',
+            status: response.status,
+            retryAfter: response.headers?.get?.('retry-after') || '',
+          });
+        }
+        return response;
       },
-    }));
-    if (!response.ok) throw Object.assign(new Error('rss_upstream_http_error'), { code: 'rss_upstream_http_error', status: response.status });
+    });
+    const response = result.result;
     const xml = await response.text();
     const fetchedAt = Date.now();
     rssFeedCache.set(key, { xml, fetchedAt });
@@ -7503,6 +7552,7 @@ module.exports = {
   BACKUPS_DIR,
   parseJsonSafely,
   fetchJsonViaCurl,
+  fetchFeedXml,
   safePathFromUrl,
   resolveStaticFile,
   readBody,

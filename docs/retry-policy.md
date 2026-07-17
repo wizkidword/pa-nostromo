@@ -55,3 +55,13 @@ temporary fetch failure can retry, and an upstream `Retry-After` value is
 honored. A missing follower/subscriber signal is treated as parser drift rather
 than a transient network failure, so it does not create a synchronized retry
 loop; the existing last-known-good value is instead returned as stale data.
+
+## RSS refreshes
+
+RSS refreshes retry only transient network and upstream failures. Each refresh
+has a total deadline, a per-attempt deadline, jittered backoff, cancellation,
+and a short per-feed cooldown after exhausted transient failures. A
+provider-supplied `Retry-After` value is the minimum wait. RSS parser failures
+remain explicit and are not retried; when a feed has a last-known-good cache,
+the existing stale response is returned instead. Configure this with the
+`RSS_FETCH_*` retry variables in `.env.example`.
