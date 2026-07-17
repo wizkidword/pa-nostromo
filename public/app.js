@@ -94,74 +94,9 @@ const COLUMNS = [
 ];
 const KANBAN_COLUMN_KEYS = new Set(COLUMNS.map(([key]) => key));
 
-const THEME_OPTIONS = [
-  {
-    id: 'dark',
-    label: 'Nostromo Dark',
-    description: 'Low-light command deck',
-    swatches: ['#0b1020', '#111831', '#2563eb'],
-  },
-  {
-    id: 'light',
-    label: 'Day Shift',
-    description: 'Bright operations view',
-    swatches: ['#f3f6fb', '#ffffff', '#2563eb'],
-  },
-  {
-    id: 'system',
-    label: 'System',
-    description: 'Follow Windows/browser',
-    swatches: ['#f8fafc', '#111831', '#2563eb'],
-  },
-  {
-    id: 'ember',
-    label: 'Ember',
-    description: 'Warm alert-room contrast',
-    swatches: ['#15100d', '#241713', '#f97316'],
-  },
-  {
-    id: 'forest',
-    label: 'Forest',
-    description: 'Quiet green console',
-    swatches: ['#08130f', '#10231b', '#22c55e'],
-  },
-  {
-    id: 'terminal',
-    label: 'Terminal',
-    description: 'High-contrast phosphor',
-    swatches: ['#030712', '#07120d', '#84cc16'],
-  },
-  {
-    id: 'aurora',
-    label: 'Aurora',
-    description: 'Teal, rose, and night',
-    swatches: ['#10131f', '#172033', '#14b8a6'],
-  },
-];
-const THEME_OPTION_IDS = new Set(THEME_OPTIONS.map((theme) => theme.id));
-const CONCRETE_THEME_CLASS_NAMES = THEME_OPTIONS
-  .map((theme) => theme.id)
-  .filter((themeId) => themeId !== 'dark' && themeId !== 'system')
-  .map((themeId) => `theme-${themeId}`);
-
-function normalizeThemePreference(value){
-  const themeId = String(value || '').trim().toLowerCase();
-  return THEME_OPTION_IDS.has(themeId) ? themeId : 'dark';
-}
-
-function themeOptionById(themeId){
-  const normalized = normalizeThemePreference(themeId);
-  return THEME_OPTIONS.find((theme) => theme.id === normalized) || THEME_OPTIONS[0];
-}
-
-function resolveThemePreference(themeId){
-  const normalized = normalizeThemePreference(themeId);
-  if (normalized !== 'system') return normalized;
-  const prefersLight = typeof window.matchMedia === 'function'
-    ? window.matchMedia('(prefers-color-scheme: light)').matches
-    : false;
-  return prefersLight ? 'light' : 'dark';
-}
+const themeFeature = window.MissionControlModules?.theme;
+if (!themeFeature) throw new Error('Theme feature failed to load.');
+const normalizeThemePreference = themeFeature.normalizeThemePreference;
 
 const DEFAULT_SETTINGS = {
   theme: 'dark',
@@ -908,6 +843,18 @@ const AMBIENT_PRESETS = [
 ];
 
 state = load();
+
+const themeController = themeFeature.createThemeController({
+  document,
+  window,
+  getState: () => state,
+  escapeHtml,
+  onPreferenceChanged: ({ theme }) => {
+    logChange(`Theme changed to ${theme.label}`);
+    commitState('theme_changed');
+  },
+  onPreferenceUnchanged: () => renderSettings(),
+});
 
 let cameraSnapshotTimer = null;
 let cameraSnapshotBust = 0;
@@ -1788,26 +1735,11 @@ function projectDisplayName(projectId){
 }
 
 function applyTheme(){
-  const pref = normalizeThemePreference(state.settings.theme);
-  if (state.settings.theme !== pref) state.settings.theme = pref;
-  const resolvedTheme = resolveThemePreference(pref);
-  document.body.classList.remove(...CONCRETE_THEME_CLASS_NAMES);
-  if (resolvedTheme !== 'dark') document.body.classList.add(`theme-${resolvedTheme}`);
-  document.body.dataset.themePreference = pref;
-  document.body.dataset.themeResolved = resolvedTheme;
+  return themeController.applyTheme();
 }
 
 function setThemePreference(themeId){
-  const nextTheme = normalizeThemePreference(themeId);
-  if (state.settings.theme === nextTheme) {
-    applyTheme();
-    renderSettings();
-    return;
-  }
-  state.settings.theme = nextTheme;
-  applyTheme();
-  logChange(`Theme changed to ${themeOptionById(nextTheme).label}`);
-  commitState('theme_changed');
+  return themeController.setThemePreference(themeId);
 }
 
 function setupWeatherTimer(){
@@ -1977,19 +1909,7 @@ function renderChangeLog(){
   updatePatchNotesOverflowAffordance();
 }
 
-const systemThemeQuery = typeof window.matchMedia === 'function'
-  ? window.matchMedia('(prefers-color-scheme: light)')
-  : null;
-const handleSystemThemeChange = () => {
-  if (normalizeThemePreference(state.settings.theme) !== 'system') return;
-  applyTheme();
-  renderThemeChoices();
-};
-if (systemThemeQuery?.addEventListener) {
-  systemThemeQuery.addEventListener('change', handleSystemThemeChange);
-} else if (systemThemeQuery?.addListener) {
-  systemThemeQuery.addListener(handleSystemThemeChange);
-}
+themeController.bindSystemThemeListener();
 
 function formatRemaining(ms){
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -2282,22 +2202,7 @@ function renderTodayReminders(){
 }
 
 function renderThemeChoices(){
-  const wrap = document.getElementById('themeChoiceGrid');
-  if (!wrap) return;
-  const activeTheme = normalizeThemePreference(state.settings.theme);
-  wrap.innerHTML = THEME_OPTIONS.map((theme) => {
-    const active = theme.id === activeTheme;
-    const swatches = theme.swatches
-      .map((_, index) => `<span class="theme-choice-swatch theme-choice-swatch--${theme.id}-${index}"></span>`)
-      .join('');
-    return `<button type="button" class="theme-choice${active ? ' is-active' : ''}" data-theme-choice="${escapeHtml(theme.id)}" aria-pressed="${active ? 'true' : 'false'}">
-      <span class="theme-choice-swatches" aria-hidden="true">${swatches}</span>
-      <span class="theme-choice-copy">
-        <strong>${escapeHtml(theme.label)}</strong>
-        <span>${escapeHtml(theme.description)}</span>
-      </span>
-    </button>`;
-  }).join('');
+  return themeController.renderChoices();
 }
 
 function renderSettings(){
