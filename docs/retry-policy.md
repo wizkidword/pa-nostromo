@@ -27,5 +27,19 @@ responses.
 
 Tests in `tests/crypto-failover.test.mjs` cover fallback order, jitter,
 attempt and total deadlines, cancellation, and the temporary-health memory.
-Other integrations retain their existing request-level timeouts, coordinated
-work limits, and stale-cache behavior until they adopt this shared policy.
+
+## Meta Graph follower polling
+
+Facebook follower polling uses the same helper for its single Meta Graph
+provider before moving to its existing authenticated-session and public-page
+fallbacks. The Graph API operation has an overall 20-second default deadline,
+an 8-second default deadline per request, jittered backoff, and a 30-second
+provider cooldown after exhausted retryable failures. A provider-provided
+`Retry-After` value remains the minimum wait time. The behavior is configured
+by `META_GRAPH_OPERATION_TIMEOUT_MS` and
+`META_GRAPH_UNHEALTHY_COOLDOWN_MS`; the existing `META_GRAPH_TIMEOUT_MS`,
+`META_GRAPH_MAX_RETRIES`, and backoff variables still apply.
+
+The poll response and stale-cache behavior are unchanged: if Meta Graph is
+unavailable, the session/public fallbacks continue, and the last verified count
+remains available when no fallback can refresh it.

@@ -157,6 +157,35 @@ async function testTotalOperationDeadline(){
   );
 }
 
+async function testRetryDelayCanHonorProviderRetryAfter(){
+  const delays = [];
+  let calls = 0;
+  const result = await fetchWithFailover({
+    providers: ['coincap'],
+    healthStore: new Map(),
+    retries: 1,
+    backoffBaseMs: 50,
+    backoffMaxMs: 50,
+    random: () => 0,
+    async delay(ms){ delays.push(ms); },
+    retryDelayMs({ error }){ return error.retryAfterMs; },
+    async tryProvider(){
+      calls += 1;
+      if (calls === 1) {
+        const error = new Error('rate limited');
+        error.status = 429;
+        error.retryAfterMs = 240;
+        throw error;
+      }
+      return [{ id: 'bitcoin' }];
+    },
+  });
+
+  assert.equal(result.provider, 'coincap');
+  assert.equal(calls, 2);
+  assert.deepEqual(delays, [240], 'provider Retry-After must remain a floor above jittered backoff');
+}
+
 function testJitterBounds(){
   assert.equal(jitteredBackoffMs(1, 100, 1000, () => 0), 1);
   assert.equal(jitteredBackoffMs(2, 100, 1000, () => 0.5), 100);
@@ -170,6 +199,7 @@ async function run(){
   await testProviderCooldownSkipsRecentlyUnhealthyProvider();
   await testAttemptDeadlineAndCancellation();
   await testTotalOperationDeadline();
+  await testRetryDelayCanHonorProviderRetryAfter();
   testJitterBounds();
   console.log('crypto-failover tests passed');
 }

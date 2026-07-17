@@ -120,6 +120,7 @@
       : defaultIsRetryableError;
     const onAttemptFailure = typeof options.onAttemptFailure === 'function' ? options.onAttemptFailure : null;
     const onProviderSkipped = typeof options.onProviderSkipped === 'function' ? options.onProviderSkipped : null;
+    const retryDelayMs = typeof options.retryDelayMs === 'function' ? options.retryDelayMs : null;
     const sleep = typeof options.delay === 'function' ? options.delay : delay;
     const random = typeof options.random === 'function' ? options.random : Math.random;
     const now = typeof options.now === 'function' ? options.now : Date.now;
@@ -181,7 +182,13 @@
             const retryable = isRetryableError(error);
             const canRetry = attempt <= retries && retryable;
             if (canRetry) {
-              const waitMs = jitteredBackoffMs(attempt, backoffBaseMs, backoffMaxMs, random);
+              const jitteredDelayMs = jitteredBackoffMs(attempt, backoffBaseMs, backoffMaxMs, random);
+              const requestedDelayMs = retryDelayMs
+                ? Number(retryDelayMs({ provider, attempt, error, jitteredDelayMs, deadlineAt }))
+                : 0;
+              const waitMs = Number.isFinite(requestedDelayMs) && requestedDelayMs > 0
+                ? Math.max(jitteredDelayMs, requestedDelayMs)
+                : jitteredDelayMs;
               try {
                 await sleep(waitMs, { signal: operationController.signal });
               } catch (waitError) {
