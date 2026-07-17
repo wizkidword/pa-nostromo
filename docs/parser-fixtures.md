@@ -13,6 +13,7 @@ production URLs, imported user data, or full copies of third-party pages.
 | Public social follower profiles | `social-followers-v2` | `social-{facebook,instagram,tiktok,youtube}-valid.html` | `social-follower-signal-missing.html` |
 | eBay analytics traffic and marketing report | `ebay-analytics-v3` | `ebay-traffic-valid.json`, `ebay-marketing-report-valid.tsv` | `ebay-traffic-missing-required-metric.json`, `ebay-marketing-report-missing-metric.tsv` |
 | ESPN NBA scoreboard | `espn-nba-scoreboard-v1` | `nba-scoreboard-valid.json` | `nba-scoreboard-missing-team.json` |
+| Gmail unread Atom feed | `gmail-unread-v2` | `gmail-unread-atom-valid.xml` | `gmail-unread-atom-missing-fullcount.xml` |
 
 Run `npm test` to execute the fixture checks. The checks assert the fields the
 dashboard needs and require a stable parser error code when a source loses

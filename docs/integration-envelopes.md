@@ -36,7 +36,7 @@ Parser failures use `status: "error"`, `data: null`, and a stable parser error
 code. They must never be represented as a successful empty result.
 
 `parserVersion` identifies the current parser or provider family, such as
-`rss-atom-v1`, `aaa-gas-v1`, `crypto-json-v1`, `gmail-unread-v1`,
+`rss-atom-v1`, `aaa-gas-v1`, `crypto-json-v1`, `gmail-unread-v2`,
 `ebay-analytics-v3`, `social-content-v1`, and `social-followers-v2`. It is a
 contract marker for fixture and drift tests, not an upstream provider version.
 

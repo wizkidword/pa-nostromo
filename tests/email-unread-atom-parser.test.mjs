@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -6,40 +8,23 @@ const {
   extractUnreadEmailAtomFeed,
   emailUnreadSetupPayload,
 } = require('../server.js');
+const { parserVersionForRoute } = require('../lib/integration-envelope.js');
+const fixtureRoot = path.join(process.cwd(), 'tests', 'fixtures', 'parsers');
+const readFixture = (name) => readFile(path.join(fixtureRoot, name), 'utf8');
 
-const sampleFeed = `<?xml version="1.0" encoding="UTF-8"?>
-<feed version="0.3" xmlns="http://purl.org/atom/ns#">
-  <title>Gmail - Inbox for test@example.com</title>
-  <fullcount>7</fullcount>
-  <entry>
-    <title>Quarterly check-in</title>
-    <summary>Need your sign-off on the new campaign brief.</summary>
-    <issued>2026-04-10T14:22:00Z</issued>
-    <author>
-      <name>Rowan</name>
-      <email>rowan@example.com</email>
-    </author>
-    <link rel="alternate" href="https://mail.google.com/mail/u/0/#inbox/FMfcgzQabc123" />
-  </entry>
-  <entry>
-    <title>&lt;b&gt;Build alert&lt;/b&gt;</title>
-    <summary>&lt;div&gt;Preview deploy failed on step 4.&lt;/div&gt;</summary>
-    <issued>2026-04-10T13:05:00Z</issued>
-    <author>
-      <name>Deploy Bot</name>
-      <email>ci@example.com</email>
-    </author>
-    <link rel="alternate" href="https://mail.google.com/mail/u/0/#inbox/FMfcgzQdef456" />
-  </entry>
-</feed>`;
-
-const parsed = extractUnreadEmailAtomFeed(sampleFeed);
+const parsed = extractUnreadEmailAtomFeed(await readFixture('gmail-unread-atom-valid.xml'));
 assert.equal(parsed.unreadCount, 7);
 assert.equal(parsed.entries.length, 2);
-assert.equal(parsed.entries[0].title, 'Quarterly check-in');
-assert.equal(parsed.entries[0].authorEmail, 'rowan@example.com');
-assert.equal(parsed.entries[1].title, 'Build alert');
-assert.equal(parsed.entries[1].summary, 'Preview deploy failed on step 4.');
+assert.equal(parsed.entries[0].title, 'Example update');
+assert.equal(parsed.entries[0].authorEmail, 'sender-one@example.test');
+assert.equal(parsed.entries[1].title, 'Status notice');
+assert.equal(parsed.entries[1].summary, 'Example status text.');
+const missingFullCount = await readFixture('gmail-unread-atom-missing-fullcount.xml');
+assert.throws(
+  () => extractUnreadEmailAtomFeed(missingFullCount),
+  (error) => error?.code === 'gmail_unread_atom_parser_required_fields_missing',
+);
+assert.equal(parserVersionForRoute({ id: 'email.unread' }), 'gmail-unread-v2');
 
 const setupPayload = emailUnreadSetupPayload();
 assert.equal(setupPayload.ok, true);

@@ -150,6 +150,7 @@ const EMAIL_UNREAD_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.EMAI
 const EMAIL_UNREAD_PROVIDER = String(process.env.EMAIL_UNREAD_PROVIDER || 'gmail_atom').trim().toLowerCase() || 'gmail_atom';
 const EMAIL_UNREAD_URL = String(process.env.EMAIL_UNREAD_URL || 'https://mail.google.com/mail/feed/atom').trim() || 'https://mail.google.com/mail/feed/atom';
 const EMAIL_UNREAD_LABEL = String(process.env.EMAIL_UNREAD_LABEL || 'Inbox').trim() || 'Inbox';
+const GMAIL_UNREAD_ATOM_PARSER_ERROR_CODE = 'gmail_unread_atom_parser_required_fields_missing';
 const EMAIL_UNREAD_USERNAME = String(process.env.EMAIL_UNREAD_USERNAME || '').trim();
 const EMAIL_UNREAD_APP_PASSWORD = normalizeEmailUnreadAppPassword(process.env.EMAIL_UNREAD_APP_PASSWORD);
 const EMAIL_UNREAD_OPEN_URL = String(process.env.EMAIL_UNREAD_OPEN_URL || 'https://mail.google.com/mail/u/0/#inbox').trim() || 'https://mail.google.com/mail/u/0/#inbox';
@@ -581,12 +582,20 @@ function readXmlAttr(block, tag, attr){
   return match ? decodeXmlEntities(match[1]).trim() : '';
 }
 
+function gmailUnreadAtomParserError(){
+  return Object.assign(new Error(GMAIL_UNREAD_ATOM_PARSER_ERROR_CODE), {
+    code: GMAIL_UNREAD_ATOM_PARSER_ERROR_CODE,
+    status: 502,
+  });
+}
+
 function extractUnreadEmailAtomFeed(xml){
   const source = String(xml || '').trim();
+  if (!/<feed\b[^>]*>/i.test(source)) throw gmailUnreadAtomParserError();
   const fullCountRaw = readXmlTagText(source, 'fullcount');
   const unreadCount = Number(fullCountRaw);
-  if (!Number.isFinite(unreadCount) || unreadCount < 0) {
-    throw new Error('Unread email feed did not include a valid <fullcount>.');
+  if (!fullCountRaw || !Number.isFinite(unreadCount) || unreadCount < 0) {
+    throw gmailUnreadAtomParserError();
   }
 
   const entries = [];
@@ -2683,7 +2692,9 @@ function createEmailUnreadAccountErrorPayload(account, error){
     fetchedAt: '',
     status: 'error',
     message,
-    errorCode: status === 401 || status === 403
+    errorCode: error?.code === GMAIL_UNREAD_ATOM_PARSER_ERROR_CODE
+      ? GMAIL_UNREAD_ATOM_PARSER_ERROR_CODE
+      : status === 401 || status === 403
       && error?.code !== 'blocked_address'
       ? 'mail_auth_failed'
       : status === 404
@@ -2735,6 +2746,10 @@ async function fetchUnreadEmailFeed(){
     const aggregateError = new Error(erroredAccounts.map((account) => `${account.label}: ${account.message}`).join(' | ') || 'Unread email fetch failed');
     aggregateError.status = 502;
     aggregateError.accounts = accountResults;
+    const errorCodes = [...new Set(erroredAccounts.map((account) => String(account.errorCode || '')).filter(Boolean))];
+    if (errorCodes.length === 1 && errorCodes[0] === GMAIL_UNREAD_ATOM_PARSER_ERROR_CODE) {
+      aggregateError.code = GMAIL_UNREAD_ATOM_PARSER_ERROR_CODE;
+    }
     throw aggregateError;
   }
 
@@ -6205,7 +6220,9 @@ async function handleApiUnreadEmail(req, res) {
       try { return getEmailUnreadAccountConfigs(); } catch { return []; }
     })();
     const configuredCount = accountConfigs.filter((account) => account.username && account.appPassword).length;
-    const code = status === 401 || status === 403
+    const code = error?.code === GMAIL_UNREAD_ATOM_PARSER_ERROR_CODE
+      ? GMAIL_UNREAD_ATOM_PARSER_ERROR_CODE
+      : status === 401 || status === 403
       ? 'mail_auth_failed'
       : status === 400
         ? 'mail_bad_request'

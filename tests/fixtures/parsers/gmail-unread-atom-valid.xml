@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed version="0.3" xmlns="http://purl.org/atom/ns#">
+  <title>Example unread feed</title>
+  <fullcount>7</fullcount>
+  <entry>
+    <title>Example update</title>
+    <summary>Example preview text.</summary>
+    <issued>2026-07-16T14:22:00Z</issued>
+    <author>
+      <name>Example sender</name>
+      <email>sender-one@example.test</email>
+    </author>
+    <link rel="alternate" href="https://mail.example.test/inbox/example-1" />
+  </entry>
+  <entry>
+    <title>&lt;b&gt;Status notice&lt;/b&gt;</title>
+    <summary>&lt;div&gt;Example status text.&lt;/div&gt;</summary>
+    <issued>2026-07-16T13:05:00Z</issued>
+    <author>
+      <name>Example service</name>
+      <email>sender-two@example.test</email>
+    </author>
+    <link rel="alternate" href="https://mail.example.test/inbox/example-2" />
+  </entry>
+</feed>
