@@ -10,6 +10,10 @@
     "check:syntax": "node scripts/check-syntax.mjs",
     "check": "npm run check:syntax && npm run lint",
     "test": "npm run check && node scripts/run-fast-tests.mjs",
+    "lint:eslint": "eslint server.js lib public/app.js public/app scripts tests",
+    "typecheck": "tsc -p tsconfig.checkjs.json",
+    "test:coverage": "c8 --all --reporter=text --reporter=json --include=lib/**/*.js --include=public/app/core/**/*.js node scripts/run-fast-tests.mjs",
+    "audit:dependencies": "npm audit --audit-level=high",
     "test:e2e": "node tests/dashboard-smoke.test.mjs",
     "qa:reset-state": "node scripts/qa-reset-state.mjs --yes",
     "qa:smoke:1d1": "node scripts/qa-smoke-phase-1d-1.mjs",
@@ -25,7 +29,11 @@
     "qa:facebook-followers": "node scripts/qa-facebook-followers-smoke.mjs"
   },
   "devDependencies": {
-    "playwright": "1.58.2"
+    "@types/node": "26.1.1",
+    "c8": "12.0.0",
+    "eslint": "10.7.0",
+    "playwright": "1.58.2",
+    "typescript": "7.0.2"
   },
   "license": "MIT"
 }
