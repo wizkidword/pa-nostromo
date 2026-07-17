@@ -99,6 +99,8 @@ if (!themeFeature) throw new Error('Theme feature failed to load.');
 const normalizeThemePreference = themeFeature.normalizeThemePreference;
 const projectsFeature = window.MissionControlModules?.projects;
 if (!projectsFeature) throw new Error('Projects feature failed to load.');
+const notesFeature = window.MissionControlModules?.notes;
+if (!notesFeature) throw new Error('Notes feature failed to load.');
 
 const DEFAULT_SETTINGS = {
   theme: 'dark',
@@ -867,6 +869,22 @@ const projectsController = projectsFeature.createProjectsController({
   escapeAttribute,
   safeExternalUrl,
   onProjectCreated: () => commitState('project_created'),
+});
+
+const notesController = notesFeature.createNotesController({
+  document,
+  getState: () => state,
+  id,
+  now,
+  escapeText,
+  escapeAttribute,
+  escapeHtml,
+  renderFormattedText,
+  markdownToolbarButtons,
+  bindMarkdownToolbar,
+  save,
+  commitState,
+  deleteWithUndo,
 });
 
 let cameraSnapshotTimer = null;
@@ -12197,137 +12215,7 @@ function renderIdeas(){
 }
 
 function renderNotes(){
-  const wrapToday = document.getElementById('notesBoardToday');
-  const wrapBacklog = document.getElementById('notesBoardBacklog');
-  const search = (document.getElementById('notesSearch')?.value || '').toLowerCase();
-  const filter = document.getElementById('notesFilter')?.value || 'all';
-  if (!wrapToday || !wrapBacklog) return;
-
-  const isToday = (iso) => {
-    const d = new Date(iso || Date.now());
-    const n = new Date();
-    return d.getFullYear()===n.getFullYear() && d.getMonth()===n.getMonth() && d.getDate()===n.getDate();
-  };
-
-  const filtered = state.notes.filter((n)=>{
-    const hay = `${n.title||''} ${n.body||''}`.toLowerCase();
-    if (search && !hay.includes(search)) return false;
-    if (filter === 'pinned' && !n.pinned) return false;
-    if (filter === 'today' && !isToday(n.updatedAt)) return false;
-    if (filter === 'backlog' && isToday(n.updatedAt)) return false;
-    return true;
-  });
-
-  const renderCard = (n)=>{
-    const opts = state.projects.map((p)=>`<option value="${escapeAttribute(p.id)}" ${p.id===n.projectId?'selected':''}>${escapeText(p.name)}</option>`).join('');
-    return `<div class="note-card ${n.pinned?'pinned':''}" data-note-id="${escapeAttribute(n.id)}">
-      <div class="note-top">
-        <strong>${escapeText(n.title || 'Quick Note')}</strong>
-        <span class="note-meta">${new Date(n.updatedAt).toLocaleString()}</span>
-      </div>
-      <input data-field="title" value="${escapeHtml(n.title || '')}" placeholder="Note title" />
-      <div class="md-toolbar" data-editor-toolbar>
-        ${markdownToolbarButtons()}
-      </div>
-      <textarea data-field="body" rows="4" placeholder="Type your note...">${escapeHtml(n.body || '')}</textarea>
-      <div class="md-preview" data-rendered="body">${renderFormattedText(n.body || '')}</div>
-      <div class="note-actions">
-        <select data-field="projectId">${opts}</select>
-        <div class="note-action-buttons">
-          <button class="btn note-pin" data-action="pin">${n.pinned ? 'Unpin' : 'Pin'}</button>
-          <button class="btn" data-action="to-task">To Task</button>
-          <button class="btn note-delete" data-action="delete">Delete</button>
-        </div>
-      </div>
-    </div>`;
-  };
-
-  wrapToday.innerHTML = filtered.filter((n)=>isToday(n.updatedAt)).map(renderCard).join('') || '<small class="note-meta">No notes for today.</small>';
-  wrapBacklog.innerHTML = filtered.filter((n)=>!isToday(n.updatedAt)).map(renderCard).join('') || '<small class="note-meta">No backlog notes.</small>';
-
-  document.querySelectorAll('#notesBoardToday [data-field], #notesBoardBacklog [data-field]').forEach((el)=>{
-    el.addEventListener('input', (e)=>{
-      const card = e.target.closest('.note-card');
-      const note = state.notes.find(x=>x.id===card.dataset.noteId);
-      if (!note) return;
-      note[e.target.dataset.field] = e.target.value;
-      note.updatedAt = now();
-      if (e.target.dataset.field === 'body') {
-        const preview = card.querySelector('[data-rendered="body"]');
-        if (preview) preview.innerHTML = renderFormattedText(e.target.value);
-      }
-      save();
-    });
-    el.addEventListener('change', (e)=>{
-      const card = e.target.closest('.note-card');
-      const note = state.notes.find(x=>x.id===card.dataset.noteId);
-      if (!note) return;
-      note[e.target.dataset.field] = e.target.value;
-      note.updatedAt = now();
-      save();
-      renderNotes();
-    });
-  });
-
-  document.querySelectorAll('#notesBoardToday [data-editor-toolbar], #notesBoardBacklog [data-editor-toolbar]').forEach((toolbar)=>{
-    bindMarkdownToolbar(toolbar, (btn) => {
-      const card = btn.closest('.note-card');
-      return card?.querySelector('textarea[data-field="body"]') || null;
-    }, (input, btn) => {
-      const card = btn.closest('.note-card');
-      const note = state.notes.find((x)=>x.id===card?.dataset.noteId);
-      if (!note) return;
-      note.body = input.value;
-      note.updatedAt = now();
-      const preview = card.querySelector('[data-rendered="body"]');
-      if (preview) preview.innerHTML = renderFormattedText(input.value);
-      save();
-    });
-  });
-
-  document.querySelectorAll('#notesBoardToday [data-action="delete"], #notesBoardBacklog [data-action="delete"]').forEach((btn)=>{
-    btn.addEventListener('click', (e)=>{
-      const card = e.target.closest('.note-card');
-      deleteWithUndo({
-        collection: () => state.notes,
-        itemId: card?.dataset?.noteId,
-        reason: 'note_deleted',
-        buildUndoLabel: (n) => `Note deleted (${(n?.title || 'Quick Note').slice(0, 30)}). Undo?`,
-      });
-    });
-  });
-
-  document.querySelectorAll('#notesBoardToday [data-action="pin"], #notesBoardBacklog [data-action="pin"]').forEach((btn)=>{
-    btn.addEventListener('click', (e)=>{
-      const card = e.target.closest('.note-card');
-      const note = state.notes.find(n=>n.id===card.dataset.noteId);
-      if (!note) return;
-      note.pinned = !note.pinned;
-      note.updatedAt = now();
-      commitState('note_pin_toggled');
-    });
-  });
-
-  document.querySelectorAll('#notesBoardToday [data-action="to-task"], #notesBoardBacklog [data-action="to-task"]').forEach((btn)=>{
-    btn.addEventListener('click', (e)=>{
-      const card = e.target.closest('.note-card');
-      const note = state.notes.find(n=>n.id===card.dataset.noteId);
-      if (!note) return;
-      state.tasks.push({
-        id: id(),
-        title: note.title || 'Task from note',
-        projectId: note.projectId || state.projects[0]?.id,
-        column: state.settings.defaultTaskColumn || 'inbox',
-        blockerType: null,
-        owner: 'Rowan',
-        nextAction: (note.body || 'Review note and define first action').slice(0, 140),
-        dueDate: '',
-        createdAt: now(),
-        updatedAt: now(),
-      });
-      commitState('note_converted_to_task');
-    });
-  });
+  return notesController.render();
 }
 
 function shortcutAssignmentOptions(){
@@ -13127,18 +13015,7 @@ document.getElementById('addChangeLogBtn')?.addEventListener('click', () => {
 document.getElementById('changeLogList')?.addEventListener('scroll', updatePatchNotesOverflowAffordance);
 window.addEventListener('resize', updatePatchNotesOverflowAffordance);
 
-document.getElementById('addNoteBtn').onclick = ()=> {
-  state.notes.unshift({
-    id: id(),
-    title: '',
-    body: '',
-    projectId: state.projects[0]?.id || '',
-    pinned: false,
-    createdAt: now(),
-    updatedAt: now(),
-  });
-  commitState('note_added');
-};
+notesController.bind();
 
 document.getElementById('addIdeaBtn')?.addEventListener('click', () => {
   const input = document.getElementById('ideaInput');
@@ -13149,16 +13026,6 @@ document.getElementById('addIdeaBtn')?.addEventListener('click', () => {
   if (input) input.value = '';
   logChange('Saved new idea to Ideas Box');
   commitState('idea_added');
-});
-
-document.getElementById('notesSearch')?.addEventListener('input', () => renderNotes());
-document.getElementById('notesFilter')?.addEventListener('change', () => renderNotes());
-document.getElementById('notesClearFiltersBtn')?.addEventListener('click', () => {
-  const s = document.getElementById('notesSearch');
-  const f = document.getElementById('notesFilter');
-  if (s) s.value = '';
-  if (f) f.value = 'all';
-  renderNotes();
 });
 
 shortcutForm?.addEventListener('submit', (e) => {
