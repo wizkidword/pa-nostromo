@@ -3184,6 +3184,54 @@ function renderNbaGameCard(game, { featured = false } = {}){
   `;
 }
 
+function renderNbaScoreboard(parsedScoreboard, { stale = false, retryInMs = 0, fetchedAt = '' } = {}){
+  const el = document.getElementById('nbaScoresWidget');
+  if (!el) return;
+
+  const events = parsedScoreboard.events;
+  const favoriteTeams = new Set(state.nba?.favoriteTeams || []);
+  const normalizedGames = events.map((event) => normalizeNbaEvent(event, favoriteTeams))
+    .sort(compareNbaGames);
+  const filteredGames = filterNbaGamesByView(normalizedGames, state.nba?.viewMode || 'live');
+  const featuredGame = filteredGames.length ? pickFeaturedNbaGame(filteredGames, state.nba?.viewMode || 'live') : null;
+  const restGames = filteredGames.filter((game) => game.id !== featuredGame?.id);
+  const emptyMessage = events.length === 0
+    ? 'No NBA games scheduled for today.'
+    : ((state.nba?.viewMode === 'my-teams' && !(state.nba?.favoriteTeams || []).length)
+        ? 'Pick a few favorite teams to unlock a personal scoreboard.'
+        : `No games match the ${state.nba?.viewMode === 'live' ? 'Live' : state.nba?.viewMode === 'recap' ? 'Recap' : 'My Teams'} view right now.`);
+
+  const summaryMarkup = renderNbaControls(normalizedGames);
+  const featuredMarkup = featuredGame
+    ? `<section class="nba-featured-block">
+        <div class="nba-section-title">Featured Matchup</div>
+        ${renderNbaGameCard(featuredGame, { featured: true })}
+      </section>`
+    : '';
+  const listMarkup = restGames.length
+    ? `<section class="nba-games-block">
+        <div class="nba-section-title">${state.nba?.viewMode === 'recap' ? 'Game Recaps' : state.nba?.viewMode === 'my-teams' ? 'My Team Games' : state.nba?.viewMode === 'live' ? 'Live Games' : 'Full Slate'}</div>
+        <div class="nba-v2-list">
+          ${restGames.map((game) => renderNbaGameCard(game)).join('')}
+        </div>
+      </section>`
+    : (featuredGame ? '' : `<div class="note-meta nba-empty-state">${escapeHtml(emptyMessage)}</div>`);
+
+  el.innerHTML = `<div class="scroll-box nba-scroll nba-v2-shell">${summaryMarkup}${featuredMarkup}${listMarkup}</div>`;
+  const liveCount = normalizedGames.filter((game) => game.statusBucket === 'live').length;
+  const ts = document.getElementById('nbaUpdatedAt');
+  if (stale) {
+    setPodStatusSignal('nba-scores', 'stale', `retry ${Math.ceil(retryInMs / 1000)}s`);
+    if (ts) {
+      const cachedAt = fetchedAt ? new Date(fetchedAt).toLocaleTimeString() : 'earlier';
+      ts.textContent = `Showing cached scores from ${cachedAt}; retry in ${Math.ceil(retryInMs / 1000)}s`;
+    }
+    return;
+  }
+  setPodStatusSignal('nba-scores', 'fresh', liveCount ? `${liveCount} live` : 'today');
+  if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()} (auto: every 1 min)`;
+}
+
 async function renderNbaScores(options = {}){
   const el = document.getElementById('nbaScoresWidget');
   if (!el) return;
@@ -3198,72 +3246,52 @@ async function renderNbaScores(options = {}){
 
   try {
     const dateKey = estDateYmdCompact();
-    let data = null;
+    const scoreboardApi = window.MissionControlModules?.nbaScoreboard;
     const cacheHit = options.useCached === true && nbaScoreboardCache.dateKey === dateKey && nbaScoreboardCache.data;
+    let data = nbaScoreboardCache.data;
+    let parsedScoreboard = null;
     if (cacheHit) {
-      data = nbaScoreboardCache.data;
+      parsedScoreboard = scoreboardApi?.parseNbaScoreboard(data);
     } else {
       const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${dateKey}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        const err = new Error(`NBA upstream failed (${res.status})`);
-        err.status = res.status;
-        throw err;
+      if (scoreboardApi?.fetchNbaScoreboard) {
+        const result = await scoreboardApi.fetchNbaScoreboard(url);
+        data = result.payload;
+        parsedScoreboard = result.parsed;
+      } else {
+        const res = await fetch(url);
+        if (!res.ok) {
+          const err = new Error(`NBA upstream failed (${res.status})`);
+          err.status = res.status;
+          throw err;
+        }
+        data = await res.json();
+        parsedScoreboard = scoreboardApi?.parseNbaScoreboard(data);
       }
-      data = await res.json();
     }
 
-    const parsedScoreboard = window.MissionControlModules?.nbaScoreboard?.parseNbaScoreboard(data);
     if (!parsedScoreboard?.ok) {
       const error = new Error(parsedScoreboard?.errorCode || 'nba_scoreboard_parser_required_fields_missing');
       error.code = parsedScoreboard?.errorCode || 'nba_scoreboard_parser_required_fields_missing';
       throw error;
     }
     if (!cacheHit) {
-      nbaScoreboardCache = {
-        dateKey,
-        fetchedAt: now(),
-        data,
-      };
+      nbaScoreboardCache = { dateKey, fetchedAt: now(), data };
     }
-
-    const events = parsedScoreboard.events;
-    const favoriteTeams = new Set(state.nba?.favoriteTeams || []);
-    const normalizedGames = events.map((event) => normalizeNbaEvent(event, favoriteTeams))
-      .sort(compareNbaGames);
-
-    const filteredGames = filterNbaGamesByView(normalizedGames, state.nba?.viewMode || 'live');
-    const featuredGame = filteredGames.length ? pickFeaturedNbaGame(filteredGames, state.nba?.viewMode || 'live') : null;
-    const restGames = filteredGames.filter((game) => game.id !== featuredGame?.id);
-    const emptyMessage = events.length === 0
-      ? 'No NBA games scheduled for today.'
-      : ((state.nba?.viewMode === 'my-teams' && !(state.nba?.favoriteTeams || []).length)
-          ? 'Pick a few favorite teams to unlock a personal scoreboard.'
-          : `No games match the ${state.nba?.viewMode === 'live' ? 'Live' : state.nba?.viewMode === 'recap' ? 'Recap' : 'My Teams'} view right now.`);
-
-    const summaryMarkup = renderNbaControls(normalizedGames);
-    const featuredMarkup = featuredGame
-      ? `<section class="nba-featured-block">
-          <div class="nba-section-title">Featured Matchup</div>
-          ${renderNbaGameCard(featuredGame, { featured: true })}
-        </section>`
-      : '';
-    const listMarkup = restGames.length
-      ? `<section class="nba-games-block">
-          <div class="nba-section-title">${state.nba?.viewMode === 'recap' ? 'Game Recaps' : state.nba?.viewMode === 'my-teams' ? 'My Team Games' : state.nba?.viewMode === 'live' ? 'Live Games' : 'Full Slate'}</div>
-          <div class="nba-v2-list">
-            ${restGames.map((game) => renderNbaGameCard(game)).join('')}
-          </div>
-        </section>`
-      : (featuredGame ? '' : `<div class="note-meta nba-empty-state">${escapeHtml(emptyMessage)}</div>`);
-
-    el.innerHTML = `<div class="scroll-box nba-scroll nba-v2-shell">${summaryMarkup}${featuredMarkup}${listMarkup}</div>`;
+    renderNbaScoreboard(parsedScoreboard);
     clearPollingBackoff('nba-scores');
-    const liveCount = normalizedGames.filter((game) => game.statusBucket === 'live').length;
-    setPodStatusSignal('nba-scores', 'fresh', liveCount ? `${liveCount} live` : 'today');
-    if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()} (auto: every 1 min)`;
   } catch (error) {
     const backoffMs = registerPollingFailure('nba-scores', error, 'NBA feed temporarily unavailable');
+    const cached = nbaScoreboardCache.dateKey === estDateYmdCompact() && nbaScoreboardCache.data;
+    const parsedCached = cached && window.MissionControlModules?.nbaScoreboard?.parseNbaScoreboard(nbaScoreboardCache.data);
+    if (parsedCached?.ok) {
+      renderNbaScoreboard(parsedCached, {
+        stale: true,
+        retryInMs: backoffMs,
+        fetchedAt: nbaScoreboardCache.fetchedAt,
+      });
+      return;
+    }
     el.innerHTML = `<div class="note-meta nba-empty-state">NBA scores unavailable right now.</div>`;
     setPodStatusSignal('nba-scores', 'stale', `retry ${Math.ceil(backoffMs / 1000)}s`);
     if (ts) ts.textContent = `Update delayed: retry in ${Math.ceil(backoffMs / 1000)}s`;

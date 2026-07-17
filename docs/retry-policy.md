@@ -98,3 +98,14 @@ value is the minimum wait. Parser drift is explicit and is not retried. The
 gas pod keeps its last successful local values visible as a marked stale result
 when a new AAA read fails. Configure this behavior with the
 `GAS_PROXY_READ_*` variables in `.env.example`.
+
+## NBA scoreboard reads
+
+The browser-only ESPN NBA scoreboard request uses the shared retry helper with
+a 15-second operation deadline, an 8-second attempt deadline, jittered retry,
+cancellation, and a 30-second temporary provider cooldown. Transient network
+failures and upstream `408`, `425`, `429`, and `5xx` responses are retried once;
+`Retry-After` remains the minimum wait. Invalid ESPN payloads are explicit
+parser failures and are not retried. When a refresh fails, the NBA pod keeps
+the current-day cached scoreboard visible with a clear stale marker and retry
+time.
