@@ -101,6 +101,8 @@ const projectsFeature = window.MissionControlModules?.projects;
 if (!projectsFeature) throw new Error('Projects feature failed to load.');
 const notesFeature = window.MissionControlModules?.notes;
 if (!notesFeature) throw new Error('Notes feature failed to load.');
+const remindersFeature = window.MissionControlModules?.reminders;
+if (!remindersFeature) throw new Error('Reminders feature failed to load.');
 
 const DEFAULT_SETTINGS = {
   theme: 'dark',
@@ -883,6 +885,21 @@ const notesController = notesFeature.createNotesController({
   markdownToolbarButtons,
   bindMarkdownToolbar,
   save,
+  commitState,
+  deleteWithUndo,
+});
+
+const remindersController = remindersFeature.createRemindersController({
+  document,
+  getState: () => state,
+  getSelectedDate: () => selectedCalendarDate,
+  setSelectedDate: (date) => { selectedCalendarDate = date; },
+  dateKey,
+  id,
+  now,
+  escapeText,
+  escapeHtml,
+  escapeAttribute,
   commitState,
   deleteWithUndo,
 });
@@ -2112,7 +2129,7 @@ function renderCalendar(){
 
   if (!selectedCalendarDate) selectedCalendarDate = todayKey;
 
-  const reminderDates = new Set(state.reminders.map((r)=>r.date));
+  const reminderDates = remindersController.reminderDateSet();
   const reminderDayCount = reminderDates.size;
   const heads = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<div class="cal-cell cal-head">${d}</div>`).join('');
   let cells = '';
@@ -2149,86 +2166,11 @@ function renderCalendar(){
 }
 
 function renderCalendarRemindersPanel(){
-  const label = document.getElementById('calendarSelectedDate');
-  const list = document.getElementById('calendarDayReminders');
-  if (!label || !list) return;
-  if (!selectedCalendarDate) {
-    label.innerHTML = `
-      <div class="calendar-agenda-title">Select a date</div>
-      <div class="calendar-agenda-subtitle">Choose any day above to see reminders.</div>
-    `;
-    list.innerHTML = '<div class="calendar-empty-state">No reminders yet.</div>';
-    return;
-  }
-
-  const selectedDt = new Date(`${selectedCalendarDate}T12:00:00`);
-  const todayKey = dateKey(new Date());
-  const tomorrowDt = new Date();
-  tomorrowDt.setDate(tomorrowDt.getDate() + 1);
-  const tomorrowKey = dateKey(tomorrowDt);
-  const items = state.reminders.filter((r)=>r.date===selectedCalendarDate).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
-  const dayLabel = selectedDt.toLocaleDateString(undefined, { weekday:'long', month:'long', day:'numeric' });
-  const yearLabel = selectedDt.toLocaleDateString(undefined, { year:'numeric' });
-  const relativeLabel = selectedCalendarDate === todayKey
-    ? 'Today'
-    : selectedCalendarDate === tomorrowKey
-      ? 'Tomorrow'
-      : selectedDt < new Date(`${todayKey}T00:00:00`)
-        ? 'Past date'
-        : 'Upcoming';
-  label.innerHTML = `
-    <div class="calendar-agenda-head">
-      <div>
-        <div class="calendar-agenda-kicker">${relativeLabel}</div>
-        <div class="calendar-agenda-title">${dayLabel}</div>
-        <div class="calendar-agenda-subtitle">${yearLabel}</div>
-      </div>
-      <div class="calendar-agenda-meta">
-        <span class="calendar-agenda-pill">${items.length} ${items.length === 1 ? 'reminder' : 'reminders'}</span>
-      </div>
-    </div>
-  `;
-  if (!items.length) {
-    list.innerHTML = `
-      <div class="calendar-empty-state">
-        <strong>${hasDiary ? 'Quiet schedule, but there is journal activity.' : 'Nothing scheduled yet.'}</strong>
-        <span>${hasDiary ? 'You can still use the quick add form above to layer reminders onto this day.' : 'Use the quick add form above to drop a reminder onto this date.'}</span>
-      </div>
-    `;
-    return;
-  }
-
-  list.innerHTML = items.map((r)=>`
-    <div class="calendar-reminder-card">
-      <div class="calendar-reminder-copy">
-        <div class="calendar-reminder-time">${escapeText(r.time || 'Anytime')}</div>
-        <div class="calendar-reminder-text">${escapeHtml(r.text)}</div>
-      </div>
-      <button class="btn note-delete calendar-reminder-delete" data-rem-del="${escapeAttribute(r.id)}" type="button">Delete</button>
-    </div>
-  `).join('');
-  list.querySelectorAll('[data-rem-del]').forEach((b)=>{
-    b.addEventListener('click', ()=>{
-      deleteWithUndo({
-        collection: () => state.reminders,
-        itemId: b.dataset.remDel,
-        reason: 'calendar_reminder_deleted',
-        buildUndoLabel: (r) => `Reminder deleted (${r?.time || 'Anytime'}). Undo?`,
-      });
-    });
-  });
+  return remindersController.renderCalendarPanel();
 }
 
 function renderTodayReminders(){
-  const el = document.getElementById('todayReminders');
-  if (!el) return;
-  const today = dateKey(new Date());
-  const items = state.reminders.filter((r)=>r.date===today).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
-  if (!items.length) {
-    el.innerHTML = '<div class="note-meta">No reminders for today.</div>';
-    return;
-  }
-  el.innerHTML = items.map((r)=>`<div class="change-log-item"><strong>${escapeText(r.time || 'Anytime')}</strong> — ${escapeHtml(r.text)}</div>`).join('');
+  return remindersController.renderToday();
 }
 
 function renderThemeChoices(){
@@ -13561,18 +13503,7 @@ function closeDialogSmooth(dialog){
   }, 140);
 }
 
-document.getElementById('addCalendarReminderBtn')?.addEventListener('click', () => {
-  if (!selectedCalendarDate) selectedCalendarDate = dateKey(new Date());
-  const textEl = document.getElementById('calendarReminderText');
-  const timeEl = document.getElementById('calendarReminderTime');
-  const text = (textEl?.value || '').trim();
-  const time = (timeEl?.value || '').trim();
-  if (!text) return;
-  state.reminders.push({ id: id(), date: selectedCalendarDate, time, text, createdAt: now() });
-  if (textEl) textEl.value = '';
-  if (timeEl) timeEl.value = '';
-  commitState('calendar_reminder_added');
-});
+remindersController.bind();
 
 document.getElementById('startAlarmBtn')?.addEventListener('click', () => {
   const val = Number(document.getElementById('alarmMinutes')?.value || 0);
