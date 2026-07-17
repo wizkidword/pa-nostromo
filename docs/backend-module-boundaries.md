@@ -18,6 +18,11 @@ RSS refresh follows the same boundary:
 - `server/routes/rss.js` validates feeds, coordinates the request lifecycle, and shapes RSS responses.
 - Feed caching, safe outbound fetches, parsing, retry behavior, and abort-signal creation remain injected from `server.js`.
 
+Gas-price lookups follow the same boundary:
+
+- `server/routes/gas.js` validates the requested location and maps lookup results or failures to the existing API contract.
+- Location resolution, AAA fetching, retry behavior, and abort-signal creation remain injected from `server.js`.
+
 System resources use a route and service split:
 
 - `server/routes/system.js` translates the query-string allowlist into a system-resource request and sends the response.
