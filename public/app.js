@@ -122,6 +122,8 @@ const liveStreamsStateFeature = window.MissionControlModules?.liveStreamsState;
 if (!liveStreamsStateFeature) throw new Error('Live Streams state feature failed to load.');
 const musicPlayerStateFeature = window.MissionControlModules?.musicPlayerState;
 if (!musicPlayerStateFeature) throw new Error('Music Player state feature failed to load.');
+const rssStateFeature = window.MissionControlModules?.rssState;
+if (!rssStateFeature) throw new Error('RSS state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -970,43 +972,11 @@ function load(){
   state.cameraFeed = cameraFeedStateFeature.normalizeState(state.cameraFeed);
 
   state.liveStreams = liveStreamsStateFeature.normalizeState(state.liveStreams, { createId: id, getNow: now });
-  state.rss = {
-    feeds: [],
-    items: [],
-    readItemIds: [],
-    showRead: false,
-    refreshIntervalMin: RSS_DEFAULT_REFRESH_MIN,
-    lastUpdatedAt: '',
-    lastError: '',
-    ...(state.rss || {}),
-  };
-  state.rss.feeds = Array.isArray(state.rss.feeds)
-    ? state.rss.feeds.map((f) => ({
-      id: String(f?.id || id()),
-      url: String(f?.url || '').trim(),
-      tag: String(f?.tag || '').trim().slice(0, 40),
-      addedAt: f?.addedAt || now(),
-    })).filter((f) => /^https?:\/\//i.test(f.url))
-      .sort((a, b) => String(a.addedAt || '').localeCompare(String(b.addedAt || '')) || String(a.id || '').localeCompare(String(b.id || '')))
-    : [];
-  state.rss.items = Array.isArray(state.rss.items)
-    ? state.rss.items.map((item) => ({
-      id: String(item?.id || '').trim(),
-      feedId: String(item?.feedId || '').trim(),
-      title: String(item?.title || 'Untitled').trim() || 'Untitled',
-      link: String(item?.link || '').trim(),
-      summary: String(item?.summary || '').trim(),
-      publishedAt: String(item?.publishedAt || '').trim(),
-      feedTitle: String(item?.feedTitle || '').trim(),
-      tag: String(item?.tag || '').trim(),
-    })).filter((item) => item.id && /^https?:\/\//i.test(item.link))
-    : [];
-  state.rss.readItemIds = [...new Set((Array.isArray(state.rss.readItemIds) ? state.rss.readItemIds : []).map((v) => String(v || '').trim()).filter(Boolean))];
-  state.rss.showRead = !!state.rss.showRead;
-  const rssRefresh = Number(state.rss.refreshIntervalMin || RSS_DEFAULT_REFRESH_MIN);
-  state.rss.refreshIntervalMin = Number.isFinite(rssRefresh) ? Math.min(180, Math.max(5, Math.round(rssRefresh))) : RSS_DEFAULT_REFRESH_MIN;
-  state.rss.lastUpdatedAt = String(state.rss.lastUpdatedAt || '');
-  state.rss.lastError = String(state.rss.lastError || '').slice(0, 300);
+  state.rss = rssStateFeature.normalizeState(state.rss, {
+    createId: id,
+    getNow: now,
+    defaultRefreshMin: RSS_DEFAULT_REFRESH_MIN,
+  });
   state.gasPrices = normalizeGasPricesState(state.gasPrices); state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
   state.systemMonitor = normalizeSystemMonitorState(state.systemMonitor);
   state.speedTest = normalizeSpeedTestState(state.speedTest); state.speedTest.running = false; state.homeDeviceControl = normalizeHomeDeviceControlState(state.homeDeviceControl);
