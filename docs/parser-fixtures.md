@@ -11,7 +11,7 @@ production URLs, imported user data, or full copies of third-party pages.
 | RSS and Atom feeds | `rss-atom-v1` | `tests/fixtures/parsers/rss-valid.xml`, `atom-valid.xml` | `rss-missing-channel.xml`, `rss-item-missing-link.xml` |
 | AAA gas prices | `aaa-gas-v1` | `tests/fixtures/parsers/aaa-current-avg-valid.html` | `aaa-current-avg-missing-column.html` |
 | Public social follower profiles | `social-followers-v2` | `social-{facebook,instagram,tiktok,youtube}-valid.html` | `social-follower-signal-missing.html` |
-| eBay analytics traffic | `ebay-analytics-v2` | `ebay-traffic-valid.json` | `ebay-traffic-missing-required-metric.json` |
+| eBay analytics traffic and marketing report | `ebay-analytics-v3` | `ebay-traffic-valid.json`, `ebay-marketing-report-valid.tsv` | `ebay-traffic-missing-required-metric.json`, `ebay-marketing-report-missing-metric.tsv` |
 | ESPN NBA scoreboard | `espn-nba-scoreboard-v1` | `nba-scoreboard-valid.json` | `nba-scoreboard-missing-team.json` |
 
 Run `npm test` to execute the fixture checks. The checks assert the fields the

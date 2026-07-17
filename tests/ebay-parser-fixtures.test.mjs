@@ -51,6 +51,6 @@ assert.throws(
   (error) => error?.code === 'ebay_traffic_parser_required_fields_missing',
 );
 
-assert.equal(parserVersionForRoute({ id: 'ebay.read' }), 'ebay-analytics-v2');
+assert.equal(parserVersionForRoute({ id: 'ebay.read' }), 'ebay-analytics-v3');
 
 console.log('ebay-parser-fixtures: PASS');

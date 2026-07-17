@@ -229,6 +229,8 @@ const EBAY_TRAFFIC_LISTING_METRICS = Object.freeze([
   'CLICK_THROUGH_RATE',
   'SALES_CONVERSION_RATE',
 ]);
+const EBAY_MARKETING_REPORT_REQUIRED_HEADERS = Object.freeze(['day', 'impressions', 'clicks', 'sales', 'ctr']);
+const EBAY_MARKETING_REPORT_NUMERIC_HEADERS = Object.freeze(['impressions', 'clicks', 'sales', 'ctr']);
 
 const META_GRAPH_API_VERSION = String(process.env.META_GRAPH_API_VERSION || 'v22.0').trim() || 'v22.0';
 const META_GRAPH_PAGE_ID = String(process.env.META_GRAPH_PAGE_ID || '').trim();
@@ -1061,6 +1063,13 @@ function parseEbayMarketingNumber(value) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+function ebayMarketingReportParserError(){
+  return Object.assign(new Error('ebay_marketing_report_parser_required_fields_missing'), {
+    code: 'ebay_marketing_report_parser_required_fields_missing',
+    status: 502,
+  });
+}
+
 function buildEbayPromotionLiftWindow({
   id = 'day',
   label = '',
@@ -1141,9 +1150,13 @@ function buildEbayPromotionLiftWindow({
 function parseEbayMarketingReport(text) {
   const raw = String(text || '');
   const lines = raw.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
-  if (lines.length < 2) return { rows: [], headers: [] };
+  if (!lines.length) throw ebayMarketingReportParserError();
   const headers = lines[0].split('\t').map((header) => String(header || '').trim());
   const normalizedHeaders = headers.map((header) => header.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''));
+  if (EBAY_MARKETING_REPORT_REQUIRED_HEADERS.some((header) => !normalizedHeaders.includes(header))) {
+    throw ebayMarketingReportParserError();
+  }
+  let invalidRow = false;
   const rows = lines.slice(1).map((line) => {
     const values = line.split('\t');
     const entry = {};
@@ -1151,9 +1164,13 @@ function parseEbayMarketingReport(text) {
       entry[header] = values[index] == null ? '' : String(values[index]).trim();
     });
     const label = String(entry.day || entry.date || '').trim();
+    const dayKey = normalizeEbayMarketingDateKey(label);
+    if (!dayKey || EBAY_MARKETING_REPORT_NUMERIC_HEADERS.some((header) => !entry[header] || !Number.isFinite(Number(entry[header])))) {
+      invalidRow = true;
+    }
     return {
       label,
-      dayKey: normalizeEbayMarketingDateKey(label),
+      dayKey,
       impressions: parseEbayMarketingNumber(entry.impressions),
       clicks: parseEbayMarketingNumber(entry.clicks),
       sales: parseEbayMarketingNumber(entry.sales),
@@ -1161,6 +1178,7 @@ function parseEbayMarketingReport(text) {
       channels: String(entry.channels || '').trim(),
     };
   }).filter((row) => row.dayKey);
+  if (invalidRow || (lines.length > 1 && rows.length === 0)) throw ebayMarketingReportParserError();
   return { rows, headers };
 }
 
@@ -7350,6 +7368,7 @@ module.exports = {
   extractYouTubePublicSubscriberEstimate,
   parseCompactCount,
   parseEbayTrafficReport,
+  parseEbayMarketingReport,
   parseFeedXml,
   parseAaaCurrentAvgRow,
   extractUnreadEmailAtomFeed,
