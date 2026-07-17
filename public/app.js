@@ -96,6 +96,8 @@ const remindersFeature = window.MissionControlModules?.reminders;
 if (!remindersFeature) throw new Error('Reminders feature failed to load.');
 const tasksFeature = window.MissionControlModules?.tasks;
 if (!tasksFeature) throw new Error('Tasks feature failed to load.');
+const shortcutsFeature = window.MissionControlModules?.shortcuts;
+if (!shortcutsFeature) throw new Error('Shortcuts feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -914,6 +916,24 @@ const tasksController = tasksFeature.createTasksController({
   deleteWithUndo,
   logChange,
   confirm: window.confirm.bind(window),
+});
+
+const shortcutsController = shortcutsFeature.createShortcutsController({
+  document,
+  getState: () => state,
+  id,
+  now,
+  globalProjectId: SHORTCUT_GLOBAL_PROJECT_ID,
+  safeExternalUrl,
+  escapeText,
+  escapeAttribute,
+  escapeHtml,
+  projectDisplayName: (projectId) => projectsController.projectDisplayName(projectId, SHORTCUT_GLOBAL_PROJECT_ID),
+  commitState,
+  deleteWithUndo,
+  logChange,
+  confirm: window.confirm.bind(window),
+  alert: window.alert.bind(window),
 });
 
 let cameraSnapshotTimer = null;
@@ -1778,14 +1798,6 @@ async function importStateSnapshotFromFile(file){
   applySharedWriteIntegrity(incoming, result);
   applyIncomingState(incoming, { render: true });
   broadcastCrossTabSync('state_imported', { reason: 'manual_import' });
-}
-
-function projectName(projectId){ return projectsController.projectName(projectId); }
-function missionControlProjectId(){
-  return state.projects.find((p) => p.name === 'Mission Control Dashboard')?.id || '';
-}
-function projectDisplayName(projectId){
-  return projectsController.projectDisplayName(projectId, SHORTCUT_GLOBAL_PROJECT_ID);
 }
 
 function applyTheme(){
@@ -12164,192 +12176,12 @@ function renderNotes(){
   return notesController.render();
 }
 
-function shortcutAssignmentOptions(){
-  return [
-    { id: SHORTCUT_GLOBAL_PROJECT_ID, name: 'Global (Mission Control)' },
-    ...state.projects.map((p) => ({ id: p.id, name: p.name })),
-  ];
-}
-
-function renderShortcutProjectChecklist(targetId, selectedIds = []){
-  const wrap = document.getElementById(targetId);
-  if (!wrap) return;
-  const selected = new Set(selectedIds.length ? selectedIds : [SHORTCUT_GLOBAL_PROJECT_ID]);
-  wrap.innerHTML = shortcutAssignmentOptions().map((p) => `
-    <label class="shortcut-check-row">
-      <input type="checkbox" value="${escapeAttribute(p.id)}" ${selected.has(p.id) ? 'checked' : ''} />
-      <span class="shortcut-check-label">${escapeText(p.name)}</span>
-    </label>
-  `).join('');
-}
-
-function activeShortcutFilterSet(){
-  const ids = Array.isArray(state.settings.shortcutsFilterProjectIds) ? state.settings.shortcutsFilterProjectIds : [];
-  return new Set(ids.filter(Boolean));
-}
-
-function checkedShortcutFilterIdsFromDom(){
-  return [...document.querySelectorAll('#shortcutsWidget [data-shortcut-filter]:checked')]
-    .map((el) => String(el.dataset.shortcutFilter || '').trim())
-    .filter(Boolean);
-}
-
-function shortcutDefaultsFromActiveFilters(){
-  return [SHORTCUT_GLOBAL_PROJECT_ID];
-}
-
-function extractUrlFromDrop(dataTransfer){
-  if (!dataTransfer) return '';
-  const uriList = String(dataTransfer.getData('text/uri-list') || '').trim();
-  if (uriList) {
-    const firstUrl = uriList
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line && !line.startsWith('#'));
-    if (firstUrl) return firstUrl;
-  }
-
-  const plain = String(dataTransfer.getData('text/plain') || '').trim();
-  if (/^https?:\/\//i.test(plain)) return plain;
-
-  const html = String(dataTransfer.getData('text/html') || '');
-  const hrefMatch = html.match(/href\s*=\s*["']([^"']+)["']/i);
-  return hrefMatch?.[1] || '';
-}
-
-function suggestShortcutTitle(url, fallbackText = ''){
-  const cleanFallback = String(fallbackText || '').trim();
-  if (cleanFallback && !/^https?:\/\//i.test(cleanFallback)) return cleanFallback.slice(0, 90);
-  try {
-    const u = new URL(String(url || '').trim());
-    const host = u.hostname.replace(/^www\./, '');
-    const firstSegment = u.pathname.split('/').filter(Boolean)[0] || '';
-    return firstSegment ? `${host} / ${decodeURIComponent(firstSegment).slice(0, 48)}` : host;
-  } catch {
-    return 'New Shortcut';
-  }
-}
-
 function renderShortcutsPod(){
-  const wrap = document.getElementById('shortcutsWidget');
-  if (!wrap) return;
-
-  const visible = (state.shortcuts || []).filter((sc) => sc.enabled !== false);
-
-  const cards = visible.length
-    ? visible.map((sc) => {
-      const href = safeExternalUrl(sc.url);
-      if (!href) return `<div class="shortcut-link is-disabled"><strong>${escapeText(sc.title)}</strong><span>Blocked unsafe URL</span></div>`;
-      return `
-      <a class="shortcut-link" href="${escapeAttribute(href)}" target="_blank" rel="noopener noreferrer">
-        <strong>${escapeText(sc.title)}</strong>
-        <span>${escapeText(sc.category || 'Shortcut')}</span>
-      </a>
-    `;
-    }).join('')
-    : '<div class="note-meta">No shortcuts yet. Drop a link below or add one in Settings.</div>';
-
-  wrap.innerHTML = `
-    <div id="shortcutDropzone" class="shortcut-dropzone" title="Drop bookmark/link here to create a shortcut">
-      Drop a bookmark or link here to create a shortcut
-    </div>
-    <div class="shortcut-links">${cards}</div>
-  `;
-
-  const dropzone = document.getElementById('shortcutDropzone');
-  if (dropzone) {
-    const setOver = (isOver) => dropzone.classList.toggle('is-over', !!isOver);
-    dropzone.addEventListener('dragenter', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setOver(true);
-    });
-    dropzone.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setOver(true);
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-    });
-    dropzone.addEventListener('dragleave', () => setOver(false));
-    dropzone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setOver(false);
-
-      const url = extractUrlFromDrop(e.dataTransfer);
-      const safeUrl = safeExternalUrl(url);
-      if (!safeUrl) return;
-
-      const droppedText = String(e.dataTransfer?.getData('text/plain') || '').trim();
-      const projectIds = shortcutDefaultsFromActiveFilters();
-      const title = suggestShortcutTitle(url, droppedText);
-      state.shortcuts.push({
-        id: id(),
-        title,
-        url: safeUrl,
-        category: 'Bookmark',
-        projectIds,
-        enabled: true,
-        createdAt: now(),
-        updatedAt: now(),
-      });
-
-      logChange(`Created shortcut from drop: ${title}`);
-      commitState('shortcut_created_from_drop');
-    });
-  }
+  return shortcutsController.renderPod();
 }
 
 function renderShortcutsSettings(){
-  const wrap = document.getElementById('settingsShortcutsList');
-  if (!wrap) return;
-  const rows = (state.shortcuts || [])
-    .slice()
-    .sort((a, b) => (a.title || '').localeCompare(b.title || ''))
-    .map((sc) => `
-      <div class="change-log-item">
-        <div class="row-between-wrap gap10">
-          <strong>${escapeHtml(sc.title)}</strong>
-          <span class="badge">${sc.enabled === false ? 'Disabled' : 'Enabled'}</span>
-        </div>
-        <div class="note-meta mt6">${escapeHtml(sc.category || 'No category')} · ${(sc.projectIds || []).map(projectDisplayName).map(escapeHtml).join(', ')}</div>
-        <div class="shortcut-admin-actions mt8">
-          <button class="btn ghost" data-shortcut-edit="${escapeAttribute(sc.id)}" type="button">Edit</button>
-          <button class="btn ghost" data-shortcut-toggle="${escapeAttribute(sc.id)}" type="button">${sc.enabled === false ? 'Enable' : 'Disable'}</button>
-          <button class="btn note-delete" data-shortcut-delete="${escapeAttribute(sc.id)}" type="button">Delete</button>
-        </div>
-      </div>
-    `).join('');
-
-  wrap.innerHTML = rows || '<div class="note-meta">No shortcuts yet. Add one to get started.</div>';
-
-  document.querySelectorAll('[data-shortcut-edit]').forEach((btn) => {
-    btn.addEventListener('click', () => openShortcutDialog(btn.dataset.shortcutEdit));
-  });
-  document.querySelectorAll('[data-shortcut-toggle]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const sc = state.shortcuts.find((x) => x.id === btn.dataset.shortcutToggle);
-      if (!sc) return;
-      sc.enabled = sc.enabled === false;
-      sc.updatedAt = now();
-      logChange(`${sc.enabled ? 'Enabled' : 'Disabled'} shortcut: ${sc.title}`);
-      commitState('shortcut_toggled');
-    });
-  });
-  document.querySelectorAll('[data-shortcut-delete]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const sc = state.shortcuts.find((x) => x.id === btn.dataset.shortcutDelete);
-      if (!sc) return;
-      if (!confirm(`Delete shortcut "${sc.title}"?`)) return;
-      deleteWithUndo({
-        collection: () => state.shortcuts,
-        itemId: sc.id,
-        reason: 'shortcut_deleted',
-        buildUndoLabel: () => `Shortcut deleted (${sc.title}). Undo?`,
-      });
-      logChange(`Deleted shortcut: ${sc.title}`);
-    });
-  });
+  return shortcutsController.renderSettings();
 }
 
 function escapeText(value){
@@ -12587,32 +12419,10 @@ function openEditTaskDialog(taskId){
   return tasksController.openEditDialog(taskId);
 }
 
-function openShortcutDialog(shortcutId = ''){
-  if (!shortcutDialog || !shortcutForm) return;
-  const sc = shortcutId ? state.shortcuts.find((x) => x.id === shortcutId) : null;
-  shortcutForm.elements.id.value = sc?.id || '';
-  shortcutForm.elements.title.value = sc?.title || '';
-  shortcutForm.elements.url.value = sc?.url || '';
-  shortcutForm.elements.category.value = sc?.category || '';
-  shortcutForm.elements.enabled.checked = sc ? sc.enabled !== false : true;
-
-  const defaults = sc?.projectIds?.length
-    ? sc.projectIds
-    : [missionControlProjectId() || SHORTCUT_GLOBAL_PROJECT_ID, SHORTCUT_GLOBAL_PROJECT_ID];
-  renderShortcutProjectChecklist('shortcutProjectChecklist', defaults);
-
-  const titleEl = document.getElementById('shortcutDialogTitle');
-  if (titleEl) titleEl.textContent = sc ? 'Edit Shortcut' : 'New Shortcut';
-  shortcutDialog.showModal();
-}
-
 // dialogs
-const shortcutDialog = document.getElementById('shortcutDialog');
-const shortcutForm = document.getElementById('shortcutForm');
 projectsController.bind();
 tasksController.bind();
-document.getElementById('addShortcutBtn')?.addEventListener('click', ()=> openShortcutDialog());
-document.getElementById('shortcutCancelBtn')?.addEventListener('click', ()=> shortcutDialog?.close());
+shortcutsController.bind();
 
 const settingsPanel = document.getElementById('settingsPanel');
 document.getElementById('openSettingsBtn')?.addEventListener('click', ()=> {
@@ -12866,47 +12676,6 @@ document.getElementById('addIdeaBtn')?.addEventListener('click', () => {
   if (input) input.value = '';
   logChange('Saved new idea to Ideas Box');
   commitState('idea_added');
-});
-
-shortcutForm?.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const f = new FormData(e.target);
-  const safeUrl = safeExternalUrl(String(f.get('url') || ''));
-  if (!safeUrl) {
-    alert('Shortcut URLs must be valid http(s) links without embedded credentials.');
-    return;
-  }
-  const selectedProjectIds = [...document.querySelectorAll('#shortcutProjectChecklist input[type="checkbox"]:checked')]
-    .map((el) => el.value)
-    .filter(Boolean);
-  const projectIds = selectedProjectIds.length ? [...new Set(selectedProjectIds)] : [SHORTCUT_GLOBAL_PROJECT_ID];
-
-  const existing = state.shortcuts.find((x) => x.id === f.get('id'));
-  if (existing) {
-    existing.title = String(f.get('title') || '').trim();
-    existing.url = safeUrl;
-    existing.category = String(f.get('category') || '').trim();
-    existing.projectIds = projectIds;
-    existing.enabled = f.get('enabled') === 'on';
-    existing.updatedAt = now();
-    logChange(`Edited shortcut: ${existing.title}`);
-  } else {
-    const title = String(f.get('title') || '').trim();
-    state.shortcuts.push({
-      id: id(),
-      title,
-      url: safeUrl,
-      category: String(f.get('category') || '').trim(),
-      projectIds,
-      enabled: f.get('enabled') === 'on',
-      createdAt: now(),
-      updatedAt: now(),
-    });
-    logChange(`Created shortcut: ${title}`);
-  }
-
-  shortcutDialog?.close();
-  commitState('shortcut_form_submitted');
 });
 
 function enableProjectDragScroll(){

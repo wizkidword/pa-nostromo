@@ -11,6 +11,7 @@ The browser application is being migrated incrementally from the legacy `public/
 | Notes | `public/app/features/notes.js` | Note filtering, creation, editable-field validation, inline rendering, safe markdown preview updates, task conversion, and Notes control lifecycle. |
 | Reminders | `public/app/features/reminders.js` | Reminder validation and creation, date selectors, calendar-agenda and today rendering, safe display, delete-with-undo wiring, and add-control lifecycle. |
 | Tasks | `public/app/features/tasks.js` | Kanban columns, task validation and actions, project selectors, board rendering, drag/drop movement, task-dialog lifecycle, and deterministic listener cleanup. |
+| Shortcuts | `public/app/features/shortcuts.js` | Safe URL validation, drag-and-drop capture, project assignment, shortcut dialog lifecycle, settings manager, and reversible actions. |
 
 `public/app.js` remains the composition layer for the migration. It supplies the current application state, logging, persistence callback, and settings rerender callback to a feature controller rather than duplicating the feature's behavior.
 
