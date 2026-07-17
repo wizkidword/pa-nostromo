@@ -2256,17 +2256,25 @@ async function fetchUnreadEmailFeedForAccount(account){
   throw err;
 }
 
+function resolveUnreadEmailMailbox(mailboxName = '', { inboxOnly = false } = {}) {
+  const requested = String(mailboxName || '').trim();
+  if (!requested || /[\u0000-\u001f\u007f]/.test(requested)) return '';
+  const mailboxes = {
+    inbox: 'INBOX',
+    '[gmail]/sent mail': '[Gmail]/Sent Mail',
+    'sent mail': 'Sent Mail',
+    sent: 'Sent',
+  };
+  const mapped = mailboxes[requested.toLowerCase()] || '';
+  return inboxOnly && mapped !== 'INBOX' ? '' : mapped;
+}
+
 function isAllowedUnreadEmailMailbox(mailboxName = '') {
-  const mailbox = String(mailboxName || '').trim().toLowerCase();
-  return mailbox === 'inbox'
-    || mailbox === '[gmail]/sent mail'
-    || mailbox === 'sent mail'
-    || mailbox === 'sent';
+  return !!resolveUnreadEmailMailbox(mailboxName);
 }
 
 function isAllowedUnreadEmailSpamMailbox(mailboxName = '') {
-  const mailbox = String(mailboxName || '').trim().toLowerCase();
-  return mailbox === 'inbox';
+  return !!resolveUnreadEmailMailbox(mailboxName, { inboxOnly: true });
 }
 
 function getUnreadEmailAccountForDelete(accountId = '') {
@@ -2299,7 +2307,7 @@ async function moveUnreadEmailMessageToTrash(payload = {}){
   }
 
   const accountId = String(payload.accountId || '').trim();
-  const mailbox = String(payload.mailbox || '').trim();
+  const mailbox = resolveUnreadEmailMailbox(payload.mailbox);
   const uid = Number(payload.uid);
 
   if (!accountId) {
@@ -2339,7 +2347,7 @@ async function moveUnreadEmailMessageToSpam(payload = {}){
   }
 
   const accountId = String(payload.accountId || '').trim();
-  const mailbox = String(payload.mailbox || '').trim();
+  const mailbox = resolveUnreadEmailMailbox(payload.mailbox, { inboxOnly: true });
   const uid = Number(payload.uid);
 
   if (!accountId) {
@@ -2379,7 +2387,7 @@ async function markUnreadEmailMessageRead(payload = {}){
   }
 
   const accountId = String(payload.accountId || '').trim();
-  const mailbox = String(payload.mailbox || '').trim();
+  const mailbox = resolveUnreadEmailMailbox(payload.mailbox);
   const uid = Number(payload.uid);
 
   if (!accountId) {
@@ -2424,7 +2432,7 @@ async function moveUnreadEmailMessagesToSpam(payload = {}){
   const seen = new Set();
 
   for (const item of itemsInput) {
-    const mailbox = String(item?.mailbox || '').trim();
+    const mailbox = resolveUnreadEmailMailbox(item?.mailbox, { inboxOnly: true });
     const uid = Number(item?.uid);
     if (!isAllowedUnreadEmailSpamMailbox(mailbox)) {
       const error = new Error('One or more selected mailboxes are not supported for spam.');
@@ -2477,7 +2485,7 @@ async function markUnreadEmailMessagesRead(payload = {}){
   const seen = new Set();
 
   for (const item of itemsInput) {
-    const mailbox = String(item?.mailbox || '').trim();
+    const mailbox = resolveUnreadEmailMailbox(item?.mailbox);
     const uid = Number(item?.uid);
     if (!isAllowedUnreadEmailMailbox(mailbox)) {
       const error = new Error('One or more selected mailboxes are not supported for mark read.');
@@ -2530,7 +2538,7 @@ async function moveUnreadEmailMessagesToTrash(payload = {}){
   const seen = new Set();
 
   for (const item of itemsInput) {
-    const mailbox = String(item?.mailbox || '').trim();
+    const mailbox = resolveUnreadEmailMailbox(item?.mailbox);
     const uid = Number(item?.uid);
     if (!isAllowedUnreadEmailMailbox(mailbox)) {
       const error = new Error('One or more selected mailboxes are not supported for delete.');
@@ -2578,7 +2586,7 @@ async function fetchUnreadEmailMessageBody(payload = {}){
   }
 
   const accountId = String(payload.accountId || '').trim();
-  const mailbox = String(payload.mailbox || '').trim();
+  const mailbox = resolveUnreadEmailMailbox(payload.mailbox);
   const uid = Number(payload.uid);
 
   if (!accountId) {
@@ -6053,7 +6061,11 @@ async function handleApiUnreadEmail(req, res) {
         mailbox: result.mailbox,
         uid: result.uid,
         trashMailbox: result.trashMailbox,
-        message: 'Message moved to Gmail Trash.',
+        copied: !!result.copied,
+        markedDeleted: !!result.markedDeleted,
+        expunged: !!result.expunged,
+        expungeDeferred: !!result.expungeDeferred,
+        message: result.expungeDeferred ? 'Message copied to Gmail Trash; source expunge is deferred by this mail server.' : 'Message moved to Gmail Trash.',
       });
     } catch (error) {
       const status = Number(error?.status || 0);
@@ -6087,7 +6099,11 @@ async function handleApiUnreadEmail(req, res) {
         mailbox: result.mailbox,
         uid: result.uid,
         spamMailbox: result.spamMailbox,
-        message: 'Message moved to Gmail Spam.',
+        copied: !!result.copied,
+        markedDeleted: !!result.markedDeleted,
+        expunged: !!result.expunged,
+        expungeDeferred: !!result.expungeDeferred,
+        message: result.expungeDeferred ? 'Message copied to Gmail Spam; source expunge is deferred by this mail server.' : 'Message moved to Gmail Spam.',
       });
     } catch (error) {
       const status = Number(error?.status || 0);
@@ -6115,12 +6131,15 @@ async function handleApiUnreadEmail(req, res) {
 
     try {
       const result = await markUnreadEmailMessagesRead(parsed.value);
+      const items = Array.isArray(result.items) ? result.items : [];
+      const failedCount = items.filter((item) => item?.status === 'failed').length;
       return sendJson(res, 200, {
-        ok: true,
+        ok: result.ok !== false,
         accountId: String(parsed.value.accountId || '').trim(),
-        updatedCount: Array.isArray(result.items) ? result.items.length : 0,
-        items: Array.isArray(result.items) ? result.items : [],
-        message: 'Selected messages marked read.',
+        updatedCount: items.length - failedCount,
+        failedCount,
+        items,
+        message: failedCount ? 'Some selected messages could not be marked read.' : 'Selected messages marked read.',
       });
     } catch (error) {
       const status = Number(error?.status || 0);
@@ -6149,12 +6168,15 @@ async function handleApiUnreadEmail(req, res) {
 
     try {
       const result = await moveUnreadEmailMessagesToSpam(parsed.value);
+      const items = Array.isArray(result.items) ? result.items : [];
+      const failedCount = items.filter((item) => item?.status === 'failed').length;
       return sendJson(res, 200, {
-        ok: true,
+        ok: result.ok !== false,
         accountId: String(parsed.value.accountId || '').trim(),
-        movedCount: Array.isArray(result.items) ? result.items.length : 0,
-        items: Array.isArray(result.items) ? result.items : [],
-        message: 'Selected messages moved to Gmail Spam.',
+        movedCount: items.length - failedCount,
+        failedCount,
+        items,
+        message: failedCount ? 'Some selected messages could not be moved to Gmail Spam.' : 'Selected messages moved to Gmail Spam.',
       });
     } catch (error) {
       const status = Number(error?.status || 0);
@@ -6222,6 +6244,8 @@ async function handleApiUnreadEmail(req, res) {
         mailbox: result.mailbox,
         uid: result.uid,
         bodyText: String(result.bodyText || ''),
+        bodyTruncated: !!result.bodyTruncated,
+        attachmentMetadata: Array.isArray(result.attachmentMetadata) ? result.attachmentMetadata : [],
       });
     } catch (error) {
       const status = Number(error?.status || 0);
@@ -6249,12 +6273,15 @@ async function handleApiUnreadEmail(req, res) {
 
     try {
       const result = await moveUnreadEmailMessagesToTrash(parsed.value);
+      const items = Array.isArray(result.items) ? result.items : [];
+      const failedCount = items.filter((item) => item?.status === 'failed').length;
       return sendJson(res, 200, {
-        ok: true,
+        ok: result.ok !== false,
         accountId: String(parsed.value.accountId || '').trim(),
-        movedCount: Array.isArray(result.items) ? result.items.length : 0,
-        items: Array.isArray(result.items) ? result.items : [],
-        message: 'Selected messages moved to Gmail Trash.',
+        movedCount: items.length - failedCount,
+        failedCount,
+        items,
+        message: failedCount ? 'Some selected messages could not be moved to Gmail Trash.' : 'Selected messages moved to Gmail Trash.',
       });
     } catch (error) {
       const status = Number(error?.status || 0);

@@ -49,7 +49,7 @@ All routes are dispatched through `ROUTE_MANIFEST` before reaching their handler
 | Area | Entry points | Boundary and current limits |
 | --- | --- | --- |
 | eBay | `fetchEbay*`, `getEbayTrafficPayload` | eBay hostname allowlist, `safeFetch`, coordinator, private OAuth configuration, and cache in `DATA_DIR`. |
-| Email | `fetchUnreadEmail*`, `lib/email-imap.js` | Gmail Atom uses `safeFetch` and the coordinator; IMAP is a separately bounded TLS protocol. Credentials are environment-only. |
+| Email | `fetchUnreadEmail*`, `lib/email-imap.js` | Gmail Atom uses `safeFetch` and the coordinator; IMAP has bounded TLS responses/bodies, capability-aware UID moves, mailbox allow-list mapping, and environment-only credentials. |
 | Social | `fetchMetaGraphJson`, public-page fetches, `fetch*Via*Session` | HTTP calls use `safeFetch` and the coordinator; Playwright child scripts retain script-specific timeouts and session-storage containment. |
 | RSS | `fetchFeedXml` | User-provided feed URLs use DNS-pinned `safeFetch`, configured byte/feed/entry/time limits, coordinator deduplication, and stale cache fallback. |
 | Camera | `handleApiCameraSnapshot` | Explicit public hostname allowlist, DNS-pinned `safeFetch`, zero redirects, image content-type and byte limits. |

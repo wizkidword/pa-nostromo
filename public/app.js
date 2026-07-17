@@ -7412,17 +7412,21 @@ async function handleUnreadEmailBulkDeleteAction({ accountId = '', items = [] } 
   updateUnreadEmailRefreshButton();
 
   try {
-    await postJsonWithTimeout(UNREAD_EMAIL_DELETE_BATCH_API, {
+    const result = await postJsonWithTimeout(UNREAD_EMAIL_DELETE_BATCH_API, {
       accountId: normalizedAccountId,
       items: selectedItems.map((item) => ({
         mailbox: item.mailbox,
         uid: Number(item.uid),
       })),
     }, 20000);
-    setUnreadEmailSelections(selectedItems, false);
+    const failedKeys = new Set((Array.isArray(result?.items) ? result.items : [])
+      .filter((item) => item?.status === 'failed')
+      .map((item) => unreadEmailDeleteKey(normalizedAccountId, item.mailbox, item.uid)));
+    setUnreadEmailSelections(selectedItems.filter((item) => !failedKeys.has(item.key)), false);
     unreadEmailDeleteInFlight = '';
     updateUnreadEmailRefreshButton();
     await renderUnreadEmailPod({ manual: true });
+    if (failedKeys.size) window.alert(`${failedKeys.size} selected email${failedKeys.size === 1 ? '' : 's'} could not be moved. They remain selected so you can retry them.`);
   } catch (error) {
     unreadEmailDeleteInFlight = '';
     updateUnreadEmailRefreshButton();
@@ -7441,17 +7445,21 @@ async function handleUnreadEmailBulkMarkReadAction({ accountId = '', items = [] 
   updateUnreadEmailRefreshButton();
 
   try {
-    await postJsonWithTimeout(UNREAD_EMAIL_MARK_READ_BATCH_API, {
+    const result = await postJsonWithTimeout(UNREAD_EMAIL_MARK_READ_BATCH_API, {
       accountId: normalizedAccountId,
       items: selectedItems.map((item) => ({
         mailbox: item.mailbox,
         uid: Number(item.uid),
       })),
     }, 20000);
-    setUnreadEmailSelections(selectedItems, false);
+    const failedKeys = new Set((Array.isArray(result?.items) ? result.items : [])
+      .filter((item) => item?.status === 'failed')
+      .map((item) => unreadEmailDeleteKey(normalizedAccountId, item.mailbox, item.uid)));
+    setUnreadEmailSelections(selectedItems.filter((item) => !failedKeys.has(item.key)), false);
     unreadEmailMarkReadInFlight = '';
     updateUnreadEmailRefreshButton();
     await renderUnreadEmailPod({ manual: true });
+    if (failedKeys.size) window.alert(`${failedKeys.size} selected email${failedKeys.size === 1 ? '' : 's'} could not be marked read. They remain selected so you can retry them.`);
   } catch (error) {
     unreadEmailMarkReadInFlight = '';
     updateUnreadEmailRefreshButton();
@@ -7470,17 +7478,21 @@ async function handleUnreadEmailBulkSpamAction({ accountId = '', items = [] } = 
   updateUnreadEmailRefreshButton();
 
   try {
-    await postJsonWithTimeout(UNREAD_EMAIL_SPAM_BATCH_API, {
+    const result = await postJsonWithTimeout(UNREAD_EMAIL_SPAM_BATCH_API, {
       accountId: normalizedAccountId,
       items: selectedItems.map((item) => ({
         mailbox: item.mailbox,
         uid: Number(item.uid),
       })),
     }, 20000);
-    setUnreadEmailSelections(selectedItems, false);
+    const failedKeys = new Set((Array.isArray(result?.items) ? result.items : [])
+      .filter((item) => item?.status === 'failed')
+      .map((item) => unreadEmailDeleteKey(normalizedAccountId, item.mailbox, item.uid)));
+    setUnreadEmailSelections(selectedItems.filter((item) => !failedKeys.has(item.key)), false);
     unreadEmailSpamInFlight = '';
     updateUnreadEmailRefreshButton();
     await renderUnreadEmailPod({ manual: true });
+    if (failedKeys.size) window.alert(`${failedKeys.size} selected email${failedKeys.size === 1 ? '' : 's'} could not be moved to spam. They remain selected so you can retry them.`);
   } catch (error) {
     unreadEmailSpamInFlight = '';
     updateUnreadEmailRefreshButton();
@@ -7510,7 +7522,11 @@ async function handleUnreadEmailMessageToggle({ accountId = '', mailbox = '', ui
 
   try {
     const payload = await fetchUnreadEmailMessageBody({ accountId, mailbox, uid });
-    unreadEmailExpandedBodies.set(messageKey, String(payload?.bodyText || '').trim());
+    const truncationNote = payload?.bodyTruncated ? '\n\n[Only the first part of this message was loaded.]' : '';
+    const attachmentNote = Array.isArray(payload?.attachmentMetadata) && payload.attachmentMetadata.length
+      ? `\n\n[Attachments: ${payload.attachmentMetadata.map((item) => String(item?.fileName || '')).filter(Boolean).join(', ')}]`
+      : '';
+    unreadEmailExpandedBodies.set(messageKey, `${String(payload?.bodyText || '').trim()}${truncationNote}${attachmentNote}`.trim());
     unreadEmailExpandedErrors.delete(messageKey);
   } catch (error) {
     unreadEmailExpandedErrors.set(messageKey, String(error?.message || 'Unable to load the full email.'));
