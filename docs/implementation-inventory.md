@@ -61,6 +61,7 @@ All routes are dispatched through `ROUTE_MANIFEST` before reaching their handler
 - `BACKUPS_DIR`: `listBackupFiles`, `writeBackupSnapshot`, and retention pruning.
 - Social history/cache files: Facebook, Facebook group, Instagram, TikTok, YouTube, and eBay cache under `DATA_DIR`; redacted, size-rotated server diagnostics and social-poller JSONL logs under `LOG_DIR`.
 - Integration responses: manifest-backed RSS, gas, crypto, eBay, social, and unread-email snapshot routes retain legacy fields and add the common `integration` envelope documented in `docs/integration-envelopes.md`.
+- Parser drift fixtures: sanitized RSS/Atom and AAA gas samples in `tests/fixtures/parsers/` assert required fields, explicit malformed-structure failures, and the parser versions emitted in integration envelopes. See `docs/parser-fixtures.md`.
 - Browser session storage: Meta/Facebook/Instagram storage defaults to `DATA_DIR/.auth`.
 - `.env` and `.env.local`: read only during server startup.
 - Diary filesystem indexing was removed in Phase 7. A default installation does not read sibling repositories.

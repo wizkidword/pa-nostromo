@@ -6627,7 +6627,7 @@ function parseFeedXml(xmlRaw, feedUrl) {
     ? (xml.match(/<entry[\s\S]*?<\/entry>/gi) || [])
     : (xml.match(/<item[\s\S]*?<\/item>/gi) || []);
 
-  return entryBlocks.slice(0, RSS_FETCH_MAX_ENTRIES).map((block) => {
+  const items = entryBlocks.slice(0, RSS_FETCH_MAX_ENTRIES).map((block) => {
     const link = isAtom
       ? (extractTagAttr(block, 'link', 'href') || stripTags(extractTagValue(block, 'link')))
       : stripTags(extractTagValue(block, 'link'));
@@ -6659,6 +6659,10 @@ function parseFeedXml(xmlRaw, feedUrl) {
     item.id = deriveItemId(item);
     return item;
   }).filter((item) => /^https?:\/\//i.test(item.link));
+  if (entryBlocks.length > 0 && items.length === 0) {
+    throw Object.assign(new Error('rss_parser_required_fields_missing'), { code: 'rss_parser_required_fields_missing' });
+  }
+  return items;
 }
 
 async function fetchFeedXml(url, options = {}) {
@@ -6932,7 +6936,7 @@ function parseAaaCurrentAvgRow(html) {
   const rowMatch = html.match(/<tr>\s*<td>\s*Current Avg\.?\s*<\/td>([\s\S]*?)<\/tr>/i);
   if (!rowMatch) return null;
   const cells = [...rowMatch[1].matchAll(/<td>\s*\$?\s*([0-9]+(?:\.[0-9]+)?)\s*<\/td>/gi)].map((m) => Number(m[1]));
-  if (!cells.length) return null;
+  if (cells.length < 4 || cells.slice(0, 4).some((value) => !Number.isFinite(value))) return null;
   return {
     regular: Number.isFinite(cells[0]) ? cells[0].toFixed(3) : '',
     mid: Number.isFinite(cells[1]) ? cells[1].toFixed(3) : '',
@@ -7323,6 +7327,8 @@ module.exports = {
   extractTikTokPublicFollowerEstimate,
   extractYouTubePublicSubscriberEstimate,
   parseCompactCount,
+  parseFeedXml,
+  parseAaaCurrentAvgRow,
   extractUnreadEmailAtomFeed,
   emailUnreadSetupPayload,
 };
