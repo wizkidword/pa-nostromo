@@ -14,6 +14,7 @@ The browser application is being migrated incrementally from the legacy `public/
 | Shortcuts | `public/app/features/shortcuts.js` | Safe URL validation, drag-and-drop capture, project assignment, shortcut dialog lifecycle, settings manager, and reversible actions. |
 | Unread Email state | `public/app/features/unread-email-state.js` | Account resolution, safe message identifiers, state pruning after refresh, and per-account blocked-sender validation and filtering. |
 | eBay Traffic state | `public/app/features/ebay-traffic-state.js` | Store and view selection, display formatting, report-age classification, safe listing URL construction, and top-listing selection. |
+| Social Followers analytics | `public/app/features/social-followers-analytics.js` | Follower-history normalization and calculations, range filtering, content-item normalization, and status summaries. |
 
 `public/app.js` remains the composition layer for the migration. It supplies the current application state, logging, persistence callback, and settings rerender callback to a feature controller rather than duplicating the feature's behavior.
 
@@ -27,4 +28,4 @@ The browser application is being migrated incrementally from the legacy `public/
 
 ## Next Candidates
 
-Unread Email and eBay Traffic are now being decomposed incrementally: their state rules live in feature modules, while rendering and network actions remain in `public/app.js` for later packages. Other integrations remain in `public/app.js`; extract each feature one view at a time, then move related state helpers and selectors only after behavior is verified.
+Unread Email, eBay Traffic, and Social Followers are now being decomposed incrementally: their state rules live in feature modules, while rendering and network actions remain in `public/app.js` for later packages. Other integrations remain in `public/app.js`; extract each feature one view at a time, then move related state helpers and selectors only after behavior is verified.

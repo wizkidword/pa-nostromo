@@ -102,6 +102,8 @@ const unreadEmailStateFeature = window.MissionControlModules?.unreadEmailState;
 if (!unreadEmailStateFeature) throw new Error('Unread email state feature failed to load.');
 const ebayTrafficStateFeature = window.MissionControlModules?.ebayTrafficState;
 if (!ebayTrafficStateFeature) throw new Error('eBay Traffic state feature failed to load.');
+const socialFollowersAnalyticsFeature = window.MissionControlModules?.socialFollowersAnalytics;
+if (!socialFollowersAnalyticsFeature) throw new Error('Social Followers analytics feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -4170,24 +4172,15 @@ function mountRssSettingsFeeds(){
 }
 
 function hasFollowerMetricValue(value){
-  return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+  return socialFollowersAnalyticsFeature.hasMetricValue(value);
 }
 
 function formatFollowerMetricValue(value){
-  if (!hasFollowerMetricValue(value)) return 'n/a';
-  const num = Number(value);
-  const prefix = num > 0 ? '+' : '';
-  return prefix + new Intl.NumberFormat().format(num);
+  return socialFollowersAnalyticsFeature.formatMetricValue(value);
 }
 
 function formatFollowerAge(ageMs){
-  if (!Number.isFinite(Number(ageMs))) return 'unknown';
-  const mins = Math.max(0, Math.floor(Number(ageMs) / 60000));
-  if (mins < 1) return '0m ago';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  const remMins = mins % 60;
-  return remMins ? `${hours}h ${remMins}m ago` : `${hours}h ago`;
+  return socialFollowersAnalyticsFeature.formatAge(ageMs);
 }
 
 const socialAnalyticsRuntime = {
@@ -4226,38 +4219,19 @@ const socialAnalyticsRuntime = {
 };
 
 function formatDurationCompact(durationMs){
-  if (!Number.isFinite(Number(durationMs)) || Number(durationMs) <= 0) return 'n/a';
-  const mins = Math.max(1, Math.round(Number(durationMs) / 60000));
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  const remMins = mins % 60;
-  return remMins ? `${hours}h ${remMins}m` : `${hours}h`;
+  return socialFollowersAnalyticsFeature.formatDuration(durationMs);
 }
 
 function formatFollowerTimestamp(value){
-  const ts = Date.parse(String(value || ''));
-  if (!Number.isFinite(ts)) return 'n/a';
-  return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return socialFollowersAnalyticsFeature.formatTimestamp(value);
 }
 
 function normalizeFollowerHistory(history, valueKey = 'followersCount'){
-  return (Array.isArray(history) ? history : [])
-    .map((entry) => {
-      const value = Number(entry?.[valueKey]);
-      const fetchedAt = String(entry?.fetchedAt || '');
-      const ts = Date.parse(fetchedAt);
-      if (!Number.isFinite(value) || !Number.isFinite(ts)) return null;
-      return { value, fetchedAt, ts };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.ts - b.ts);
+  return socialFollowersAnalyticsFeature.normalizeHistory(history, valueKey);
 }
 
 function averageFollowerInterval(history){
-  if (!Array.isArray(history) || history.length < 2) return null;
-  let totalMs = 0;
-  for (let i = 1; i < history.length; i += 1) totalMs += history[i].ts - history[i - 1].ts;
-  return totalMs > 0 ? totalMs / (history.length - 1) : null;
+  return socialFollowersAnalyticsFeature.averageInterval(history);
 }
 
 function buildFollowerSparkline(history, options = {}){
@@ -4290,12 +4264,7 @@ function buildFollowerSparkline(history, options = {}){
   </svg>`;
 }
 
-const SOCIAL_ANALYTICS_RANGE_WINDOWS = {
-  '24h': 24 * 60 * 60 * 1000,
-  '7d': 7 * 24 * 60 * 60 * 1000,
-  '30d': 30 * 24 * 60 * 60 * 1000,
-  all: 0,
-};
+const SOCIAL_ANALYTICS_RANGE_WINDOWS = socialFollowersAnalyticsFeature.rangeWindows;
 
 function getSocialAnalyticsRange(network){
   const key = String(network || '').trim().toLowerCase() || 'instagram';
@@ -4309,157 +4278,39 @@ function setSocialAnalyticsRange(network, rangeKey){
 }
 
 function filterFollowerHistoryByRange(history, rangeKey){
-  const points = Array.isArray(history) ? history : [];
-  if (!points.length) return points;
-  const windowMs = SOCIAL_ANALYTICS_RANGE_WINDOWS[rangeKey];
-  if (!windowMs) return points;
-  const cutoff = points[points.length - 1].ts - windowMs;
-  const filtered = points.filter((entry) => entry.ts >= cutoff);
-  return filtered.length >= 2 ? filtered : points.slice(-Math.min(points.length, 2));
+  return socialFollowersAnalyticsFeature.filterHistoryByRange(history, rangeKey);
 }
 
 function buildFollowerPointDiffs(history){
-  const points = Array.isArray(history) ? history : [];
-  const diffs = [];
-  for (let i = 1; i < points.length; i += 1) {
-    const previous = points[i - 1];
-    const current = points[i];
-    diffs.push({
-      delta: current.value - previous.value,
-      startTs: previous.ts,
-      endTs: current.ts,
-      durationMs: current.ts - previous.ts,
-      startValue: previous.value,
-      endValue: current.value,
-    });
-  }
-  return diffs;
+  return socialFollowersAnalyticsFeature.buildPointDiffs(history);
 }
 
 function formatFollowerRatePerHour(value){
-  if (!Number.isFinite(Number(value))) return 'n/a';
-  const num = Number(value);
-  const prefix = num > 0 ? '+' : '';
-  return `${prefix}${num.toFixed(Math.abs(num) >= 10 ? 0 : 1)}/h`;
+  return socialFollowersAnalyticsFeature.formatRatePerHour(value);
 }
 
 function computeFollowerWindowStats(history){
-  const points = Array.isArray(history) ? history : [];
-  const diffs = buildFollowerPointDiffs(points);
-  if (!points.length) {
-    return {
-      net: null,
-      spanMs: null,
-      avgPerHour: null,
-      bestGain: null,
-      worstDrop: null,
-      momentum: null,
-      sampleCount: 0,
-      startValue: null,
-      endValue: null,
-    };
-  }
-  const startValue = points[0].value;
-  const endValue = points[points.length - 1].value;
-  const spanMs = points.length > 1 ? points[points.length - 1].ts - points[0].ts : null;
-  const net = Number.isFinite(startValue) && Number.isFinite(endValue) ? endValue - startValue : null;
-  const avgPerHour = Number.isFinite(net) && Number.isFinite(spanMs) && spanMs > 0 ? (net / spanMs) * (60 * 60 * 1000) : null;
-  const bestGain = diffs.length ? Math.max(...diffs.map((entry) => entry.delta)) : null;
-  const worstDrop = diffs.length ? Math.min(...diffs.map((entry) => entry.delta)) : null;
-  const midpoint = Math.floor(diffs.length / 2);
-  const firstHalf = midpoint > 0 ? diffs.slice(0, midpoint) : [];
-  const secondHalf = diffs.length > midpoint ? diffs.slice(midpoint) : [];
-  const toRate = (items) => {
-    const totalDelta = items.reduce((sum, item) => sum + item.delta, 0);
-    const totalMs = items.reduce((sum, item) => sum + item.durationMs, 0);
-    return totalMs > 0 ? (totalDelta / totalMs) * (60 * 60 * 1000) : null;
-  };
-  const firstRate = toRate(firstHalf);
-  const secondRate = toRate(secondHalf);
-  const momentum = Number.isFinite(firstRate) && Number.isFinite(secondRate) ? secondRate - firstRate : null;
-  return { net, spanMs, avgPerHour, bestGain, worstDrop, momentum, sampleCount: points.length, startValue, endValue };
+  return socialFollowersAnalyticsFeature.computeWindowStats(history);
 }
 
 function buildFollowerDailyRollups(history){
-  const points = Array.isArray(history) ? history : [];
-  const grouped = new Map();
-  for (const point of points) {
-    const date = new Date(point.ts);
-    const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-    if (!grouped.has(dayKey)) grouped.set(dayKey, []);
-    grouped.get(dayKey).push(point);
-  }
-  return Array.from(grouped.entries()).map(([dayKey, items]) => {
-    const first = items[0];
-    const last = items[items.length - 1];
-    const high = Math.max(...items.map((item) => item.value));
-    const low = Math.min(...items.map((item) => item.value));
-    return {
-      dayKey,
-      label: new Date(first.ts).toLocaleDateString([], { month: 'short', day: 'numeric' }),
-      open: first.value,
-      close: last.value,
-      net: last.value - first.value,
-      high,
-      low,
-      samples: items.length,
-    };
-  }).sort((a, b) => a.dayKey.localeCompare(b.dayKey));
+  return socialFollowersAnalyticsFeature.buildDailyRollups(history);
 }
 
 function normalizeSocialContentItems(items){
-  return (Array.isArray(items) ? items : [])
-    .map((item) => {
-      const code = String(item?.code || '').trim();
-      if (!code) return null;
-      const likeCount = item?.likeCount != null && Number.isFinite(Number(item.likeCount)) ? Number(item.likeCount) : null;
-      const commentCount = item?.commentCount != null && Number.isFinite(Number(item.commentCount)) ? Number(item.commentCount) : null;
-      const shareCount = item?.shareCount != null && Number.isFinite(Number(item.shareCount))
-        ? Number(item.shareCount)
-        : (item?.repostCount != null && Number.isFinite(Number(item.repostCount)) ? Number(item.repostCount) : null);
-      const saveCount = item?.saveCount != null && Number.isFinite(Number(item.saveCount)) ? Number(item.saveCount) : null;
-      const reachCount = item?.reachCount != null && Number.isFinite(Number(item.reachCount)) ? Number(item.reachCount) : null;
-      const repostCount = shareCount;
-      const viewCount = item?.viewCount != null && Number.isFinite(Number(item.viewCount)) ? Number(item.viewCount) : null;
-      const interactionCount = Number.isFinite(Number(item?.interactionCount))
-        ? Number(item.interactionCount)
-        : (likeCount || 0) + (commentCount || 0) + (shareCount || 0) + (saveCount || 0);
-      return {
-        code,
-        permalink: String(item?.permalink || '').trim(),
-        caption: String(item?.caption || '').replace(/\s+/g, ' ').trim(),
-        takenAt: String(item?.takenAt || '').trim(),
-        productType: String(item?.productType || '').trim(),
-        likeCount,
-        commentCount,
-        shareCount,
-        saveCount,
-        reachCount,
-        repostCount,
-        viewCount,
-        interactionCount,
-      };
-    })
-    .filter(Boolean);
+  return socialFollowersAnalyticsFeature.normalizeContentItems(items);
 }
 
 function formatSocialMetricValue(value){
-  return Number.isFinite(Number(value)) ? new Intl.NumberFormat().format(Number(value)) : 'n/a';
+  return socialFollowersAnalyticsFeature.formatSocialMetric(value);
 }
 
 function formatSocialContentType(item){
-  const type = String(item?.productType || '').trim().toLowerCase();
-  if (type === 'clips') return 'Reel';
-  if (type === 'carousel_container') return 'Carousel';
-  if (type) return type.replace(/_/g, ' ');
-  return 'Post';
+  return socialFollowersAnalyticsFeature.formatContentType(item);
 }
 
 function trimSocialCaption(text, maxLen = 160){
-  const clean = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!clean) return 'No caption';
-  if (clean.length <= maxLen) return clean;
-  return `${clean.slice(0, Math.max(24, maxLen - 1)).trimEnd()}...`;
+  return socialFollowersAnalyticsFeature.trimCaption(text, maxLen);
 }
 
 function getSocialContentDataset(network){
@@ -4517,20 +4368,7 @@ function getSocialContentDataset(network){
 }
 
 function summarizeSocialFollowersStatus(networks){
-  let fresh = 0;
-  let stale = 0;
-  let issue = 0;
-  for (const network of networks) {
-    const level = String(network?.staleLevel || 'critical');
-    if (level === 'fresh') fresh += 1;
-    else if (level === 'stale') stale += 1;
-    else issue += 1;
-  }
-  if (!networks.length) return { mode: 'neutral', detail: 'idle' };
-  if (!stale && !issue) return { mode: 'fresh', detail: `${fresh} live` };
-  if (issue && !fresh && !stale) return { mode: 'error', detail: 'all blocked' };
-  if (issue) return { mode: 'degraded', detail: `${fresh} live · ${issue} issue${issue === 1 ? '' : 's'}` };
-  return { mode: 'stale', detail: `${fresh} live · ${stale} stale` };
+  return socialFollowersAnalyticsFeature.summarizeStatus(networks);
 }
 
 const FACEBOOK_FOLLOWER_FALLBACK_SOURCES = new Set([
