@@ -139,7 +139,7 @@
         ? visible.map((shortcut) => {
           const href = safeExternalUrl(shortcut.url);
           if (!href) return `<div class="shortcut-link is-disabled"><strong>${escapeText(shortcut.title)}</strong><span>Blocked unsafe URL</span></div>`;
-          return `<a class="shortcut-link" href="${escapeAttribute(href)}" target="_blank" rel="noopener noreferrer">
+          return `<a class="shortcut-link" data-shortcut-id="${escapeAttribute(shortcut.id)}" href="${escapeAttribute(href)}" target="_blank" rel="noopener noreferrer">
             <strong>${escapeText(shortcut.title)}</strong>
             <span>${escapeText(shortcut.category || 'Shortcut')}</span>
           </a>`;

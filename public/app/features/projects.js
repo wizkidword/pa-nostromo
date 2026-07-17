@@ -65,7 +65,7 @@
         const appHref = safeExternalUrl(project.appLink);
         const repoHref = safeExternalUrl(project.repoLink);
         return `
-          <div class="project-item">
+          <div class="project-item" data-project-id="${escapeAttribute(project.id)}" tabindex="-1">
             <div class="project-item-head">
               <strong>${escapeText(project.name)}</strong>
               <span class="badge">${escapeText(project.status)}</span>

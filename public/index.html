@@ -27,6 +27,7 @@
     </div>
     <div class="top-actions">
       <a class="btn ghost" href="http://localhost:3399" target="_blank" rel="noopener noreferrer">Open Radio Map</a>
+      <button id="openCommandPaletteBtn" class="btn ghost" type="button" aria-keyshortcuts="Control+K Meta+K" title="Search dashboard (Ctrl/⌘ K)">⌘ Search</button>
       <button id="openSettingsBtn" class="btn ghost">⚙️ Settings</button>
       <button id="addProjectBtn" class="btn">+ New Project</button>
       <button id="addTaskBtn" class="btn primary">+ New Task</button>
@@ -542,6 +543,23 @@
       </menu>
     </form>
   </dialog>
+
+  <dialog id="commandPaletteDialog" class="command-palette-dialog" aria-labelledby="commandPaletteTitle">
+    <div class="command-palette-head">
+      <div>
+        <h2 id="commandPaletteTitle">Search dashboard</h2>
+        <p>Projects, tasks, notes, reminders, shortcuts, RSS, email metadata, and integrations.</p>
+      </div>
+      <button id="commandPaletteCloseBtn" class="btn ghost" type="button">Close</button>
+    </div>
+    <label class="command-palette-search-label" for="commandPaletteInput">
+      <span>Search dashboard and commands</span>
+      <input id="commandPaletteInput" type="search" autocomplete="off" placeholder="Search projects, tasks, notes, or type a command…" aria-controls="commandPaletteResults" />
+    </label>
+    <p id="commandPaletteSummary" class="command-palette-summary" role="status" aria-live="polite"></p>
+    <div id="commandPaletteResults" class="command-palette-results" role="listbox" aria-label="Search results"></div>
+    <p class="command-palette-help">↑ ↓ to choose · Enter to open · Esc to close</p>
+  </dialog>
   <script src="app/core/safe-ui.js"></script>
   <script src="app/core/contract.js"></script>
   <script src="app/core/debug.js"></script>
@@ -576,6 +594,7 @@
     <script src="app/features/rss-state.js"></script>
     <script src="app/features/integration-health.js"></script>
     <script src="app/features/today-focus.js"></script>
+    <script src="app/features/command-palette.js"></script>
   <script src="app/pods/date-time.pod.js"></script>
   <script src="app/pods/calendar.pod.js"></script>
   <script src="app/pods/weather.pod.js"></script>

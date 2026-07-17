@@ -85,6 +85,15 @@ try {
   assert.deepEqual(baseline.unnamedButtons, []);
   assert.deepEqual(baseline.unlabeledInputs, []);
 
+  await page.keyboard.press('Control+K');
+  assert.equal(await page.locator('#commandPaletteDialog').evaluate((dialog) => dialog.open), true);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'commandPaletteInput');
+  assert.equal(await page.locator('#commandPaletteResults [role="option"]').count(), 6);
+  await page.locator('#commandPaletteInput').fill('Mission Control Dashboard');
+  await page.locator('#commandPaletteInput').press('Enter');
+  assert.equal(await page.locator('#commandPaletteDialog').evaluate((dialog) => dialog.open), false);
+  assert.equal(await page.locator('[data-project-id]').filter({ hasText: 'Mission Control Dashboard' }).evaluate((element) => document.activeElement === element), true);
+
   await page.getByRole('button', { name: /new task/i }).press('Enter');
   assert.equal(await page.locator('#taskDialog').evaluate((dialog) => dialog.open), true);
   await page.locator('#taskForm [name="title"]').fill('Keyboard accessibility task');

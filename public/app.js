@@ -132,6 +132,8 @@ const integrationHealthFeature = window.MissionControlModules?.integrationHealth
 if (!integrationHealthFeature) throw new Error('Integration Health feature failed to load.');
 const todayFocusFeature = window.MissionControlModules?.todayFocus;
 if (!todayFocusFeature) throw new Error('Today/Focus feature failed to load.');
+const commandPaletteFeature = window.MissionControlModules?.commandPalette;
+if (!commandPaletteFeature) throw new Error('Command palette feature failed to load.');
 const dateTimePodFeature = window.MissionControlModules?.dateTimePod;
 if (!dateTimePodFeature) throw new Error('Date & Time pod failed to load.');
 const calendarPodFeature = window.MissionControlModules?.calendarPod;
@@ -11781,6 +11783,216 @@ document.addEventListener('keydown', (event) => {
   if (currentIndex === -1 || nextIndex === 0 || nextIndex === focusable.length - 1) {
     event.preventDefault();
     focusable[nextIndex].focus({ preventScroll: true });
+  }
+});
+
+const commandPaletteDialog = document.getElementById('commandPaletteDialog');
+const commandPaletteInput = document.getElementById('commandPaletteInput');
+const commandPaletteResults = document.getElementById('commandPaletteResults');
+const commandPaletteSummary = document.getElementById('commandPaletteSummary');
+let commandPaletteRows = [];
+let commandPaletteSelectedIndex = 0;
+let commandPaletteFocusReturnTarget = null;
+
+function scrollToCommandPaletteElement(element){
+  if (!element) return false;
+  element.scrollIntoView?.({ behavior: 'auto', block: 'center' });
+  element.focus?.({ preventScroll: true });
+  return true;
+}
+
+function commandPaletteElementByData(attributeName, value){
+  const expected = String(value || '');
+  return [...document.querySelectorAll(`[data-${attributeName}]`)]
+    .find((element) => String(element.dataset?.[attributeName.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] || '') === expected) || null;
+}
+
+function renderCommandPalette(){
+  if (!commandPaletteResults || !commandPaletteSummary) return;
+  const result = commandPaletteFeature.buildSearchResults({
+    query: commandPaletteInput?.value || '',
+    state,
+    emailPayload: unreadEmailLastPayload,
+    integrations: getIntegrationHealthEntries(),
+  });
+  commandPaletteRows = result.rows;
+  commandPaletteSelectedIndex = commandPaletteRows.length
+    ? Math.max(0, Math.min(commandPaletteSelectedIndex, commandPaletteRows.length - 1))
+    : 0;
+  const showingCommands = !result.query;
+  commandPaletteSummary.textContent = showingCommands
+    ? `${result.commandCount} commands ready. Search stays on this device.`
+    : result.rows.length
+      ? `${result.rows.length} local result${result.rows.length === 1 ? '' : 's'}${result.contentCount > result.rows.length ? ' shown' : ''}.`
+      : 'No local matches found.';
+  commandPaletteResults.innerHTML = commandPaletteRows.length
+    ? commandPaletteRows.map((row, index) => `
+      <button class="command-palette-result ${index === commandPaletteSelectedIndex ? 'is-selected' : ''} ${row.disabled ? 'is-disabled' : ''}" type="button" role="option" aria-selected="${index === commandPaletteSelectedIndex ? 'true' : 'false'}" aria-disabled="${row.disabled ? 'true' : 'false'}" data-command-palette-index="${index}">
+        <span class="command-palette-result-main">
+          <strong class="command-palette-result-title">${escapeHtml(row.title)}</strong>
+          ${row.detail ? `<span class="command-palette-result-detail">${escapeHtml(row.detail)}</span>` : ''}
+        </span>
+        <span class="command-palette-result-type">${escapeHtml(commandPaletteFeature.RESULT_TYPE_LABELS[row.type] || row.type)}</span>
+      </button>
+    `).join('')
+    : '<div class="command-palette-empty">Try a project, task, note, shortcut, feed title, sender, or integration name.</div>';
+}
+
+function closeCommandPalette({ restoreFocus = true } = {}){
+  if (!commandPaletteDialog?.open) return;
+  commandPaletteDialog.close();
+  const focusTarget = commandPaletteFocusReturnTarget;
+  commandPaletteFocusReturnTarget = null;
+  if (restoreFocus && focusTarget?.isConnected) {
+    requestAnimationFrame(() => focusTarget.focus({ preventScroll: true }));
+  }
+}
+
+function openCommandPalette(){
+  if (!commandPaletteDialog) return;
+  if (!commandPaletteDialog.open) {
+    const initialFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (settingsPanel?.classList.contains('open')) closeSettingsPanel();
+    commandPaletteFocusReturnTarget = initialFocus;
+    commandPaletteSelectedIndex = 0;
+    commandPaletteDialog.showModal();
+  }
+  renderCommandPalette();
+  requestAnimationFrame(() => commandPaletteInput?.focus({ preventScroll: true }));
+}
+
+function openCommandPaletteProject(projectId = ''){
+  const project = projectId
+    ? commandPaletteElementByData('project-id', projectId)
+    : document.querySelector('[data-project-id]');
+  if (scrollToCommandPaletteElement(project)) return true;
+  return scrollToCommandPaletteElement(document.getElementById('projectDirectory'));
+}
+
+function openCommandPaletteNote(noteId){
+  const searchInput = document.getElementById('notesSearch');
+  const filter = document.getElementById('notesFilter');
+  if (searchInput) searchInput.value = '';
+  if (filter) filter.value = 'all';
+  renderNotes();
+  const note = commandPaletteElementByData('note-id', noteId);
+  const field = note?.querySelector?.('[data-field="title"]') || note;
+  return scrollToCommandPaletteElement(field);
+}
+
+function openCommandPaletteReminder(row){
+  selectedCalendarDate = row.reminderDate || todayFocusFeature.dateKey(new Date());
+  renderCalendar();
+  renderCalendarRemindersPanel();
+  return scrollToCommandPaletteElement(document.querySelector('[data-pod-id="calendar"]'));
+}
+
+function openCommandPaletteEmail(row){
+  if (row.accountId) setUnreadEmailActiveAccountId(row.accountId);
+  const mailbox = String(row.sourceId || '').split('::')[1] || '';
+  unreadEmailShowRecentInbox = mailbox && mailbox !== 'INBOX';
+  if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload);
+  return scrollToCommandPaletteElement(document.querySelector('[data-pod-id="unread-email"]'));
+}
+
+function openCommandPaletteSource(row){
+  if (!row) return false;
+  if (row.type === 'project') return openCommandPaletteProject(row.sourceId);
+  if (row.type === 'task') return !!openEditTaskDialog(row.sourceId);
+  if (row.type === 'note') return openCommandPaletteNote(row.sourceId);
+  if (row.type === 'reminder') return openCommandPaletteReminder(row);
+  if (row.type === 'shortcut') {
+    const shortcut = state.shortcuts.find((candidate) => candidate?.id === row.sourceId && candidate?.enabled !== false);
+    return !!openSafeExternal(safeExternalUrl(shortcut?.url), 'noopener,noreferrer');
+  }
+  if (row.type === 'rss') return !!openSafeExternal(safeExternalUrl(row.url), 'noopener,noreferrer');
+  if (row.type === 'email') return openCommandPaletteEmail(row);
+  if (row.type === 'integration') {
+    openSettingsPanel();
+    setActiveSettingsSection('integration-health');
+    return true;
+  }
+  return false;
+}
+
+function executeCommandPaletteRow(row){
+  if (!row) return;
+  if (row.disabled) {
+    announceStatus(`${row.title.replace(/…$/, '')} is available after Product Profiles ships.`, { key: `command-palette:${row.sourceId}` });
+    return;
+  }
+  closeCommandPalette({ restoreFocus: false });
+  if (row.type !== 'command') {
+    openCommandPaletteSource(row);
+    return;
+  }
+  if (row.action === 'create-task') {
+    document.getElementById('addTaskBtn')?.click();
+    requestAnimationFrame(() => document.querySelector('#taskForm [name="title"]')?.focus({ preventScroll: true }));
+    return;
+  }
+  if (row.action === 'capture-note') {
+    const note = notesController.create();
+    commitNotesFeature('command_palette_note_captured');
+    requestAnimationFrame(() => openCommandPaletteNote(note.id));
+    announceStatus('Captured a new quick note.', { key: 'command-palette:capture-note' });
+    return;
+  }
+  if (row.action === 'browse-projects') {
+    openCommandPaletteProject();
+    return;
+  }
+  if (row.action === 'refresh-email') {
+    void refreshScheduledPod('unread-email');
+    return;
+  }
+  if (row.action === 'show-integration-health') {
+    openSettingsPanel();
+    setActiveSettingsSection('integration-health');
+  }
+}
+
+document.getElementById('openCommandPaletteBtn')?.addEventListener('click', openCommandPalette);
+document.getElementById('commandPaletteCloseBtn')?.addEventListener('click', () => closeCommandPalette());
+commandPaletteInput?.addEventListener('input', () => {
+  commandPaletteSelectedIndex = 0;
+  renderCommandPalette();
+});
+commandPaletteInput?.addEventListener('keydown', (event) => {
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    if (!commandPaletteRows.length) return;
+    event.preventDefault();
+    const direction = event.key === 'ArrowDown' ? 1 : -1;
+    commandPaletteSelectedIndex = (commandPaletteSelectedIndex + direction + commandPaletteRows.length) % commandPaletteRows.length;
+    renderCommandPalette();
+    return;
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    executeCommandPaletteRow(commandPaletteRows[commandPaletteSelectedIndex]);
+  }
+});
+commandPaletteResults?.addEventListener('click', (event) => {
+  const button = event.target.closest?.('[data-command-palette-index]');
+  const index = Number(button?.dataset?.commandPaletteIndex);
+  if (!Number.isInteger(index)) return;
+  commandPaletteSelectedIndex = index;
+  executeCommandPaletteRow(commandPaletteRows[index]);
+});
+commandPaletteDialog?.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  closeCommandPalette();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.isComposing) return;
+  if ((event.ctrlKey || event.metaKey) && !event.altKey && String(event.key || '').toLocaleLowerCase() === 'k') {
+    event.preventDefault();
+    openCommandPalette();
+    return;
+  }
+  if (commandPaletteDialog?.open && event.key === 'Escape') {
+    event.preventDefault();
+    closeCommandPalette();
   }
 });
 
