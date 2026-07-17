@@ -100,6 +100,8 @@ const shortcutsFeature = window.MissionControlModules?.shortcuts;
 if (!shortcutsFeature) throw new Error('Shortcuts feature failed to load.');
 const unreadEmailStateFeature = window.MissionControlModules?.unreadEmailState;
 if (!unreadEmailStateFeature) throw new Error('Unread email state feature failed to load.');
+const ebayTrafficStateFeature = window.MissionControlModules?.ebayTrafficState;
+if (!ebayTrafficStateFeature) throw new Error('eBay Traffic state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -5576,122 +5578,52 @@ function setEbayTrafficActiveStoreId(storeId){
 }
 
 function setEbayTrafficActiveInsightView(view){
-  const nextView = String(view || '').trim();
-  ebayTrafficActiveInsightView = nextView === 'trend' || nextView === 'promo' ? nextView : 'sources';
+  ebayTrafficActiveInsightView = ebayTrafficStateFeature.normalizeInsightView(view);
   try { localStorage.setItem(EBAY_TRAFFIC_ACTIVE_INSIGHT_KEY, ebayTrafficActiveInsightView); } catch {}
 }
 
 function setEbayTrafficActiveListingsView(view){
-  ebayTrafficActiveListingsView = String(view || '').trim() === 'watchers' ? 'watchers' : 'traffic';
+  ebayTrafficActiveListingsView = ebayTrafficStateFeature.normalizeListingsView(view);
   try { localStorage.setItem(EBAY_TRAFFIC_ACTIVE_LISTINGS_KEY, ebayTrafficActiveListingsView); } catch {}
 }
 
 function setEbayTrafficPromoLiftWindow(view){
-  ebayTrafficPromoLiftWindow = String(view || '').trim() === 'avg7' ? 'avg7' : 'day';
+  ebayTrafficPromoLiftWindow = ebayTrafficStateFeature.normalizePromoLiftWindow(view);
   try { localStorage.setItem(EBAY_TRAFFIC_PROMO_LIFT_WINDOW_KEY, ebayTrafficPromoLiftWindow); } catch {}
 }
 
 function resolveEbayTrafficActiveStore(stores = []){
-  const list = Array.isArray(stores) ? stores : [];
-  if (!list.length) return null;
-  const current = list.find((store) => String(store?.id || '') === ebayTrafficActiveStoreId);
-  if (current) return current;
-  const fallback = list.find((store) => String(store?.status || '') === 'ok')
-    || list.find((store) => !!store?.configured)
-    || list[0];
-  setEbayTrafficActiveStoreId(String(fallback?.id || ''));
-  return fallback;
+  const resolved = ebayTrafficStateFeature.resolveActiveStore(stores, ebayTrafficActiveStoreId);
+  if (resolved.changed) setEbayTrafficActiveStoreId(resolved.storeId);
+  return resolved.store;
 }
 
 function formatEbayTrafficNumber(value, options = {}){
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return 'n/a';
-  if (options.compact) {
-    return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(numeric);
-  }
-  return new Intl.NumberFormat().format(Math.round(numeric));
+  return ebayTrafficStateFeature.formatNumber(value, options);
 }
 
 function formatEbayTrafficPercent(value){
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return 'n/a';
-  return `${numeric.toFixed(numeric >= 10 ? 1 : 2).replace(/\.?0+$/, '')}%`;
+  return ebayTrafficStateFeature.formatPercent(value);
 }
 
 function formatEbayTrafficDecimal(value, options = {}){
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return 'n/a';
-  const maximumFractionDigits = Number.isFinite(Number(options.maximumFractionDigits))
-    ? Math.max(0, Number(options.maximumFractionDigits))
-    : 2;
-  const minimumFractionDigits = Number.isFinite(Number(options.minimumFractionDigits))
-    ? Math.max(0, Number(options.minimumFractionDigits))
-    : (Math.abs(numeric) > 0 && Math.abs(numeric) < 1 ? 1 : 0);
-  return new Intl.NumberFormat(undefined, {
-    minimumFractionDigits,
-    maximumFractionDigits,
-  }).format(numeric);
+  return ebayTrafficStateFeature.formatDecimal(value, options);
 }
 
 function formatEbayTrafficDateTimeLabel(value){
-  const parsed = Date.parse(String(value || '').trim());
-  if (!Number.isFinite(parsed)) return '';
-  return new Date(parsed).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return ebayTrafficStateFeature.formatDateTimeLabel(value);
 }
 
 function classifyEbayMarketingReportAge(value){
-  const parsed = Date.parse(String(value || '').trim());
-  if (!Number.isFinite(parsed)) return null;
-  const ageMs = Math.max(0, Date.now() - parsed);
-  if (ageMs <= 2 * 60 * 60 * 1000) {
-    return { tone: 'fresh', label: 'Fresh report' };
-  }
-  if (ageMs <= 12 * 60 * 60 * 1000) {
-    return { tone: 'warm', label: 'Aging report' };
-  }
-  return { tone: 'stale', label: 'Older report' };
+  return ebayTrafficStateFeature.classifyMarketingReportAge(value);
 }
 
 function buildEbayListingUrl(listingId, marketplaceId = 'EBAY_US'){
-  const itemId = String(listingId || '').trim();
-  if (!itemId) return '';
-  const marketplace = String(marketplaceId || 'EBAY_US').trim().toUpperCase();
-  const hostMap = {
-    EBAY_US: 'www.ebay.com',
-    EBAY_MOTORS_US: 'www.ebay.com',
-    EBAY_GB: 'www.ebay.co.uk',
-    EBAY_DE: 'www.ebay.de',
-    EBAY_AU: 'www.ebay.com.au',
-    EBAY_CA: 'www.ebay.ca',
-    EBAY_FR: 'www.ebay.fr',
-    EBAY_IT: 'www.ebay.it',
-    EBAY_ES: 'www.ebay.es',
-  };
-  const host = hostMap[marketplace] || 'www.ebay.com';
-  return `https://${host}/itm/${encodeURIComponent(itemId)}`;
+  return ebayTrafficStateFeature.buildListingUrl(listingId, marketplaceId);
 }
 
 function formatEbayTrafficDateLabel(value){
-  const text = String(value || '').trim();
-  if (!text) return 'Unknown';
-  if (/^\d{8}$/.test(text)) {
-    const year = Number(text.slice(0, 4));
-    const month = Number(text.slice(4, 6));
-    const day = Number(text.slice(6, 8));
-    return new Date(year, month - 1, day).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-    const [year, month, day] = text.split('-').map((item) => Number(item));
-    return new Date(year, month - 1, day).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  }
-  const parsed = Date.parse(text);
-  if (!Number.isFinite(parsed)) return text;
-  return new Date(parsed).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return ebayTrafficStateFeature.formatDateLabel(value);
 }
 
 function renderEbayTrafficTag(label, tone = 'neutral'){
@@ -5709,10 +5641,7 @@ function renderEbayTrafficMetricCard(label, value, meta = '', tone = 'neutral'){
 }
 
 function formatEbayTrafficDeltaText(metric, suffix = 'vs previous day'){
-  const delta = Number(metric?.deltaPercent);
-  if (!Number.isFinite(delta)) return `No prior day ${suffix}`;
-  const formatted = `${delta > 0 ? '+' : ''}${delta.toFixed(1).replace(/\.0$/, '')}%`;
-  return `${formatted} ${suffix}`;
+  return ebayTrafficStateFeature.formatDeltaText(metric, suffix);
 }
 
 function renderEbayTrafficSnapshotMetricCard(label, metric, formatter, tone = 'neutral'){
@@ -5756,17 +5685,7 @@ function renderEbayTrafficStoreTabs(stores = [], activeStoreId = ''){
 }
 
 function renderEbayTrafficTopListings(store){
-  const activeView = ebayTrafficActiveListingsView === 'watchers' ? 'watchers' : 'traffic';
-  const baseListings = Array.isArray(store?.topListings) ? store.topListings : [];
-  const listings = activeView === 'watchers'
-    ? [...baseListings]
-        .filter((entry) => Number.isFinite(Number(entry?.watchCount)))
-        .sort((left, right) => (
-          Number(right?.watchCount || 0) - Number(left?.watchCount || 0)
-          || Number(right?.views || 0) - Number(left?.views || 0)
-        ))
-    : baseListings;
-  const hasWatchCounts = baseListings.some((entry) => Number.isFinite(Number(entry?.watchCount)));
+  const { activeView, listings, hasWatchCounts } = ebayTrafficStateFeature.selectTopListings(store, ebayTrafficActiveListingsView);
   if (!listings.length) {
     return `
       <div class="ebay-traffic-empty-state">
@@ -5849,8 +5768,7 @@ function renderEbayTrafficViewSources(store){
 }
 
 function ebayTrafficWidthClass(width){
-  const normalized = Math.max(0, Math.min(100, Math.round(Number(width) || 0) / 5) * 5);
-  return `ebay-traffic-bar-fill ebay-traffic-bar-fill--w-${normalized}`;
+  return ebayTrafficStateFeature.widthClass(width);
 }
 
 function renderEbayTrafficPromotionMix(store){
