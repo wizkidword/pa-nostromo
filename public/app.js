@@ -108,6 +108,8 @@ const nbaScoreStateFeature = window.MissionControlModules?.nbaScoreState;
 if (!nbaScoreStateFeature) throw new Error('NBA Scores state feature failed to load.');
 const gasPricesStateFeature = window.MissionControlModules?.gasPricesState;
 if (!gasPricesStateFeature) throw new Error('Gas Prices state feature failed to load.');
+const everydayCalculatorStateFeature = window.MissionControlModules?.everydayCalculatorState;
+if (!everydayCalculatorStateFeature) throw new Error('Everyday Calculator state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -276,19 +278,7 @@ function normalizeGasPricesState(input){
 }
 
 function normalizeEverydayCalculatorState(input){
-  const parsedTip = Number(input?.tipPercent);
-  const parsedTax = Number(input?.taxPercent);
-  return {
-    display: String(input?.display || '0').slice(0, 20),
-    firstOperand: Number.isFinite(Number(input?.firstOperand)) ? Number(input.firstOperand) : null,
-    operator: ['+', '-', '*', '/'].includes(input?.operator) ? input.operator : null,
-    waitingForSecondOperand: !!input?.waitingForSecondOperand,
-    lastOperator: ['+', '-', '*', '/'].includes(input?.lastOperator) ? input.lastOperator : null,
-    lastOperand: Number.isFinite(Number(input?.lastOperand)) ? Number(input.lastOperand) : null,
-    tipPercent: Number.isFinite(parsedTip) ? Math.min(1000, Math.max(0, parsedTip)) : 18,
-    taxPercent: Number.isFinite(parsedTax) ? Math.min(1000, Math.max(0, parsedTax)) : 8,
-    tipPanelOpen: input?.tipPanelOpen !== false,
-  };
+  return everydayCalculatorStateFeature.normalizeState(input);
 }
 
 function normalizeSystemMonitorState(input){
@@ -2433,142 +2423,10 @@ function renderGasPricesPod(){
   renderPodWithFallback('gas-prices', renderGasPricesView);
 }
 
-function applyCalculatorOperation(firstOperand, secondOperand, operator){
-  if (!Number.isFinite(firstOperand) || !Number.isFinite(secondOperand)) return null;
-  if (operator === '+') return firstOperand + secondOperand;
-  if (operator === '-') return firstOperand - secondOperand;
-  if (operator === '*') return firstOperand * secondOperand;
-  if (operator === '/') {
-    if (secondOperand === 0) return null;
-    return firstOperand / secondOperand;
-  }
-  return secondOperand;
-}
-
-function formatCalculatorNumber(value){
-  if (!Number.isFinite(value)) return 'Error';
-  const abs = Math.abs(value);
-  if (abs >= 1e12 || (abs > 0 && abs < 1e-6)) return value.toExponential(6).replace(/\.?0+e/, 'e');
-  const fixed = Number(value.toFixed(8));
-  return String(fixed);
-}
-
 function performEverydayCalculatorAction(type, payload = '', options = {}){
-  state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
-  const calc = state.everydayCalculator;
-  let didMutate = false;
-
-  if (type === 'digit') {
-    const digit = String(payload || '').replace(/[^0-9]/g, '').slice(0, 1);
-    if (!digit) return;
-    if (calc.waitingForSecondOperand) {
-      calc.display = digit;
-      calc.waitingForSecondOperand = false;
-    } else {
-      calc.display = calc.display === '0' ? digit : `${calc.display}${digit}`.slice(0, 20);
-    }
-    didMutate = true;
-  } else if (type === 'decimal') {
-    if (calc.waitingForSecondOperand) {
-      calc.display = '0.';
-      calc.waitingForSecondOperand = false;
-      didMutate = true;
-    } else if (!calc.display.includes('.')) {
-      calc.display = `${calc.display}.`;
-      didMutate = true;
-    }
-  } else if (type === 'clear') {
-    calc.display = '0';
-    calc.firstOperand = null;
-    calc.operator = null;
-    calc.waitingForSecondOperand = false;
-    calc.lastOperator = null;
-    calc.lastOperand = null;
-    didMutate = true;
-  } else if (type === 'backspace') {
-    if (calc.waitingForSecondOperand) {
-      calc.display = '0';
-      calc.waitingForSecondOperand = false;
-    } else {
-      calc.display = calc.display.length <= 1 ? '0' : calc.display.slice(0, -1);
-      if (calc.display === '-' || calc.display === '-0') calc.display = '0';
-    }
-    didMutate = true;
-  } else if (type === 'operator') {
-    const nextOperator = ['+', '-', '*', '/'].includes(payload) ? payload : null;
-    if (!nextOperator) return;
-    const inputValue = Number(calc.display);
-    if (calc.operator && !calc.waitingForSecondOperand && Number.isFinite(inputValue)) {
-      const nextValue = applyCalculatorOperation(Number(calc.firstOperand), inputValue, calc.operator);
-      if (nextValue == null) {
-        calc.display = 'Error';
-        calc.firstOperand = null;
-        calc.operator = null;
-        calc.waitingForSecondOperand = true;
-      } else {
-        calc.display = formatCalculatorNumber(nextValue);
-        calc.firstOperand = nextValue;
-      }
-    } else if (Number.isFinite(inputValue)) {
-      calc.firstOperand = inputValue;
-    }
-    calc.operator = nextOperator;
-    calc.waitingForSecondOperand = true;
-    didMutate = true;
-  } else if (type === 'equals') {
-    const inputValue = Number(calc.display);
-    if (calc.operator && Number.isFinite(calc.firstOperand) && Number.isFinite(inputValue)) {
-      const operand = calc.waitingForSecondOperand ? Number(calc.lastOperand ?? inputValue) : inputValue;
-      const nextValue = applyCalculatorOperation(Number(calc.firstOperand), operand, calc.operator);
-      if (nextValue == null) {
-        calc.display = 'Error';
-        calc.firstOperand = null;
-      } else {
-        calc.display = formatCalculatorNumber(nextValue);
-        calc.firstOperand = nextValue;
-      }
-      calc.lastOperator = calc.operator;
-      calc.lastOperand = operand;
-      calc.operator = null;
-      calc.waitingForSecondOperand = true;
-      didMutate = true;
-    } else if (calc.lastOperator && Number.isFinite(inputValue) && Number.isFinite(calc.lastOperand)) {
-      const nextValue = applyCalculatorOperation(inputValue, Number(calc.lastOperand), calc.lastOperator);
-      if (nextValue != null) {
-        calc.display = formatCalculatorNumber(nextValue);
-        calc.firstOperand = nextValue;
-        calc.waitingForSecondOperand = true;
-        didMutate = true;
-      }
-    }
-  } else if (type === 'toggle-tip-tax') {
-    calc.tipPanelOpen = !calc.tipPanelOpen;
-    didMutate = true;
-  } else if (type === 'tip-percent') {
-    const raw = String(payload ?? '').trim();
-    if (!raw) return;
-    const val = Number(raw);
-    if (Number.isFinite(val)) {
-      const nextVal = Math.min(1000, Math.max(0, val));
-      if (nextVal !== calc.tipPercent) {
-        calc.tipPercent = nextVal;
-        didMutate = true;
-      }
-    }
-  } else if (type === 'tax-percent') {
-    const raw = String(payload ?? '').trim();
-    if (!raw) return;
-    const val = Number(raw);
-    if (Number.isFinite(val)) {
-      const nextVal = Math.min(1000, Math.max(0, val));
-      if (nextVal !== calc.taxPercent) {
-        calc.taxPercent = nextVal;
-        didMutate = true;
-      }
-    }
-  }
-
-  if (!didMutate) return;
+  const result = everydayCalculatorStateFeature.applyAction(state.everydayCalculator, type, payload);
+  state.everydayCalculator = result.state;
+  if (!result.changed) return;
   save('everyday_calculator_updated', { pushShared: options.pushShared !== false });
   if (!options.skipRender) renderEverydayCalculatorPod();
 }
@@ -2577,18 +2435,11 @@ function updateEverydayCalculatorSummary(root, tipPercentRaw, taxPercentRaw){
   if (!root) return;
   state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
   const calc = state.everydayCalculator;
-
-  const subtotal = Number(calc.display);
-  const safeSubtotal = Number.isFinite(subtotal) ? subtotal : 0;
-
-  const tipParsed = Number(String(tipPercentRaw ?? '').trim());
-  const taxParsed = Number(String(taxPercentRaw ?? '').trim());
-  const tipPercent = Number.isFinite(tipParsed) ? Math.min(1000, Math.max(0, tipParsed)) : Number(calc.tipPercent || 0);
-  const taxPercent = Number.isFinite(taxParsed) ? Math.min(1000, Math.max(0, taxParsed)) : Number(calc.taxPercent || 0);
-
-  const tipAmount = safeSubtotal * (tipPercent / 100);
-  const taxAmount = safeSubtotal * (taxPercent / 100);
-  const finalTotal = safeSubtotal + tipAmount + taxAmount;
+  const { subtotal: safeSubtotal, tipAmount, taxAmount, finalTotal } = everydayCalculatorStateFeature.calculateSummary(
+    calc,
+    tipPercentRaw,
+    taxPercentRaw,
+  );
 
   const subtotalEl = root.querySelector('[data-calc-summary="subtotal"]');
   const taxEl = root.querySelector('[data-calc-summary="tax"]');
@@ -2617,11 +2468,11 @@ function renderEverydayCalculatorPod(){
 
   state.everydayCalculator = normalizeEverydayCalculatorState(state.everydayCalculator);
   const calc = state.everydayCalculator;
-  const subtotal = Number(calc.display);
-  const safeSubtotal = Number.isFinite(subtotal) ? subtotal : 0;
-  const tipAmount = safeSubtotal * (Number(calc.tipPercent || 0) / 100);
-  const taxAmount = safeSubtotal * (Number(calc.taxPercent || 0) / 100);
-  const finalTotal = safeSubtotal + tipAmount + taxAmount;
+  const { subtotal: safeSubtotal, tipAmount, taxAmount, finalTotal } = everydayCalculatorStateFeature.calculateSummary(
+    calc,
+    calc.tipPercent,
+    calc.taxPercent,
+  );
 
   el.innerHTML = `
     <div class="everyday-calculator" data-pod="everyday-calculator" tabindex="0" aria-label="Everyday Calculator">

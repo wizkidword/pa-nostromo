@@ -17,6 +17,7 @@ The browser application is being migrated incrementally from the legacy `public/
 | Social Followers analytics | `public/app/features/social-followers-analytics.js` | Follower-history normalization and calculations, range filtering, content-item normalization, and status summaries. |
 | NBA Scores state | `public/app/features/nba-score-state.js` | Saved view and favorite-team validation, team catalog, score-event normalization and tags, game ordering, view filtering, and featured-game selection. |
 | Gas Prices state | `public/app/features/gas-prices-state.js` | Saved price-state normalization, safe price formatting, and auto/manual grade-value normalization. |
+| Everyday Calculator state | `public/app/features/everyday-calculator-state.js` | Saved calculator settings, arithmetic action reducer, display formatting, and tip/tax summary calculations. |
 
 `public/app.js` remains the composition layer for the migration. It supplies the current application state, logging, persistence callback, and settings rerender callback to a feature controller rather than duplicating the feature's behavior.
 
@@ -30,4 +31,4 @@ The browser application is being migrated incrementally from the legacy `public/
 
 ## Next Candidates
 
-Unread Email, eBay Traffic, Social Followers, NBA Scores, and Gas Prices are now being decomposed incrementally: their state rules live in feature modules, while rendering and network actions remain in `public/app.js` for later packages. Other integrations remain in `public/app.js`; extract each feature one view at a time, then move related state helpers and selectors only after behavior is verified.
+Unread Email, eBay Traffic, Social Followers, NBA Scores, Gas Prices, and Everyday Calculator are now being decomposed incrementally: their state rules live in feature modules, while rendering and network actions remain in `public/app.js` for later packages. Other integrations remain in `public/app.js`; extract each feature one view at a time, then move related state helpers and selectors only after behavior is verified.
