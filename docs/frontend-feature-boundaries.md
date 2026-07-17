@@ -7,6 +7,7 @@ The browser application is being migrated incrementally from the legacy `public/
 | Feature | Module | Owns |
 | --- | --- | --- |
 | Theme | `public/app/features/theme.js` | Theme catalog, preference validation, resolved-theme calculation, body-class updates, theme-choice rendering, system-theme listener binding, and listener cleanup. |
+| Projects | `public/app/features/projects.js` | Project form validation and creation, project lookup selectors, directory rendering, safe outbound links, dialog events, and event-listener cleanup. |
 
 `public/app.js` remains the composition layer for the migration. It supplies the current application state, logging, persistence callback, and settings rerender callback to a feature controller rather than duplicating the feature's behavior.
 
@@ -20,4 +21,4 @@ The browser application is being migrated incrementally from the legacy `public/
 
 ## Next Candidates
 
-The project, task, notes, reminders, email, and integrations areas remain in `public/app.js`. Extract them one feature at a time, beginning with a self-contained view and its event handlers, then move related state helpers and selectors only after behavior is verified.
+The task, notes, reminders, email, and integrations areas remain in `public/app.js`. Extract them one feature at a time, beginning with a self-contained view and its event handlers, then move related state helpers and selectors only after behavior is verified.

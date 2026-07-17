@@ -97,6 +97,8 @@ const KANBAN_COLUMN_KEYS = new Set(COLUMNS.map(([key]) => key));
 const themeFeature = window.MissionControlModules?.theme;
 if (!themeFeature) throw new Error('Theme feature failed to load.');
 const normalizeThemePreference = themeFeature.normalizeThemePreference;
+const projectsFeature = window.MissionControlModules?.projects;
+if (!projectsFeature) throw new Error('Projects feature failed to load.');
 
 const DEFAULT_SETTINGS = {
   theme: 'dark',
@@ -854,6 +856,17 @@ const themeController = themeFeature.createThemeController({
     commitState('theme_changed');
   },
   onPreferenceUnchanged: () => renderSettings(),
+});
+
+const projectsController = projectsFeature.createProjectsController({
+  document,
+  getState: () => state,
+  id,
+  now,
+  escapeText,
+  escapeAttribute,
+  safeExternalUrl,
+  onProjectCreated: () => commitState('project_created'),
 });
 
 let cameraSnapshotTimer = null;
@@ -1725,13 +1738,12 @@ async function importStateSnapshotFromFile(file){
   broadcastCrossTabSync('state_imported', { reason: 'manual_import' });
 }
 
-function projectName(projectId){ return state.projects.find(p=>p.id===projectId)?.name || 'Unknown'; }
+function projectName(projectId){ return projectsController.projectName(projectId); }
 function missionControlProjectId(){
   return state.projects.find((p) => p.name === 'Mission Control Dashboard')?.id || '';
 }
 function projectDisplayName(projectId){
-  if (projectId === SHORTCUT_GLOBAL_PROJECT_ID) return 'Global (Mission Control)';
-  return projectName(projectId);
+  return projectsController.projectDisplayName(projectId, SHORTCUT_GLOBAL_PROJECT_ID);
 }
 
 function applyTheme(){
@@ -12148,26 +12160,7 @@ function renderAll(){
 }
 
 function renderProjects(){
-  const wrap = document.getElementById('projectDirectory');
-  if (!wrap) return;
-  wrap.innerHTML = state.projects.map((p) => {
-    const appHref = safeExternalUrl(p.appLink);
-    const repoHref = safeExternalUrl(p.repoLink);
-    return `
-    <div class="project-item">
-      <div class="project-item-head">
-        <strong>${escapeText(p.name)}</strong>
-        <span class="badge">${escapeText(p.status)}</span>
-      </div>
-      <p class="project-item-summary">${escapeText(p.summary)}</p>
-      <small>Updated: ${new Date(p.lastUpdated).toLocaleString()}</small>
-      <div class="project-item-actions">
-        ${appHref ? `<a class="btn ghost" href="${escapeAttribute(appHref)}" target="_blank" rel="noopener noreferrer">App</a>` : ''}
-        ${repoHref ? `<a class="btn ghost" href="${escapeAttribute(repoHref)}" target="_blank" rel="noopener noreferrer">Repo</a>` : ''}
-      </div>
-    </div>
-  `;
-  }).join('');
+  return projectsController.render();
 }
 
 function renderStats(){
@@ -12857,15 +12850,13 @@ function openShortcutDialog(shortcutId = ''){
 }
 
 // dialogs
-const projectDialog = document.getElementById('projectDialog');
 const taskDialog = document.getElementById('taskDialog');
 const editTaskDialog = document.getElementById('editTaskDialog');
 const editTaskForm = document.getElementById('editTaskForm');
 const shortcutDialog = document.getElementById('shortcutDialog');
 const shortcutForm = document.getElementById('shortcutForm');
-document.getElementById('addProjectBtn').onclick = ()=> projectDialog.showModal();
+projectsController.bind();
 document.getElementById('addTaskBtn').onclick = ()=> taskDialog.showModal();
-document.getElementById('projectCancelBtn')?.addEventListener('click', ()=> projectDialog.close());
 document.getElementById('editTaskCancelBtn')?.addEventListener('click', ()=> editTaskDialog?.close());
 document.getElementById('editTaskDeleteBtn')?.addEventListener('click', () => {
   const taskId = String(editTaskForm?.elements?.id?.value || '').trim();
@@ -13209,23 +13200,6 @@ shortcutForm?.addEventListener('submit', (e) => {
 
   shortcutDialog?.close();
   commitState('shortcut_form_submitted');
-});
-
-document.getElementById('projectForm').addEventListener('submit', e=>{
-  e.preventDefault();
-  const f = new FormData(e.target);
-  state.projects.push({
-    id: id(),
-    name: f.get('name'),
-    summary: f.get('summary'),
-    status: f.get('status'),
-    appLink: f.get('appLink') || '',
-    repoLink: f.get('repoLink') || '',
-    lastUpdated: now(),
-  });
-  projectDialog.close();
-  e.target.reset();
-  commitState('project_created');
 });
 
 document.getElementById('taskForm').addEventListener('submit', e=>{
