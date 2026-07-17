@@ -120,6 +120,8 @@ const cameraFeedStateFeature = window.MissionControlModules?.cameraFeedState;
 if (!cameraFeedStateFeature) throw new Error('Camera Feed state feature failed to load.');
 const liveStreamsStateFeature = window.MissionControlModules?.liveStreamsState;
 if (!liveStreamsStateFeature) throw new Error('Live Streams state feature failed to load.');
+const musicPlayerStateFeature = window.MissionControlModules?.musicPlayerState;
+if (!musicPlayerStateFeature) throw new Error('Music Player state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -961,29 +963,9 @@ function load(){
       avgBuyPrice: Number.isFinite(avgBuyPrice) && avgBuyPrice >= 0 ? avgBuyPrice : 0,
     };
   }
-  state.musicPlayer = {
-    sourceType: 'stream',
-    mode: 'stream',
-    currentStreamUrl: '',
-    streamMode: 'unknown',
-    favoriteStreamUrl: '',
-    currentTrackName: '',
-    volume: 0.7,
-    isPlaying: false,
-    ambientPresetId: 'rain',
-    ambientSourceIndex: 0,
-    sleepTimerMin: 0,
-    ...(state.musicPlayer || {}),
-  };
-  state.musicPlayer.mode = state.musicPlayer.mode === 'ambient' ? 'ambient' : 'stream';
-  state.musicPlayer.volume = Math.min(1, Math.max(0, Number(state.musicPlayer.volume ?? 0.7)));
-  state.musicPlayer.ambientPresetId = AMBIENT_PRESETS.some((preset) => preset.id === state.musicPlayer.ambientPresetId)
-    ? state.musicPlayer.ambientPresetId
-    : 'rain';
-  state.musicPlayer.ambientSourceIndex = Math.max(0, Math.floor(Number(state.musicPlayer.ambientSourceIndex || 0)));
-  state.musicPlayer.sleepTimerMin = [0, 15, 30, 60].includes(Number(state.musicPlayer.sleepTimerMin))
-    ? Number(state.musicPlayer.sleepTimerMin)
-    : 0;
+  state.musicPlayer = musicPlayerStateFeature.normalizeState(state.musicPlayer, {
+    ambientPresetIds: AMBIENT_PRESETS.map((preset) => preset.id),
+  });
 
   state.cameraFeed = cameraFeedStateFeature.normalizeState(state.cameraFeed);
 
@@ -7336,71 +7318,10 @@ function getMusicEls(){
 }
 
 function getMusicPresentation(statusText = ''){
-  const isAmbientMode = state.musicPlayer.mode === 'ambient';
-  const ambient = getAmbientSourceForPreset();
-  const currentLabel = isAmbientMode
-    ? ambient.preset.label
-    : (state.musicPlayer.currentTrackName || (state.musicPlayer.sourceType === 'local' ? 'Local audio file' : 'Stream source'));
-  const hasSource = isAmbientMode
-    ? !!ambient?.source?.url
-    : !!String(state.musicPlayer.currentStreamUrl || '').trim() || state.musicPlayer.sourceType === 'local';
-  const rawStatus = String(statusText || '').toLowerCase();
-
-  let tone = 'idle';
-  let signal = 'neutral';
-  let signalDetail = isAmbientMode ? 'ambient' : 'ready';
-  let badge = 'Ready';
-  let heroTitle = isAmbientMode ? `Ambient mode: ${ambient.preset.label}` : (hasSource ? currentLabel : 'Load a stream to start');
-  let fallbackMeta = isAmbientMode
-    ? `Set a mood, then press Play. Current source ${ambient.sourceIndex + 1} of ${ambient.preset.sources.length}.`
-    : hasSource
-      ? 'Playback source is loaded. Use the transport controls when you are ready.'
-      : 'Paste a stream URL, use a favorite, or drop in a local file.';
-
-  if (state.musicPlayer.isPlaying) {
-    tone = 'playing';
-    signal = 'fresh';
-    signalDetail = isAmbientMode ? 'ambient live' : (state.musicPlayer.sourceType === 'local' ? 'local playback' : 'playing');
-    badge = 'Playing';
-    heroTitle = currentLabel;
-    fallbackMeta = isAmbientMode
-      ? `Ambient playback is live with ${ambient.source.label}.`
-      : state.musicPlayer.sourceType === 'local'
-        ? `Local audio is playing: ${currentLabel}.`
-        : `Playback is active from ${state.musicPlayer.streamMode === 'youtube' ? 'YouTube' : state.musicPlayer.streamMode === 'embed' ? 'embedded player' : 'stream source'}.`;
-  } else if (hasSource) {
-    tone = 'loaded';
-    signal = 'degraded';
-    signalDetail = 'loaded';
-    badge = 'Loaded';
-  }
-
-  if (/failed|error|blocked|could not|unavailable/.test(rawStatus)) {
-    tone = 'error';
-    signal = 'error';
-    signalDetail = 'attention';
-    badge = 'Issue';
-    fallbackMeta = statusText || fallbackMeta;
-  }
-
-  return {
-    tone,
-    signal,
-    signalDetail,
-    badge,
-    heroTitle,
-    heroMeta: String(statusText || fallbackMeta || '').trim(),
-    sourceLine: state.musicPlayer.sourceType === 'local'
-      ? 'Local file'
-      : isAmbientMode
-        ? `Ambient · ${ambient.preset.label}`
-        : (state.musicPlayer.streamMode === 'youtube' ? 'YouTube stream' : state.musicPlayer.streamMode === 'embed' ? 'Embedded stream' : 'Stream URL'),
-    favoriteLine: state.musicPlayer.favoriteStreamUrl ? 'Favorite saved' : 'No favorite saved',
-    sleepLine: state.musicPlayer.sleepTimerMin ? `Sleep ${state.musicPlayer.sleepTimerMin}m` : 'Sleep off',
-    volumePercent: Math.round((Number(state.musicPlayer.volume || 0) || 0) * 100),
-    hasSource,
-    currentLabel,
-  };
+  return musicPlayerStateFeature.getPresentation(state.musicPlayer, {
+    statusText,
+    ambient: getAmbientSourceForPreset(),
+  });
 }
 
 function syncMusicUiStatus(statusText = ''){
