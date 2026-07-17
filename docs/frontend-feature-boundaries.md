@@ -12,6 +12,7 @@ The browser application is being migrated incrementally from the legacy `public/
 | Reminders | `public/app/features/reminders.js` | Reminder validation and creation, date selectors, calendar-agenda and today rendering, safe display, delete-with-undo wiring, and add-control lifecycle. |
 | Tasks | `public/app/features/tasks.js` | Kanban columns, task validation and actions, project selectors, board rendering, drag/drop movement, task-dialog lifecycle, and deterministic listener cleanup. |
 | Shortcuts | `public/app/features/shortcuts.js` | Safe URL validation, drag-and-drop capture, project assignment, shortcut dialog lifecycle, settings manager, and reversible actions. |
+| Unread Email state | `public/app/features/unread-email-state.js` | Account resolution, safe message identifiers, state pruning after refresh, and per-account blocked-sender validation and filtering. |
 
 `public/app.js` remains the composition layer for the migration. It supplies the current application state, logging, persistence callback, and settings rerender callback to a feature controller rather than duplicating the feature's behavior.
 
@@ -25,4 +26,4 @@ The browser application is being migrated incrementally from the legacy `public/
 
 ## Next Candidates
 
-The email and integrations areas remain in `public/app.js`. Extract them one feature at a time, beginning with a self-contained view and its event handlers, then move related state helpers and selectors only after behavior is verified.
+Unread Email is now being decomposed incrementally: state rules live in a feature module, while rendering and mail-server actions remain in `public/app.js` for a later package. Integrations remain in `public/app.js`; extract each feature one view at a time, then move related state helpers and selectors only after behavior is verified.

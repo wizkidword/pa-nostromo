@@ -98,6 +98,8 @@ const tasksFeature = window.MissionControlModules?.tasks;
 if (!tasksFeature) throw new Error('Tasks feature failed to load.');
 const shortcutsFeature = window.MissionControlModules?.shortcuts;
 if (!shortcutsFeature) throw new Error('Shortcuts feature failed to load.');
+const unreadEmailStateFeature = window.MissionControlModules?.unreadEmailState;
+if (!unreadEmailStateFeature) throw new Error('Unread email state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -439,20 +441,7 @@ function normalizeNbaState(input){
 }
 
 function normalizeUnreadEmailBlockedSenders(input){
-  const source = (input && typeof input === 'object') ? input : {};
-  const normalized = {};
-  for (const [accountIdRaw, senders] of Object.entries(source)) {
-    const accountId = String(accountIdRaw || '').trim();
-    if (!accountId) continue;
-    const list = Array.isArray(senders) ? senders : [];
-    const emails = [...new Set(
-      list
-        .map((value) => String(value || '').trim().toLowerCase())
-        .filter((value) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value))
-    )].slice(0, 200);
-    if (emails.length) normalized[accountId] = emails;
-  }
-  return normalized;
+  return unreadEmailStateFeature.normalizeBlockedSenders(input);
 }
 
 const REQUIRED_PROJECTS = [
@@ -6657,25 +6646,17 @@ function setUnreadEmailActiveAccountId(accountId){
 }
 
 function resolveUnreadEmailActiveAccount(accounts = []){
-  const list = Array.isArray(accounts) ? accounts : [];
-  if (!list.length) return null;
-  const current = list.find((account) => String(account?.id || '') === unreadEmailActiveAccountId);
-  if (current) return current;
-  const fallback = list.find((account) => String(account?.status || '') === 'fresh') || list[0];
-  setUnreadEmailActiveAccountId(String(fallback?.id || ''));
-  return fallback;
+  const resolved = unreadEmailStateFeature.resolveActiveAccount(accounts, unreadEmailActiveAccountId);
+  if (resolved.changed) setUnreadEmailActiveAccountId(resolved.accountId);
+  return resolved.account;
 }
 
 function unreadEmailDeleteKey(accountId, mailbox, uid){
-  return [String(accountId || '').trim(), String(mailbox || '').trim(), String(uid || '').trim()].join('::');
+  return unreadEmailStateFeature.deleteKey(accountId, mailbox, uid);
 }
 
 function createUnreadEmailMessageKey(accountId = '', mailbox = '', uid = ''){
-  const normalizedAccountId = String(accountId || '').trim();
-  const normalizedMailbox = String(mailbox || '').trim();
-  const normalizedUid = String(uid || '').trim();
-  if (!normalizedAccountId || !normalizedMailbox || !normalizedUid) return '';
-  return unreadEmailDeleteKey(normalizedAccountId, normalizedMailbox, normalizedUid);
+  return unreadEmailStateFeature.messageKey(accountId, mailbox, uid);
 }
 
 function setUnreadEmailSelection(itemKey, selected){
@@ -6708,44 +6689,18 @@ function clearUnreadEmailSelections(accountId = ''){
 }
 
 function pruneUnreadEmailSelectionsFromPayload(payload){
-  const validKeys = new Set();
-  const accounts = Array.isArray(payload?.accounts) ? payload.accounts : [];
-  accounts.forEach((account) => {
-    const accountId = String(account?.id || '').trim();
-    const entries = [
-      ...(Array.isArray(account?.entries) ? account.entries : []),
-      ...(Array.isArray(account?.recentEntries) ? account.recentEntries : []),
-      ...(Array.isArray(account?.sentEntries) ? account.sentEntries : []),
-    ];
-    entries.forEach((entry) => {
-      const mailbox = String(entry?.mailbox || '').trim();
-      const uid = Number(entry?.uid);
-      if (!accountId || !mailbox || !Number.isFinite(uid) || uid <= 0) return;
-      validKeys.add(unreadEmailDeleteKey(accountId, mailbox, uid));
-    });
-  });
-  unreadEmailSelectedKeys = new Set([...unreadEmailSelectedKeys].filter((key) => validKeys.has(key)));
+  unreadEmailSelectedKeys = unreadEmailStateFeature.pruneSet(
+    unreadEmailSelectedKeys,
+    unreadEmailStateFeature.payloadSelectionKeys(payload),
+  );
 }
 
 function pruneUnreadEmailExpandedStateFromPayload(payload){
-  const validKeys = new Set();
-  const accounts = Array.isArray(payload?.accounts) ? payload.accounts : [];
-  accounts.forEach((account) => {
-    const accountId = String(account?.id || '').trim();
-    const entries = [
-      ...(Array.isArray(account?.entries) ? account.entries : []),
-      ...(Array.isArray(account?.recentEntries) ? account.recentEntries : []),
-      ...(Array.isArray(account?.sentEntries) ? account.sentEntries : []),
-    ];
-    entries.forEach((entry) => {
-      const key = createUnreadEmailMessageKey(accountId, entry?.mailbox, entry?.uid);
-      if (key) validKeys.add(key);
-    });
-  });
-  unreadEmailExpandedKeys = new Set([...unreadEmailExpandedKeys].filter((key) => validKeys.has(key)));
-  unreadEmailExpandedLoadingKeys = new Set([...unreadEmailExpandedLoadingKeys].filter((key) => validKeys.has(key)));
-  unreadEmailExpandedBodies = new Map([...unreadEmailExpandedBodies.entries()].filter(([key]) => validKeys.has(key)));
-  unreadEmailExpandedErrors = new Map([...unreadEmailExpandedErrors.entries()].filter(([key]) => validKeys.has(key)));
+  const validKeys = unreadEmailStateFeature.payloadKeys(payload);
+  unreadEmailExpandedKeys = unreadEmailStateFeature.pruneSet(unreadEmailExpandedKeys, validKeys);
+  unreadEmailExpandedLoadingKeys = unreadEmailStateFeature.pruneSet(unreadEmailExpandedLoadingKeys, validKeys);
+  unreadEmailExpandedBodies = unreadEmailStateFeature.pruneMap(unreadEmailExpandedBodies, validKeys);
+  unreadEmailExpandedErrors = unreadEmailStateFeature.pruneMap(unreadEmailExpandedErrors, validKeys);
 }
 
 function getUnreadEmailBlockedSenderList(accountId = ''){
@@ -6776,16 +6731,7 @@ function setUnreadEmailBlockedSenderQuery(accountId = '', query = ''){
 }
 
 function filterUnreadEmailEntriesByBlockedSenders(entries = [], blockedSenders = new Set()){
-  const list = Array.isArray(entries) ? entries : [];
-  const blocked = blockedSenders instanceof Set ? blockedSenders : new Set();
-  const filtered = list.filter((entry) => {
-    const email = String(entry?.counterpartyEmail || '').trim().toLowerCase();
-    return !email || !blocked.has(email);
-  });
-  return {
-    entries: filtered,
-    hiddenCount: Math.max(0, list.length - filtered.length),
-  };
+  return unreadEmailStateFeature.filterBlockedEntries(entries, blockedSenders);
 }
 
 function blockUnreadEmailSender(accountId = '', senderEmail = ''){
