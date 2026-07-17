@@ -112,6 +112,8 @@ const everydayCalculatorStateFeature = window.MissionControlModules?.everydayCal
 if (!everydayCalculatorStateFeature) throw new Error('Everyday Calculator state feature failed to load.');
 const systemMonitorStateFeature = window.MissionControlModules?.systemMonitorState;
 if (!systemMonitorStateFeature) throw new Error('System Monitor state feature failed to load.');
+const speedTestStateFeature = window.MissionControlModules?.speedTestState;
+if (!speedTestStateFeature) throw new Error('Speed Test state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -288,37 +290,7 @@ function normalizeSystemMonitorState(input){
 }
 
 function normalizeSpeedTestState(input){
-  const rawHistory = Array.isArray(input?.history) ? input.history : [];
-  const history = rawHistory
-    .map((entry) => ({
-      id: String(entry?.id || id()),
-      ts: String(entry?.ts || now()),
-      pingMs: Number.isFinite(Number(entry?.pingMs)) ? Math.max(0, Number(entry.pingMs)) : null,
-      downloadMbps: Number.isFinite(Number(entry?.downloadMbps)) ? Math.max(0, Number(entry.downloadMbps)) : null,
-      uploadMbps: Number.isFinite(Number(entry?.uploadMbps)) ? Math.max(0, Number(entry.uploadMbps)) : null,
-      source: ['backend-speedtest', 'browser-estimate'].includes(entry?.source) ? entry.source : 'browser-estimate',
-      backendTool: String(entry?.backendTool || '').slice(0, 40),
-      note: String(entry?.note || '').slice(0, 220),
-    }))
-    .sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')))
-    .slice(0, 10);
-
-  const autoIntervalMin = Number(input?.autoIntervalMin);
-  const thresholdPing = Number(input?.warningThresholds?.pingMs);
-  const thresholdDown = Number(input?.warningThresholds?.downloadMbps);
-  const thresholdUp = Number(input?.warningThresholds?.uploadMbps);
-
-  return {
-    autoIntervalMin: [0, 15, 30, 60].includes(autoIntervalMin) ? autoIntervalMin : 0,
-    warningThresholds: {
-      pingMs: Number.isFinite(thresholdPing) ? Math.min(2000, Math.max(1, thresholdPing)) : 100,
-      downloadMbps: Number.isFinite(thresholdDown) ? Math.min(10000, Math.max(1, thresholdDown)) : 100,
-      uploadMbps: Number.isFinite(thresholdUp) ? Math.min(5000, Math.max(1, thresholdUp)) : 20,
-    },
-    history,
-    lastError: String(input?.lastError || '').slice(0, 220),
-    running: !!input?.running,
-  };
+  return speedTestStateFeature.normalizeState(input, { createId: id, getNow: now });
 }
 
 
@@ -10769,22 +10741,11 @@ function renderSystemResourceMonitorPod(){
 }
 
 function getLatestSpeedTestResult(){
-  return Array.isArray(state.speedTest?.history) && state.speedTest.history.length ? state.speedTest.history[0] : null;
+  return speedTestStateFeature.getLatestResult(state.speedTest?.history);
 }
 
 function speedTestHasWarning(result){
-  if (!result) return false;
-  const thresholds = state.speedTest?.warningThresholds || {};
-  const pingWarn = Number.isFinite(result.pingMs) && Number.isFinite(Number(thresholds.pingMs))
-    ? result.pingMs > Number(thresholds.pingMs)
-    : false;
-  const downWarn = Number.isFinite(result.downloadMbps) && Number.isFinite(Number(thresholds.downloadMbps))
-    ? result.downloadMbps < Number(thresholds.downloadMbps)
-    : false;
-  const upWarn = Number.isFinite(result.uploadMbps) && Number.isFinite(Number(thresholds.uploadMbps))
-    ? result.uploadMbps < Number(thresholds.uploadMbps)
-    : false;
-  return pingWarn || downWarn || upWarn;
+  return speedTestStateFeature.hasWarning(result, state.speedTest?.warningThresholds);
 }
 
 async function estimateBrowserSpeedFallback(note = ''){
@@ -10882,9 +10843,7 @@ async function runSpeedTest({ reason = 'manual' } = {}){
 }
 
 function formatSpeedMetric(value, unit){
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) return '—';
-  return `${n.toFixed(1)} ${unit}`;
+  return speedTestStateFeature.formatMetric(value, unit);
 }
 
 function renderSpeedTestPod(){
@@ -10949,7 +10908,7 @@ function renderSpeedTestPod(){
 
   document.getElementById('speedTestRunBtn')?.addEventListener('click', () => runSpeedTest({ reason: 'manual' }));
   document.getElementById('speedTestIntervalSelect')?.addEventListener('change', (e) => {
-    state.speedTest.autoIntervalMin = [0, 15, 30, 60].includes(Number(e.target.value)) ? Number(e.target.value) : 0;
+    state.speedTest.autoIntervalMin = speedTestStateFeature.normalizeInterval(e.target.value);
     save('speed_test_interval_changed');
     startSpeedTestAutoRun();
   });
@@ -10959,11 +10918,11 @@ function renderSpeedTestPod(){
       const ping = Number(document.getElementById('speedWarnPing')?.value || 100);
       const down = Number(document.getElementById('speedWarnDown')?.value || 100);
       const up = Number(document.getElementById('speedWarnUp')?.value || 20);
-      state.speedTest.warningThresholds = {
-        pingMs: Math.min(2000, Math.max(1, ping)),
-        downloadMbps: Math.min(10000, Math.max(1, down)),
-        uploadMbps: Math.min(5000, Math.max(1, up)),
-      };
+      state.speedTest.warningThresholds = speedTestStateFeature.normalizeThresholds({
+        pingMs: ping,
+        downloadMbps: down,
+        uploadMbps: up,
+      });
       save('speed_test_thresholds_updated');
       renderSpeedTestPod();
     });
