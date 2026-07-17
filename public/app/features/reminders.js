@@ -127,6 +127,7 @@
             collection: reminders,
             itemId: button.dataset.remDel,
             reason: 'calendar_reminder_deleted',
+            commit: commitState,
             buildUndoLabel: (reminder) => `Reminder deleted (${reminder?.time || 'Anytime'}). Undo?`,
           });
         });

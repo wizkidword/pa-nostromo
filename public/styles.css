@@ -105,6 +105,12 @@ body {
 h1, h2, h3 { margin: 0.2rem 0; }
 .sub { opacity: 0.75; margin: 0; }
 .app-version { display: inline-block; margin-top: 5px; font-size: 11px; color: var(--muted); }
+.persistence-status { display: inline-block; margin: 5px 0 0 8px; font-size: 11px; color: var(--muted); }
+.persistence-status[data-state="saving"] { color: var(--accent); }
+.persistence-status[data-state="saved"] { color: #6ad796; }
+.persistence-status[data-state="offline"],
+.persistence-status[data-state="conflict"] { color: #f0bd62; }
+.persistence-status[data-state="failed"] { color: #ff7474; }
 
 .topbar {
   display: flex;

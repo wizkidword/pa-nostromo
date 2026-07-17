@@ -87,6 +87,7 @@
         revision,
         state: currentState,
         result,
+        render: action.render !== false,
       };
       notify(record);
 

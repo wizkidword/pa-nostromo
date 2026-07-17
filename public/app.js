@@ -134,6 +134,9 @@ const calendarPodFeature = window.MissionControlModules?.calendarPod;
 if (!calendarPodFeature) throw new Error('Calendar pod failed to load.');
 const weatherPodFeature = window.MissionControlModules?.weatherPod;
 if (!weatherPodFeature) throw new Error('Weather pod failed to load.');
+const actionStoreFeature = window.MissionControlModules?.actionStore;
+if (!actionStoreFeature) throw new Error('Action store failed to load.');
+if (!window.MissionControlModules?.scheduler) throw new Error('Scheduler failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = settingsStateFeature.defaults;
@@ -573,6 +576,73 @@ const AMBIENT_PRESETS = [
 
 state = load();
 
+const dashboardActionStore = actionStoreFeature.createActionStore({
+  getState: () => state,
+  now,
+});
+
+function renderPersistenceStatus(status = {}){
+  const element = document.getElementById('persistenceStatus');
+  if (!element) return;
+  const stateName = String(status.state || 'saved');
+  const error = String(status.error || '').trim();
+  const lastSavedAt = String(status.lastSavedAt || '').trim();
+  const label = stateName === 'saving'
+    ? 'Saving…'
+    : stateName === 'offline'
+      ? 'Offline — retained locally'
+      : stateName === 'conflict'
+        ? 'Conflict — review changes'
+        : stateName === 'failed'
+          ? `Save failed${error ? ` — ${error.slice(0, 80)}` : ' — retry'}`
+          : lastSavedAt
+            ? `Saved at ${new Date(lastSavedAt).toLocaleTimeString()}`
+            : 'Saved locally';
+  element.dataset.state = stateName;
+  element.textContent = label;
+}
+
+dashboardActionStore.subscribeSaveStatus(renderPersistenceStatus);
+
+function dispatchFeatureAction(feature, action, { changedAreas = [feature], render = true, reason = action } = {}){
+  return dashboardActionStore.dispatch({
+    type: `${feature}/${action}`,
+    reason,
+    changedAreas,
+    render,
+    persist: false,
+  });
+}
+
+function persistFeatureAction(feature, action, options = {}){
+  const record = dispatchFeatureAction(feature, action, options);
+  if (record.applied) save(record.reason);
+  return record;
+}
+
+function commitProjectsFeature(reason = 'updated'){
+  return persistFeatureAction('projects', reason, {
+    changedAreas: ['projects', 'tasks', 'notes', 'shortcuts', 'stats'],
+  });
+}
+
+function commitTasksFeature(reason = 'updated'){
+  return persistFeatureAction('tasks', reason, {
+    changedAreas: ['tasks', 'stats'],
+  });
+}
+
+function commitNotesFeature(reason = 'updated', { render = true } = {}){
+  const changedAreas = reason === 'note_converted_to_task' ? ['notes', 'tasks', 'stats'] : ['notes', 'stats'];
+  return persistFeatureAction('notes', reason, { changedAreas, render });
+}
+
+function commitRemindersFeature(reason = 'updated'){
+  return persistFeatureAction('reminders', reason, {
+    changedAreas: ['reminders', 'calendar'],
+  });
+}
+
 const themeController = themeFeature.createThemeController({
   document,
   window,
@@ -593,7 +663,7 @@ const projectsController = projectsFeature.createProjectsController({
   escapeText,
   escapeAttribute,
   safeExternalUrl,
-  onProjectCreated: () => commitState('project_created'),
+  onProjectCreated: () => commitProjectsFeature('project_created'),
 });
 
 const notesController = notesFeature.createNotesController({
@@ -607,8 +677,8 @@ const notesController = notesFeature.createNotesController({
   renderFormattedText,
   markdownToolbarButtons,
   bindMarkdownToolbar,
-  save,
-  commitState,
+  save: () => commitNotesFeature('note_draft_updated', { render: false }),
+  commitState: (reason) => commitNotesFeature(reason),
   deleteWithUndo,
 });
 
@@ -623,7 +693,7 @@ const remindersController = remindersFeature.createRemindersController({
   escapeText,
   escapeHtml,
   escapeAttribute,
-  commitState,
+  commitState: (reason) => commitRemindersFeature(reason),
   deleteWithUndo,
 });
 
@@ -639,7 +709,7 @@ const tasksController = tasksFeature.createTasksController({
   markdownToolbarButtons,
   bindMarkdownToolbar,
   projectName: (projectId) => projectsController.projectName(projectId),
-  commitState,
+  commitState: (reason) => commitTasksFeature(reason),
   deleteWithUndo,
   logChange,
   confirm: window.confirm.bind(window),
@@ -1123,6 +1193,7 @@ async function writeStateToSharedApi(payload, { expectedRevision = extractStateR
 async function pushStateToSharedApi(reason = 'unspecified'){
   if (!sharedHydrationResolved) {
     sharedPushPendingUntilHydration = true;
+    dashboardActionStore.markPersistence('saving');
     return false;
   }
 
@@ -1132,9 +1203,17 @@ async function pushStateToSharedApi(reason = 'unspecified'){
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     clearSharedStateConflict();
     broadcastCrossTabSync('state_changed', { reason });
+    dashboardActionStore.markPersistence('saved', { lastSavedAt: now(), error: '' });
     return true;
   } catch (error) {
-    if (error?.code === 'state_revision_conflict') showSharedStateConflict(error);
+    if (error?.code === 'state_revision_conflict') {
+      dashboardActionStore.markPersistence('conflict', { error: '' });
+      showSharedStateConflict(error);
+    } else if (navigator.onLine === false) {
+      dashboardActionStore.markPersistence('offline', { error: '' });
+    } else {
+      dashboardActionStore.markPersistence('failed', { error: String(error?.message || error) });
+    }
     // Local fallback only
     return false;
   }
@@ -1147,8 +1226,21 @@ function flushPendingSharedPush(reason = 'hydration_resolved'){
 }
 
 function save(reason = 'unspecified', { pushShared = true } = {}){
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  if (!pushShared) return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (error) {
+    dashboardActionStore.markPersistence('failed', { error: String(error?.message || error) });
+    return false;
+  }
+  if (!pushShared) {
+    dashboardActionStore.markPersistence('saved', { lastSavedAt: now(), error: '' });
+    return true;
+  }
+  if (navigator.onLine === false) {
+    dashboardActionStore.markPersistence('offline', { error: '' });
+    return false;
+  }
+  dashboardActionStore.markPersistence('saving', { error: '' });
   if (sharedSaveTimer) clearTimeout(sharedSaveTimer);
   sharedSaveTimer = setTimeout(() => {
     if (!sharedHydrationResolved) {
@@ -1157,6 +1249,7 @@ function save(reason = 'unspecified', { pushShared = true } = {}){
     }
     pushStateToSharedApi(reason);
   }, 300);
+  return true;
 }
 
 function commitState(reason = 'state_commit', { render = true } = {}){
@@ -1193,7 +1286,7 @@ function clearUndoPrompt(status = 'cleared'){
   if (bar) bar.hidden = true;
 }
 
-function offerUndoAction({ label, undoFn, actionId = '' }){
+function offerUndoAction({ label, undoFn, actionId = '', onUndoCommitted = null }){
   const bar = document.getElementById('stateSafetyUndoBar');
   const text = document.getElementById('stateSafetyUndoText');
   const btn = document.getElementById('stateSafetyUndoBtn');
@@ -1206,6 +1299,7 @@ function offerUndoAction({ label, undoFn, actionId = '' }){
     status: 'offered',
     expiresAt: Date.now() + UNDO_WINDOW_MS,
     timer: null,
+    onUndoCommitted,
   };
 
   text.textContent = label;
@@ -1218,9 +1312,11 @@ function offerUndoAction({ label, undoFn, actionId = '' }){
       clearUndoPrompt('expired');
       return;
     }
+    const onUndoCommitted = undoState.onUndoCommitted;
     clearUndoPrompt('undone');
     undoFn();
-    commitState('destructive_action_undo_restored');
+    if (typeof onUndoCommitted === 'function') onUndoCommitted('destructive_action_undo_restored');
+    else commitState('destructive_action_undo_restored');
     broadcastCrossTabSync('undo_restored', { actionId: resolvedActionId, reason: 'destructive_action_undo_restored' });
   };
 
@@ -1232,14 +1328,14 @@ function offerUndoAction({ label, undoFn, actionId = '' }){
   }, UNDO_WINDOW_MS);
 }
 
-function deleteWithUndo({ collection, itemId, reason, buildUndoLabel }){
+function deleteWithUndo({ collection, itemId, reason, buildUndoLabel, commit = commitState }){
   const list = collection();
   if (!Array.isArray(list)) return false;
   const idx = list.findIndex((x) => x?.id === itemId);
   if (idx < 0) return false;
 
   const [removed] = list.splice(idx, 1);
-  commitState(reason);
+  commit(reason);
 
   const actionId = `delete:${String(removed?.id || itemId)}:${Date.now()}`;
   offerUndoAction({
@@ -1251,6 +1347,7 @@ function deleteWithUndo({ collection, itemId, reason, buildUndoLabel }){
       const exists = next.some((x) => x?.id === removed.id);
       if (!exists) next.splice(Math.min(idx, next.length), 0, removed);
     },
+    onUndoCommitted: commit,
   });
   broadcastCrossTabSync('destructive_action_deleted', { actionId, reason });
 
@@ -10668,6 +10765,28 @@ function renderAll(){
   syncUtilityPodLifecycle();
   populateProjectSelect();
 }
+
+dashboardActionStore.subscribeAll((record) => {
+  if (record.render === false) return;
+  const changed = new Set(record.changedAreas);
+  let notesRendered = false;
+  if (changed.has('projects')) {
+    renderProjects();
+    populateProjectSelect();
+    renderNotes();
+    notesRendered = true;
+    renderShortcutsPod();
+    renderShortcutsSettings();
+  }
+  if (changed.has('tasks')) renderBoard();
+  if (changed.has('notes') && !notesRendered) renderNotes();
+  if (changed.has('reminders') || changed.has('calendar')) {
+    renderPodWithFallback('calendar', renderCalendar);
+    renderCalendarRemindersPanel();
+    renderTodayReminders();
+  }
+  if (changed.has('tasks') || changed.has('notes') || changed.has('projects')) renderStats();
+});
 
 function renderProjects(){
   return projectsController.render();

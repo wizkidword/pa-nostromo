@@ -164,6 +164,7 @@
               collection: () => state().notes,
               itemId: card?.dataset?.noteId,
               reason: 'note_deleted',
+              commit: commitState,
               buildUndoLabel: (note) => `Note deleted (${(note?.title || 'Quick Note').slice(0, 30)}). Undo?`,
             });
           });

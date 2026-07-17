@@ -230,6 +230,7 @@
           collection: () => state().tasks,
           itemId: taskId,
           reason: 'task_deleted',
+          commit: commitState,
           buildUndoLabel: () => `Task deleted (${task.title.slice(0, 30)}). Undo?`,
         });
         if (deleted) editTaskDialog?.close?.();
