@@ -15,6 +15,7 @@ const { safeFetch } = require('./lib/safe-fetch.js');
 const { createWorkCoordinator } = require('./lib/work-coordinator.js');
 const { StateSchemaError } = require('./lib/state-schema.js');
 const { StateStore, StateStoreError } = require('./lib/state-store.js');
+const { createRequestId, createPublicErrorPayload, safeErrorCode, logDiagnostic } = require('./lib/observability.js');
 
 const ROOT = __dirname;
 const PUBLIC_ROOT = path.join(ROOT, 'public');
@@ -1839,7 +1840,7 @@ function loadPersistedEbayTrafficCache() {
     if (!parsed.ok || !parsed.value || typeof parsed.value !== 'object') return null;
     return Array.isArray(parsed.value.stores) ? parsed.value : null;
   } catch (error) {
-    console.warn('Unable to read persisted eBay traffic cache:', error?.message || error);
+    logDiagnostic('ebay_traffic_cache_read_failed', { error });
     return null;
   }
 }
@@ -1850,7 +1851,7 @@ function persistEbayTrafficCachePayload(payload) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.writeFileSync(EBAY_TRAFFIC_CACHE_PATH, JSON.stringify(payload, null, 2), 'utf8');
   } catch (error) {
-    console.warn('Unable to persist eBay traffic cache:', error?.message || error);
+    logDiagnostic('ebay_traffic_cache_write_failed', { error });
   }
 }
 
@@ -5498,7 +5499,8 @@ async function handleApiHomeDevicePing(req, res) {
   const out = await runExecFile('ping', buildPingArgs(host), HOME_DEVICE_TIMEOUT_MS);
   const latencyMs = Date.now() - start;
   if (out.ok) return sendJson(res, 200, { ok: true, reachable: true, host, latencyMs, message: 'Host reachable.' });
-  return sendJson(res, 200, { ok: true, reachable: false, host, latencyMs: null, message: out.stderr || out.error?.message || 'Ping failed.' });
+  logDiagnostic('home_device_ping_failed', { host, error: out.error, exitCode: out.code ?? out.exitCode });
+  return sendJson(res, 200, { ok: true, reachable: false, host, latencyMs: null, message: 'Host did not respond.' });
 }
 
 async function handleApiHomeDeviceWake(req, res) {
@@ -5602,10 +5604,21 @@ async function ensureDataDir() {
 }
 
 function sendJson(res, status, obj) {
-  const body = JSON.stringify(obj);
+  const requestId = String(res.__nostromoRequestId || createRequestId());
+  const isError = Number(status) >= 400 || obj?.ok === false;
+  const payload = isError ? createPublicErrorPayload(status, obj, requestId) : obj;
+  if (Number(status) >= 500) {
+    logDiagnostic('api_error_response', {
+      requestId,
+      status: Number(status),
+      errorCode: safeErrorCode(obj?.error),
+    });
+  }
+  const body = JSON.stringify(payload);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
+    'X-Request-ID': requestId,
   });
   res.end(body);
 }
@@ -7177,6 +7190,9 @@ async function dispatchApiRoute(req, res, pathname) {
 }
 
 const server = http.createServer(async (req, res) => {
+  const requestId = createRequestId(req.headers);
+  res.__nostromoRequestId = requestId;
+  res.setHeader('X-Request-ID', requestId);
   applySecurityHeaders(res);
   try {
     const hostResult = validateHostHeader(req.headers?.host, HOST_POLICY);
@@ -7189,8 +7205,8 @@ const server = http.createServer(async (req, res) => {
     const resolved = resolveRoute(ROUTE_MANIFEST, pathname, req.method || 'GET');
     if (!resolved.route) {
       if (resolved.methods.length) {
-        res.writeHead(405, { Allow: resolved.methods.join(', '), 'Cache-Control': 'no-store' });
-        return res.end();
+        res.setHeader('Allow', resolved.methods.join(', '));
+        return sendJson(res, 405, { ok: false, error: 'method_not_allowed' });
       }
       return sendJson(res, 404, { ok: false, error: 'not_found' });
     }
@@ -7200,6 +7216,12 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     if (res.writableEnded) return;
     if (isPayloadTooLargeError(err)) return sendPayloadTooLarge(res, err);
+    logDiagnostic('request_handler_failed', {
+      requestId,
+      method: req.method,
+      pathname: (() => { try { return new URL(req.url || '/', 'http://localhost').pathname; } catch { return '/'; } })(),
+      error: err,
+    });
     return sendJson(res, 500, { ok: false, error: 'internal_error', message: String(err?.message || err) });
   }
 });
@@ -7222,19 +7244,19 @@ if (require.main === module) {
     }
     if (!DISABLE_BACKGROUND_SERVICES) {
       initFacebookFollowersService().catch((err) => {
-        console.error('Facebook followers service init failed:', err?.message || err);
+        logDiagnostic('facebook_followers_service_init_failed', { error: err });
       });
       initFacebookGroupMembersService().catch((err) => {
-        console.error('Facebook group members service init failed:', err?.message || err);
+        logDiagnostic('facebook_group_members_service_init_failed', { error: err });
       });
       initInstagramFollowersService().catch((err) => {
-        console.error('Instagram followers service init failed:', err?.message || err);
+        logDiagnostic('instagram_followers_service_init_failed', { error: err });
       });
       initTikTokFollowersService().catch((err) => {
-        console.error('TikTok followers service init failed:', err?.message || err);
+        logDiagnostic('tiktok_followers_service_init_failed', { error: err });
       });
       initYoutubeSubscribersService().catch((err) => {
-        console.error('YouTube subscribers service init failed:', err?.message || err);
+        logDiagnostic('youtube_subscribers_service_init_failed', { error: err });
       });
     }
     server.listen(PORT, HOST, () => {
@@ -7249,13 +7271,13 @@ if (require.main === module) {
       console.log(`Unread email pod API: enabled (${EMAIL_UNREAD_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; provider ${EMAIL_UNREAD_PROVIDER}; accounts ${(() => { try { return getEmailUnreadAccountConfigs().length; } catch { return 0; } })()})`);
       console.log(`eBay traffic pod API: enabled (${EBAY_TRAFFIC_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; env ${EBAY_TRAFFIC_ENVIRONMENT}; stores ${(() => { try { return getEbayTrafficStoreConfigs().length; } catch { return 0; } })()}; range ${EBAY_TRAFFIC_RANGE_DAYS}d)`);
       console.log(`Facebook followers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${META_GRAPH_POLL_INTERVAL_MS}ms)`);
-      console.log(`Facebook group members API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${FACEBOOK_GROUP_POLL_INTERVAL_MS}ms; url ${FACEBOOK_GROUP_URL})`);
+      console.log(`Facebook group members API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${FACEBOOK_GROUP_POLL_INTERVAL_MS}ms; group URL ${FACEBOOK_GROUP_URL ? 'configured' : 'not configured'})`);
       console.log(`Instagram followers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${INSTAGRAM_POLL_INTERVAL_MS}ms; provider ${INSTAGRAM_PROVIDER})`);
       console.log(`TikTok followers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${TIKTOK_POLL_INTERVAL_MS}ms; provider public_scrape_estimate)`);
       console.log(`YouTube subscribers pod API: enabled (${META_GRAPH_ALLOW_REMOTE ? 'remote enabled' : 'local only'}; poll ${YOUTUBE_POLL_INTERVAL_MS}ms; provider public_scrape_estimate)`);
     });
   })().catch((err) => {
-    console.error('Private runtime storage setup failed; server did not start:', err?.message || err);
+    logDiagnostic('runtime_storage_setup_failed', { error: err });
     process.exitCode = 1;
   });
 }
