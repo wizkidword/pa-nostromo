@@ -20,8 +20,9 @@ const { StateStore, StateStoreError } = require('./lib/state-store.js');
 const { createStateApiHandler } = require('./server/routes/state.js');
 const { createHomeDevicesApiHandlers } = require('./server/routes/devices.js');
 const { createRssApiHandler } = require('./server/routes/rss.js');
-const { createSystemResourcesApiHandler } = require('./server/routes/system.js');
+const { createSystemResourcesApiHandler, createSystemSpeedTestApiHandler } = require('./server/routes/system.js');
 const { createSystemResourcesService } = require('./server/services/system-resources.js');
+const { createSpeedTestService } = require('./server/services/speed-test.js');
 const { createRequestId, createPublicErrorPayload, safeErrorCode, createBoundedJsonlLogWriter, configureDiagnosticLogSink, logDiagnostic } = require('./lib/observability.js');
 const { withIntegrationEnvelope } = require('./lib/integration-envelope.js');
 
@@ -6983,51 +6984,18 @@ async function runBackendSpeedTest(signal) {
   };
 }
 
-async function handleApiSpeedTest(req, res) {
-  if (req.method !== 'GET') {
-    return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/speed-test.' });
-  }
+const runSpeedTest = createSpeedTestService({
+  workCoordinator: WORK_COORDINATOR,
+  timeoutMs: SPEED_TEST_TIMEOUT_MS,
+  cooldownMs: MANUAL_REFRESH_COOLDOWN_MS,
+  runBackendSpeedTest,
+});
 
-  const clientRequest = createClientAbortSignal(req, res);
-  try {
-    const run = await WORK_COORDINATOR.run({
-      key: 'speed-test',
-      integration: 'speed-test',
-      host: 'local',
-      signal: clientRequest.signal,
-      timeoutMs: SPEED_TEST_TIMEOUT_MS,
-      manual: true,
-      cooldownMs: MANUAL_REFRESH_COOLDOWN_MS,
-    }, ({ signal }) => runBackendSpeedTest(signal));
-    if (!run.ok) {
-      return sendJson(res, 200, {
-        ok: true,
-        mode: 'fallback_required',
-        sampledAt: new Date().toISOString(),
-        reason: run.reason,
-        message: run.message,
-        checkedTools: run.checked,
-      });
-    }
-
-    return sendJson(res, 200, {
-      ok: true,
-      mode: 'backend',
-      sampledAt: new Date().toISOString(),
-      backendTool: run.tool,
-      checkedTools: run.checked,
-      metrics: run.metrics,
-    });
-  } catch (err) {
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'speed_test_failed',
-      message: String(err?.message || err || 'Speed test failed').slice(0, 180),
-    });
-  } finally {
-    clientRequest.dispose();
-  }
-}
+const handleApiSpeedTest = createSystemSpeedTestApiHandler({
+  sendJson,
+  createClientAbortSignal,
+  runSpeedTest,
+});
 
 const US_STATE_ALIASES = {
   alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA', colorado: 'CO', connecticut: 'CT', delaware: 'DE',
