@@ -303,6 +303,66 @@ body.theme-light .social-icon-link img {
   align-content: start;
 }
 
+.integration-health-list {
+  display: grid;
+  gap: 10px;
+}
+
+.integration-health-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.integration-health-card-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.integration-health-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  color: var(--muted);
+  font-size: .82rem;
+}
+
+.integration-health-meta-grid span {
+  display: grid;
+  gap: 2px;
+}
+
+.integration-health-meta-grid strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.integration-health-actions {
+  margin-top: -2px;
+}
+
+.integration-health-diagnostics summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.integration-health-diagnostics > div {
+  margin-top: 8px;
+}
+
+.integration-health-badge-healthy { background: color-mix(in srgb, #2dbe77 24%, var(--surface-soft)); color: color-mix(in srgb, #2dbe77 78%, var(--text)); }
+.integration-health-badge-refreshing { background: color-mix(in srgb, var(--accent) 24%, var(--surface-soft)); color: var(--accent); }
+.integration-health-badge-stale,
+.integration-health-badge-rate_limited { background: color-mix(in srgb, #f0ab3d 24%, var(--surface-soft)); color: color-mix(in srgb, #f0ab3d 82%, var(--text)); }
+.integration-health-badge-error,
+.integration-health-badge-not_configured { background: color-mix(in srgb, #e05c5c 22%, var(--surface-soft)); color: color-mix(in srgb, #e05c5c 80%, var(--text)); }
+.integration-health-badge-disabled { background: color-mix(in srgb, var(--muted) 24%, var(--surface-soft)); color: var(--muted); }
+
 .theme-choice-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

@@ -44,6 +44,7 @@
         <button type="button" class="settings-nav-btn is-active" data-settings-section-btn="general">General</button>
         <button type="button" class="settings-nav-btn" data-settings-section-btn="pods-layout">Pods &amp; Layout</button>
         <button type="button" class="settings-nav-btn" data-settings-section-btn="data-feeds">Data &amp; Feeds</button>
+        <button type="button" class="settings-nav-btn" data-settings-section-btn="integration-health">Integration Health</button>
         <button type="button" class="settings-nav-btn" data-settings-section-btn="shortcuts">Shortcuts</button>
         <button type="button" class="settings-nav-btn" data-settings-section-btn="system-safety">System &amp; Safety</button>
         <button type="button" class="settings-nav-btn" data-settings-section-btn="patch-notes">Patch Notes</button>
@@ -114,6 +115,12 @@
               <button id="scanHomeDevicesBtn" class="btn ghost">Scan Reachability</button>
             </div>
             <div id="settingsHomeDevicesList" class="change-log-list"></div>
+          </section>
+
+          <section class="settings-section" data-settings-section="integration-health" hidden>
+            <h3 class="m0">Integration Health</h3>
+            <p id="integrationHealthSummary" class="note-meta" role="status" aria-live="polite"></p>
+            <div id="integrationHealthList" class="integration-health-list" aria-label="Integration health status"></div>
           </section>
 
           <section class="settings-section" data-settings-section="shortcuts" hidden>
@@ -552,8 +559,9 @@
   <script src="app/features/home-device-state.js"></script>
   <script src="app/features/camera-feed-state.js"></script>
   <script src="app/features/live-streams-state.js"></script>
-  <script src="app/features/music-player-state.js"></script>
-  <script src="app/features/rss-state.js"></script>
+    <script src="app/features/music-player-state.js"></script>
+    <script src="app/features/rss-state.js"></script>
+    <script src="app/features/integration-health.js"></script>
   <script src="app/pods/date-time.pod.js"></script>
   <script src="app/pods/calendar.pod.js"></script>
   <script src="app/pods/weather.pod.js"></script>

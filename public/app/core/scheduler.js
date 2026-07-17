@@ -17,11 +17,16 @@
     }
 
     function snapshot(runtime) {
+      const definitionEnabled = runtime.definition.enabled?.() !== false;
       return {
         id: runtime.id,
-        enabled: runtime.enabled,
+        enabled: runtime.enabled && definitionEnabled,
+        scheduled: runtime.enabled,
         inFlight: !!runtime.inFlight,
         failures: runtime.failures,
+        lastAttemptAt: runtime.lastAttemptAt,
+        lastManualRefreshAt: runtime.lastManualRefreshAt,
+        manualCooldownMs: runtime.manualCooldownMs,
         nextRefreshAt: runtime.nextRefreshAt,
         lastSuccessAt: runtime.lastSuccessAt,
         lastError: runtime.lastError,
@@ -74,10 +79,16 @@
         return Promise.resolve({ ok: false, reason: blockedReason, ...snapshot(runtime) });
       }
       if (runtime.inFlight) return runtime.inFlight;
+      const nowAt = now();
+      if (options.manual && runtime.manualCooldownMs && runtime.lastManualRefreshAt && nowAt - runtime.lastManualRefreshAt < runtime.manualCooldownMs) {
+        return Promise.resolve({ ok: false, reason: 'cooldown', retryAt: runtime.lastManualRefreshAt + runtime.manualCooldownMs, ...snapshot(runtime) });
+      }
 
       clearScheduled(runtime);
       const controller = new AbortController();
       runtime.controller = controller;
+      runtime.lastAttemptAt = nowAt;
+      if (options.manual) runtime.lastManualRefreshAt = nowAt;
       runtime.inFlight = Promise.resolve()
         .then(() => runtime.definition.run({ signal: controller.signal, manual: !!options.manual, reason: options.reason || 'scheduled' }))
         .then((value) => {
@@ -111,6 +122,9 @@
         controller: null,
         inFlight: null,
         failures: 0,
+        lastAttemptAt: 0,
+        lastManualRefreshAt: 0,
+        manualCooldownMs: Math.max(0, Number(definition.manualCooldownMs || 0)),
         nextRefreshAt: 0,
         lastSuccessAt: 0,
         lastError: '',

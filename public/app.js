@@ -128,6 +128,8 @@ const settingsStateFeature = window.MissionControlModules?.settingsState;
 if (!settingsStateFeature) throw new Error('Settings state feature failed to load.');
 const cryptoStateFeature = window.MissionControlModules?.cryptoState;
 if (!cryptoStateFeature) throw new Error('Crypto state feature failed to load.');
+const integrationHealthFeature = window.MissionControlModules?.integrationHealth;
+if (!integrationHealthFeature) throw new Error('Integration Health feature failed to load.');
 const dateTimePodFeature = window.MissionControlModules?.dateTimePod;
 if (!dateTimePodFeature) throw new Error('Date & Time pod failed to load.');
 const calendarPodFeature = window.MissionControlModules?.calendarPod;
@@ -600,7 +602,71 @@ const sharedPersistenceQueue = persistenceFeature.createCoalescedPersistence({
   },
   onError: (error) => dashboardActionStore.markPersistence('failed', { error: String(error?.message || error) }),
 });
-const SCHEDULED_POD_IDS = new Set(['date-time', 'weather', 'nba-scores', 'crypto-tracker', 'rss-feed', 'unread-email', MERGED_SOCIAL_FOLLOWERS_POD_ID, 'ebay-traffic', 'system-resource-monitor', 'speed-test']);
+const SCHEDULED_POD_IDS = new Set(['date-time', 'weather', 'nba-scores', 'crypto-tracker', 'rss-feed', 'unread-email', MERGED_SOCIAL_FOLLOWERS_POD_ID, 'ebay-traffic', 'gas-prices', 'system-resource-monitor', 'speed-test']);
+const integrationHealthSignals = new Map();
+const INTEGRATION_HEALTH_DEFINITIONS = Object.freeze([
+  { id: 'weather', name: 'Weather', schedulerId: 'weather', signalId: 'weather', settingsSection: 'general', recoveryAction: 'Review the local weather location or network connection, then refresh.' },
+  { id: 'nba-scores', name: 'NBA Scores', schedulerId: 'nba-scores', signalId: 'nba-scores', recoveryAction: 'Wait for the scoreboard source to recover, then refresh.' },
+  { id: 'crypto', name: 'Crypto Markets', schedulerId: 'crypto-tracker', signalId: 'crypto', recoveryAction: 'Wait for the active market provider to recover, then refresh.' },
+  { id: 'rss', name: 'RSS Feeds', schedulerId: 'rss-feed', signalId: 'rss', settingsSection: 'data-feeds', recoveryAction: 'Add or correct a feed in Data & Feeds, then refresh.' },
+  { id: 'unread-email', name: 'Unread Email', schedulerId: 'unread-email', signalId: 'unread-email', recoveryAction: 'Renew the local mail credentials, then refresh.' },
+  { id: 'social-followers', name: 'Social Audience', schedulerId: MERGED_SOCIAL_FOLLOWERS_POD_ID, signalId: MERGED_SOCIAL_FOLLOWERS_POD_ID, recoveryAction: 'Review the local social-provider setup, then refresh.' },
+  { id: 'ebay-traffic', name: 'eBay Traffic', schedulerId: 'ebay-traffic', signalId: 'ebay-traffic', recoveryAction: 'Renew the local eBay credentials, then refresh.' },
+  { id: 'gas-prices', name: 'Gas Prices', schedulerId: 'gas-prices', signalId: 'gas-prices', settingsSection: 'data-feeds', recoveryAction: 'Provide a ZIP code or City, ST in the Gas Prices pod, then refresh.' },
+]);
+
+function recordIntegrationHealthSignal(podId, status, detail = ''){
+  integrationHealthSignals.set(String(podId || ''), {
+    status: String(status || 'neutral').toLowerCase(),
+    detail: String(detail || '').slice(0, 180),
+    observedAt: Date.now(),
+  });
+}
+
+function latestTimestamp(values){
+  const timestamps = values.map((value) => Date.parse(String(value || ''))).filter(Number.isFinite);
+  return timestamps.length ? Math.max(...timestamps) : 0;
+}
+
+function getIntegrationHealthConfiguration(definition){
+  const idValue = String(definition?.id || '');
+  const base = {
+    settingsSection: String(definition?.settingsSection || ''),
+    recoveryAction: String(definition?.recoveryAction || ''),
+  };
+  if (idValue === 'weather') return { ...base, configured: !!LOCAL_ZIP, sourceUpdatedAt: weatherSnapshotCache.fetchedAt };
+  if (idValue === 'nba-scores') return { ...base, configured: true, sourceUpdatedAt: state.nba?.fetchedAt || state.nba?.updatedAt || '' };
+  if (idValue === 'crypto') return { ...base, configured: true, sourceUpdatedAt: cryptoLastSuccessAt || '' };
+  if (idValue === 'rss') return { ...base, configured: Array.isArray(state.rss?.feeds) && state.rss.feeds.length > 0, sourceUpdatedAt: state.rss?.lastUpdatedAt || '' };
+  if (idValue === 'unread-email') return {
+    ...base,
+    configured: unreadEmailLastPayload ? !unreadEmailLastPayload.setupRequired : false,
+    sourceUpdatedAt: unreadEmailLastUpdatedAt || '',
+  };
+  if (idValue === 'social-followers') {
+    const sources = [state.facebookFollowers, state.facebookGroupMembers, state.instagramFollowers, state.tiktokFollowers, state.youtubeSubscribers];
+    return {
+      ...base,
+      configured: sources.some((source) => source?.setupRequired) ? false : sources.some((source) => source?.fetchedAt),
+      sourceUpdatedAt: latestTimestamp(sources.map((source) => source?.fetchedAt)),
+    };
+  }
+  if (idValue === 'ebay-traffic') return {
+    ...base,
+    configured: ebayTrafficLastPayload ? !ebayTrafficLastPayload.setupRequired : false,
+    sourceUpdatedAt: ebayTrafficLastUpdatedAt || '',
+  };
+  if (idValue === 'gas-prices') return { ...base, configured: !!String(state.gasPrices?.location || '').trim(), sourceUpdatedAt: state.gasPrices?.fetchedAt || '' };
+  return base;
+}
+
+function getIntegrationHealthEntries(){
+  return integrationHealthFeature.buildIntegrationHealthEntries(INTEGRATION_HEALTH_DEFINITIONS, {
+    getScheduler: (schedulerId) => dashboardScheduler.get(schedulerId),
+    getSignal: (signalId) => integrationHealthSignals.get(signalId),
+    getConfiguration: getIntegrationHealthConfiguration,
+  });
+}
 
 function renderPersistenceStatus(status = {}){
   const element = document.getElementById('persistenceStatus');
@@ -1877,9 +1943,87 @@ function renderSettings(){
   tasksController.applyDefaultColumn();
 
   renderPodVisibilitySettings();
+  renderIntegrationHealthCenter();
   mountRssSettingsFeeds();
   mountHomeDevicesSettingsEditor();
   if (settingsPanel?.classList.contains('open')) refreshStateSafetyBackups();
+}
+
+function formatIntegrationHealthTimestamp(value){
+  const timestamp = Number(value || 0);
+  return Number.isFinite(timestamp) && timestamp > 0
+    ? new Date(timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : '—';
+}
+
+function integrationHealthStatusLabel(status){
+  const labels = {
+    healthy: 'Healthy', refreshing: 'Refreshing', stale: 'Stale', rate_limited: 'Rate-limited',
+    error: 'Error', disabled: 'Disabled', not_configured: 'Not configured',
+  };
+  return labels[String(status || '')] || 'Error';
+}
+
+function renderIntegrationHealthCenter(){
+  const root = document.getElementById('integrationHealthList');
+  const summary = document.getElementById('integrationHealthSummary');
+  if (!root || !summary) return;
+  const entries = getIntegrationHealthEntries();
+  const attentionCount = entries.filter((entry) => !['healthy', 'refreshing'].includes(entry.status)).length;
+  summary.textContent = attentionCount
+    ? `${attentionCount} integration${attentionCount === 1 ? '' : 's'} need attention.`
+    : 'All configured integrations are healthy.';
+  root.innerHTML = entries.map((entry) => {
+    const refreshDisabled = !entry.enabled || entry.refreshing || entry.cooldownActive;
+    const refreshTitle = entry.cooldownActive
+      ? `Refresh available ${formatIntegrationHealthTimestamp(entry.refreshAvailableAt)}`
+      : entry.configured === 'not_configured'
+        ? 'Check this integration after completing its local setup.'
+        : entry.enabled ? 'Refresh now' : 'Enable this integration before refreshing.';
+    const setupLabel = entry.settingsSection && entry.settingsSection !== 'integration-health' ? 'Open setup' : 'Show recovery';
+    return `<article class="integration-health-card" data-integration-health-id="${escapeHtml(entry.id)}">
+      <div class="integration-health-card-head">
+        <div><strong>${escapeHtml(entry.name)}</strong><div class="note-meta">${escapeHtml(entry.configured.replace('_', ' '))} · ${entry.enabled ? 'enabled' : 'disabled'}</div></div>
+        <span class="badge integration-health-badge integration-health-badge-${escapeHtml(entry.status)}">${escapeHtml(integrationHealthStatusLabel(entry.status))}</span>
+      </div>
+      <div class="integration-health-meta-grid">
+        <span>Last success <strong>${escapeHtml(formatIntegrationHealthTimestamp(entry.lastSuccessAt))}</strong></span>
+        <span>Last attempt <strong>${escapeHtml(formatIntegrationHealthTimestamp(entry.lastAttemptAt))}</strong></span>
+        <span>Next refresh <strong>${escapeHtml(formatIntegrationHealthTimestamp(entry.nextRefreshAt))}</strong></span>
+        ${entry.sourceUpdatedAt ? `<span>Source update <strong>${escapeHtml(formatIntegrationHealthTimestamp(entry.sourceUpdatedAt))}</strong></span>` : ''}
+      </div>
+      <div class="row-wrap integration-health-actions">
+        <button type="button" class="btn ghost" data-integration-health-refresh="${escapeHtml(entry.id)}" ${refreshDisabled ? 'disabled' : ''} title="${escapeHtml(refreshTitle)}">${entry.refreshing ? 'Refreshing…' : 'Refresh'}</button>
+        <button type="button" class="btn ghost" data-integration-health-configure="${escapeHtml(entry.id)}">${escapeHtml(setupLabel)}</button>
+      </div>
+      <details class="integration-health-diagnostics"><summary>Redacted diagnostics</summary><div class="note-meta">${entry.errorCode ? `Code: ${escapeHtml(entry.errorCode)}. ` : ''}${entry.authenticationExpired ? 'Authentication needs renewal. ' : ''}${escapeHtml(entry.recoveryAction)}</div></details>
+    </article>`;
+  }).join('');
+
+  root.querySelectorAll('[data-integration-health-refresh]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      await refreshIntegrationFromHealth(button.dataset.integrationHealthRefresh);
+      renderIntegrationHealthCenter();
+    });
+  });
+  root.querySelectorAll('[data-integration-health-configure]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const definition = INTEGRATION_HEALTH_DEFINITIONS.find((entry) => entry.id === button.dataset.integrationHealthConfigure);
+      if (definition?.settingsSection && definition.settingsSection !== 'integration-health') {
+        setActiveSettingsSection(definition.settingsSection);
+        return;
+      }
+      const details = button.closest('.integration-health-card')?.querySelector('details');
+      if (details) details.open = true;
+    });
+  });
+}
+
+async function refreshIntegrationFromHealth(integrationId){
+  const definition = INTEGRATION_HEALTH_DEFINITIONS.find((entry) => entry.id === String(integrationId || ''));
+  if (!definition?.schedulerId) return null;
+  return refreshScheduledPod(definition.schedulerId);
 }
 
 function renderWeatherSnapshot(snapshot, { stale = false, retryInMs = 0, fetchedAt = '' } = {}){
@@ -1893,6 +2037,7 @@ async function renderWeather(options = {}){
   const ts = document.getElementById('weatherUpdatedAt');
   const weatherBackoff = pollingBackoffState('weather').backoffUntil - Date.now();
   if (!manual && weatherBackoff > 0) {
+    setPodStatusSignal('weather', 'stale', `retry ${Math.ceil(weatherBackoff / 1000)}s`);
     if (ts) ts.textContent = `Updated: waiting ${Math.ceil(weatherBackoff / 1000)}s before retry`;
     return;
   }
@@ -1908,6 +2053,7 @@ async function renderWeather(options = {}){
     }
     renderWeatherSnapshot(snapshot);
     clearPollingBackoff('weather');
+    setPodStatusSignal('weather', 'fresh');
   } catch (error) {
     const backoffMs = registerPollingFailure('weather', error, 'Weather service temporarily unavailable');
     const cached = weatherSnapshotCache.zip === LOCAL_ZIP && weatherSnapshotCache.snapshot;
@@ -1917,9 +2063,11 @@ async function renderWeather(options = {}){
         retryInMs: backoffMs,
         fetchedAt: weatherSnapshotCache.fetchedAt,
       });
+      setPodStatusSignal('weather', 'stale', `retry ${Math.ceil(backoffMs / 1000)}s`);
       return;
     }
     el.textContent = 'Weather unavailable right now.';
+    setPodStatusSignal('weather', 'error', `retry ${Math.ceil(backoffMs / 1000)}s`);
     if (ts) ts.textContent = `Update delayed: retry in ${Math.ceil(backoffMs / 1000)}s`;
   }
 }
@@ -2672,11 +2820,12 @@ function getCryptoProviderChain(){
 }
 
 function setPodStatusSignal(podId, status = 'neutral', detail = ''){
-  const el = document.getElementById(`${podId}StatusSignal`);
-  if (!el) return;
   const normalized = String(status || 'neutral').toLowerCase();
   const allowed = new Set(['neutral', 'fresh', 'stale', 'degraded', 'error']);
   const mode = allowed.has(normalized) ? normalized : 'neutral';
+  recordIntegrationHealthSignal(podId, mode, detail);
+  const el = document.getElementById(`${podId}StatusSignal`);
+  if (!el) return;
   const labelMap = {
     neutral: 'Ready',
     fresh: 'Fresh',
@@ -11860,52 +12009,68 @@ function registerDashboardSchedulerJobs(){
     }],
     ['weather', {
       intervalMs: () => Math.max(1, Number(state.settings?.weatherIntervalMin || 15)) * 60 * 1000,
-      enabled: () => isScheduledPodVisible('date-time'),
+      enabled: () => isScheduledPodVisible('weather'),
+      manualCooldownMs: 30 * 1000,
       run: ({ manual }) => renderWeatherPod({ manual }),
     }],
     ['nba-scores', {
       intervalMs: 60 * 1000,
       enabled: () => isScheduledPodVisible('nba-scores'),
+      manualCooldownMs: 30 * 1000,
       run: ({ manual }) => renderNbaPod({ manual }),
     }],
     ['crypto-tracker', {
       intervalMs: 15 * 60 * 1000,
       enabled: () => isScheduledPodVisible('crypto-tracker'),
+      manualCooldownMs: CRYPTO_MANUAL_COOLDOWN_MS,
       run: ({ manual }) => renderCryptoPod({ manual }),
     }],
     ['rss-feed', {
       intervalMs: () => Math.max(5, Number(state.rss?.refreshIntervalMin || RSS_DEFAULT_REFRESH_MIN)) * 60 * 1000,
       enabled: () => isScheduledPodVisible('rss-feed'),
+      manualCooldownMs: 30 * 1000,
       run: ({ manual }) => renderRssPod({ manual }),
     }],
     ['unread-email', {
       intervalMs: 3 * 60 * 1000,
       enabled: () => isScheduledPodVisible('unread-email'),
+      manualCooldownMs: 30 * 1000,
       run: ({ manual }) => renderUnreadEmailWithLifecycle({ manual }),
     }],
     [MERGED_SOCIAL_FOLLOWERS_POD_ID, {
       intervalMs: 60 * 1000,
       enabled: () => isScheduledPodVisible(MERGED_SOCIAL_FOLLOWERS_POD_ID),
+      manualCooldownMs: 60 * 1000,
       run: ({ manual }) => renderSocialFollowersPod({ manual }),
     }],
     ['ebay-traffic', {
       intervalMs: EBAY_TRAFFIC_POLL_INTERVAL_MS,
       enabled: () => isScheduledPodVisible('ebay-traffic'),
+      manualCooldownMs: 60 * 1000,
       run: ({ manual }) => renderEbayTrafficPod({ manual }),
+    }],
+    ['gas-prices', {
+      intervalMs: 0,
+      enabled: () => isScheduledPodVisible('gas-prices') && !!String(state.gasPrices?.location || '').trim(),
+      manualCooldownMs: 30 * 1000,
+      run: () => fetchGasPricesAuto(),
     }],
     ['system-resource-monitor', {
       intervalMs: 3 * 1000,
       enabled: () => isScheduledPodVisible('system-resource-monitor'),
+      manualCooldownMs: 5 * 1000,
       run: () => fetchSystemMonitorSnapshot(),
     }],
     ['speed-test', {
       intervalMs: () => Math.max(0, Number(state.speedTest?.autoIntervalMin || 0)) * 60 * 1000,
       enabled: () => isScheduledPodVisible('speed-test') && Number(state.speedTest?.autoIntervalMin || 0) > 0,
+      manualCooldownMs: 3 * 1000,
       run: ({ manual }) => runSpeedTest({ reason: manual ? 'manual' : 'auto_interval' }),
     }],
     ['camera-snapshot', {
       intervalMs: () => Math.max(1000, Number(state.cameraFeed?.refreshIntervalSec || 5) * 1000),
       enabled: () => isScheduledPodVisible('camera-feed') && state.cameraFeed?.active === true && state.cameraFeed?.mode === 'snapshot',
+      manualCooldownMs: 5 * 1000,
       run: ({ signal }) => refreshCameraSnapshot({ signal }),
     }],
   ];
@@ -11921,6 +12086,8 @@ function refreshScheduledPod(podId){
   return dashboardScheduler.refresh(podId, { manual: true, reason: 'manual_refresh' })
     .then((result) => {
       if (result?.ok) announceStatus(`${label} refreshed.`, { key: `refresh:${podId}` });
+      else if (result?.reason === 'cooldown') announceStatus(`${label} is cooling down. Try again later.`, { key: `refresh:${podId}` });
+      else if (result?.reason === 'disabled') announceStatus(`${label} is disabled or needs configuration.`, { key: `refresh:${podId}` });
       return result;
     })
     .catch((error) => {
@@ -12014,7 +12181,8 @@ document.getElementById('socialAnalyticsRefreshBtn')?.addEventListener('click', 
 document.getElementById('ebayTrafficRefreshBtn')?.addEventListener('click', () => refreshScheduledPod('ebay-traffic'));
 document.getElementById('gasFetchBtn')?.addEventListener('click', async () => {
   const input = String(document.getElementById('gasLocationInput')?.value || '').trim();
-  await fetchGasPricesAuto(input);
+  state.gasPrices.location = input;
+  await refreshScheduledPod('gas-prices');
 });
 document.getElementById('gasManualSaveBtn')?.addEventListener('click', saveGasPricesManual);
 document.getElementById('gasLocationInput')?.addEventListener('change', (e) => {

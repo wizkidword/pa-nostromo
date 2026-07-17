@@ -102,11 +102,16 @@ try {
   const noteBody = page.locator('#notesBoardToday textarea[data-field="body"]').first();
   await noteBody.focus();
   await noteBody.fill('This draft keeps keyboard focus while it saves.');
+  await page.waitForTimeout(100);
   assert.equal(await noteBody.evaluate((element) => document.activeElement === element), true);
 
   await page.getByRole('button', { name: /settings/i }).press('Enter');
   assert.equal(await page.locator('#settingsPanel').evaluate((panel) => panel.classList.contains('open')), true);
   assert.equal(await page.evaluate(() => document.activeElement?.id), 'closeSettingsBtn');
+  await page.getByRole('button', { name: 'Integration Health' }).press('Enter');
+  assert.equal(await page.locator('#integrationHealthList .integration-health-card').count(), 8);
+  await page.locator('[data-integration-health-id="unread-email"] [data-integration-health-configure]').press('Enter');
+  assert.equal(await page.locator('[data-integration-health-id="unread-email"] details').evaluate((details) => details.open), true);
   await page.getByRole('button', { name: 'Pods & Layout' }).press('Enter');
   const moveButton = page.locator('#settingsPodVisibilityList [data-pod-move="down"]:not(:disabled)').first();
   await moveButton.focus();
