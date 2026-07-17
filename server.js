@@ -16,6 +16,7 @@ const { createWorkCoordinator } = require('./lib/work-coordinator.js');
 const { StateSchemaError } = require('./lib/state-schema.js');
 const { StateStore, StateStoreError } = require('./lib/state-store.js');
 const { createRequestId, createPublicErrorPayload, safeErrorCode, createBoundedJsonlLogWriter, configureDiagnosticLogSink, logDiagnostic } = require('./lib/observability.js');
+const { withIntegrationEnvelope } = require('./lib/integration-envelope.js');
 
 const ROOT = __dirname;
 const PUBLIC_ROOT = path.join(ROOT, 'public');
@@ -5608,7 +5609,11 @@ async function ensureDataDir() {
 function sendJson(res, status, obj) {
   const requestId = String(res.__nostromoRequestId || createRequestId());
   const isError = Number(status) >= 400 || obj?.ok === false;
-  const payload = isError ? createPublicErrorPayload(status, obj, requestId) : obj;
+  const basePayload = isError ? createPublicErrorPayload(status, obj, requestId) : obj;
+  const payload = withIntegrationEnvelope(basePayload, {
+    route: res.__nostromoRoute,
+    httpStatus: status,
+  });
   if (Number(status) >= 500) {
     logDiagnostic('api_error_response', {
       requestId,
@@ -6611,10 +6616,11 @@ function deriveItemId(item) {
 
 function parseFeedXml(xmlRaw, feedUrl) {
   const xml = String(xmlRaw || '');
-  if (!xml.trim()) return [];
+  if (!xml.trim()) throw Object.assign(new Error('rss_parser_empty_document'), { code: 'rss_parser_empty_document' });
 
   const isAtom = /<feed[\s>]/i.test(xml) && /xmlns=["'][^"']*atom/i.test(xml);
   const channelBlock = xml.match(/<channel[\s\S]*?<\/channel>/i)?.[0] || '';
+  if (!isAtom && !channelBlock) throw Object.assign(new Error('rss_parser_unrecognized_feed'), { code: 'rss_parser_unrecognized_feed' });
   const feedTitle = stripTags(isAtom ? extractTagValue(xml, 'title') : extractTagValue(channelBlock, 'title')) || new URL(feedUrl).hostname;
 
   const entryBlocks = isAtom
@@ -7212,6 +7218,7 @@ const server = http.createServer(async (req, res) => {
       }
       return sendJson(res, 404, { ok: false, error: 'not_found' });
     }
+    res.__nostromoRoute = resolved.route;
     if (!authorizeManifestRoute(req, res, resolved.route, hostResult.host)) return;
     if (resolved.route.id === 'security.bootstrap') return handleApiSecurityBootstrap(req, res);
     return dispatchApiRoute(req, res, pathname);

@@ -62,6 +62,9 @@ try {
   assert.equal(rss.status, 200);
   const rssPayload = await rss.json();
   assert.equal(rssPayload.errors[0]?.error, 'blocked_address');
+  assert.equal(rssPayload.integration?.status, 'error');
+  assert.equal(rssPayload.integration?.data, null);
+  assert.equal(rssPayload.integration?.errorCode, 'blocked_address');
 
   const camera = await fetch(`${origin}/api/camera-snapshot?url=${encodeURIComponent('http://127.0.0.1:9/snapshot')}`);
   assert.equal(camera.status, 403);

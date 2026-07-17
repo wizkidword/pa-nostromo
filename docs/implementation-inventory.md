@@ -60,6 +60,7 @@ All routes are dispatched through `ROUTE_MANIFEST` before reaching their handler
 - `STATE_PATH`: state reads, integrity checks, atomic-style temporary writes for social histories, and state backups. State writes are not yet revision-conditional; that is Phase 4.
 - `BACKUPS_DIR`: `listBackupFiles`, `writeBackupSnapshot`, and retention pruning.
 - Social history/cache files: Facebook, Facebook group, Instagram, TikTok, YouTube, and eBay cache under `DATA_DIR`; redacted, size-rotated server diagnostics and social-poller JSONL logs under `LOG_DIR`.
+- Integration responses: manifest-backed RSS, gas, crypto, eBay, social, and unread-email snapshot routes retain legacy fields and add the common `integration` envelope documented in `docs/integration-envelopes.md`.
 - Browser session storage: Meta/Facebook/Instagram storage defaults to `DATA_DIR/.auth`.
 - `.env` and `.env.local`: read only during server startup.
 - Diary filesystem indexing was removed in Phase 7. A default installation does not read sibling repositories.
