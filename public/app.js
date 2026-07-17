@@ -130,6 +130,8 @@ const cryptoStateFeature = window.MissionControlModules?.cryptoState;
 if (!cryptoStateFeature) throw new Error('Crypto state feature failed to load.');
 const dateTimePodFeature = window.MissionControlModules?.dateTimePod;
 if (!dateTimePodFeature) throw new Error('Date & Time pod failed to load.');
+const calendarPodFeature = window.MissionControlModules?.calendarPod;
+if (!calendarPodFeature) throw new Error('Calendar pod failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = settingsStateFeature.defaults;
@@ -1653,52 +1655,11 @@ function dateKey(d){
 }
 
 function renderCalendar(){
-  const el = document.getElementById('calendarWidget');
-  if (!el) return;
-  const nowDt = new Date();
-  const year = nowDt.getFullYear();
-  const month = nowDt.getMonth();
-  const first = new Date(year, month, 1);
-  const last = new Date(year, month + 1, 0);
-  const start = first.getDay();
-  const days = last.getDate();
-  const todayKey = dateKey(nowDt);
-
-  if (!selectedCalendarDate) selectedCalendarDate = todayKey;
-
-  const reminderDates = remindersController.reminderDateSet();
-  const reminderDayCount = reminderDates.size;
-  const heads = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<div class="cal-cell cal-head">${d}</div>`).join('');
-  let cells = '';
-  for (let i=0;i<start;i++) cells += '<div class="cal-cell cal-cell-empty">&nbsp;</div>';
-  for (let d=1; d<=days; d++) {
-    const key = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const isToday = key===todayKey;
-    const isSel = key===selectedCalendarDate;
-    const has = reminderDates.has(key);
-    cells += `<div class="cal-cell ${isToday?'cal-today':''} ${isSel?'selected':''} ${has?'has-reminder':''}" data-date="${key}">${d}</div>`;
-  }
-  el.innerHTML = `
-    <div class="calendar-v2-shell">
-      <div class="calendar-v2-head">
-        <div>
-          <div class="calendar-month-label">${nowDt.toLocaleDateString(undefined,{month:'long',year:'numeric'})}</div>
-          <div class="calendar-month-subtitle">Pick a day to manage reminders.</div>
-        </div>
-        <div class="calendar-month-stats">
-          <span class="calendar-stat-pill">${reminderDayCount} reminder ${reminderDayCount === 1 ? 'day' : 'days'}</span>
-        </div>
-      </div>
-      <div class="calendar-grid">${heads}${cells}</div>
-    </div>
-  `;
-
-  el.querySelectorAll('[data-date]').forEach((cell)=>{
-    cell.addEventListener('click', ()=>{
-      selectedCalendarDate = cell.dataset.date;
-      renderCalendar();
-      renderCalendarRemindersPanel();
-    });
+  return calendarPodFeature.renderCalendar({
+    getSelectedDate: () => selectedCalendarDate,
+    setSelectedDate: (date) => { selectedCalendarDate = date; },
+    reminderDateSet: () => remindersController.reminderDateSet(),
+    renderCalendarRemindersPanel,
   });
 }
 
