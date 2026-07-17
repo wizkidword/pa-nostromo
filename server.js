@@ -5107,9 +5107,12 @@ async function pollTikTokFollowers({ source = 'interval' } = {}){
     }
 
     try {
-      const html = await fetchTextViaCurl(profileUrl, META_GRAPH_TIMEOUT_MS);
-      const parsed = extractTikTokPublicFollowerEstimate(html);
-      if (!Number.isFinite(parsed.count)) throw Object.assign(new Error('tiktok_public_follower_signal_not_found'), { httpStatus: 502 });
+      const { parsed } = await fetchPublicSocialFollowerEstimate({
+        provider: 'tiktok_public_followers',
+        url: profileUrl,
+        extract: extractTikTokPublicFollowerEstimate,
+        missingErrorCode: 'tiktok_public_follower_signal_not_found',
+      });
 
       const previousKnown = Number.isFinite(Number(tiktokFollowersState.latest?.followersCount)) ? Number(tiktokFollowersState.latest.followersCount) : null;
       const envKnown = Number.isFinite(Number(TIKTOK_FOLLOWERS_COUNT)) ? Number(TIKTOK_FOLLOWERS_COUNT) : null;
@@ -5143,7 +5146,7 @@ async function pollTikTokFollowers({ source = 'interval' } = {}){
       await appendTikTokFollowersLog({ ts: new Date().toISOString(), event: 'tiktok_followers_poll', ok: true, source, requestId, followersCount: parsed.count, delta: calculateFollowerDelta(tiktokFollowersState.history, parsed.count), provider: 'tiktok_public_scrape_estimate', signal: parsed.signal || '', latencyMs });
       return tiktokFollowerResponsePayload();
     } catch (err) {
-      const status = Number(err?.httpStatus || 0);
+      const status = Number(err?.httpStatus || err?.status || 0);
       const message = String(err?.message || err || 'tiktok_public_scrape_failed').slice(0, 220);
       tiktokFollowersState.status.ok = false;
       tiktokFollowersState.status.setupRequired = false;
@@ -5306,9 +5309,12 @@ async function pollYoutubeSubscribers({ source = 'interval' } = {}){
     }
 
     try {
-      const html = await fetchTextViaCurl(channelUrl, META_GRAPH_TIMEOUT_MS);
-      const parsed = extractYouTubePublicSubscriberEstimate(html);
-      if (!Number.isFinite(parsed.count)) throw Object.assign(new Error('youtube_public_subscriber_signal_not_found'), { httpStatus: 502 });
+      const { parsed } = await fetchPublicSocialFollowerEstimate({
+        provider: 'youtube_public_subscribers',
+        url: channelUrl,
+        extract: extractYouTubePublicSubscriberEstimate,
+        missingErrorCode: 'youtube_public_subscriber_signal_not_found',
+      });
 
 
       const fetchedAt = new Date().toISOString();
@@ -5323,7 +5329,7 @@ async function pollYoutubeSubscribers({ source = 'interval' } = {}){
       await appendYoutubeSubscribersLog({ ts: new Date().toISOString(), event: 'youtube_subscribers_poll', ok: true, source, requestId, subscribersCount: parsed.count, delta: calculateSubscriberDelta(youtubeSubscribersState.history, parsed.count), provider: 'youtube_public_scrape_estimate', signal: parsed.signal || '', latencyMs });
       return youtubeSubscriberResponsePayload();
     } catch (err) {
-      const status = Number(err?.httpStatus || 0);
+      const status = Number(err?.httpStatus || err?.status || 0);
       const message = String(err?.message || err || 'youtube_public_scrape_failed').slice(0, 220);
       youtubeSubscribersState.status.ok = false;
       youtubeSubscribersState.status.setupRequired = false;
@@ -5672,18 +5678,89 @@ function fetchJsonViaCurl(upstreamUrl, timeoutMs = CRYPTO_PROXY_TIMEOUT_MS) {
   });
 }
 
-function fetchTextViaCurl(upstreamUrl, timeoutMs = RSS_FETCH_TIMEOUT_MS, maxBytes = RSS_FETCH_MAX_BYTES) {
+function fetchTextViaCurl(upstreamUrl, timeoutMs = RSS_FETCH_TIMEOUT_MS, maxBytes = RSS_FETCH_MAX_BYTES, requestOptions = {}) {
   return coordinatedSafeFetch(upstreamUrl, {
     method: 'GET',
+    signal: requestOptions.signal,
     timeoutMs,
     firstByteTimeoutMs: timeoutMs,
     maxBytes,
     maxRedirects: 3,
     headers: { 'User-Agent': 'pa-nostromo-safe-fetch/1.0', Accept: 'text/html, application/xml, text/xml;q=0.9, */*;q=0.5' },
   }, { integration: 'public-fetch' }).then(async (response) => {
-    if (!response.ok) throw Object.assign(new Error('upstream_http_error'), { code: 'upstream_http_error', status: response.status });
+    if (!response.ok) throw Object.assign(new Error('upstream_http_error'), {
+      code: 'upstream_http_error',
+      status: response.status,
+      retryAfter: response.headers.get('retry-after') || '',
+    });
     return response.text();
   });
+}
+
+function isRetryablePublicSocialFollowerError(error){
+  if (error?.code === 'public_social_parser_drift') return false;
+  const status = Number(error?.httpStatus || error?.status || 0);
+  return error?.code === 'provider_attempt_timeout'
+    || [408, 425, 429, 500, 502, 503, 504].includes(status)
+    || /abort|timeout|network|temporar/i.test(String(error?.message || ''));
+}
+
+function publicSocialFollowerRetryDelayMs({ error }){
+  return Math.max(0, Number(error?.retryAfter || 0) * 1000);
+}
+
+async function fetchPublicSocialFollowerEstimate({
+  provider,
+  url,
+  extract,
+  missingErrorCode = 'public_social_follower_signal_not_found',
+  timeoutMs = META_GRAPH_TIMEOUT_MS,
+  retries = META_GRAPH_MAX_RETRIES - 1,
+  operationTimeoutMs = META_GRAPH_OPERATION_TIMEOUT_MS,
+  unhealthyCooldownMs = META_GRAPH_UNHEALTHY_COOLDOWN_MS,
+  signal,
+  fetchText = fetchTextViaCurl,
+  healthStore,
+  random,
+  delay: retryDelay,
+  now,
+} = {}){
+  const providerName = String(provider || '').trim();
+  const targetUrl = String(url || '').trim();
+  if (!providerName || !targetUrl || typeof extract !== 'function') {
+    throw new Error('fetchPublicSocialFollowerEstimate requires provider, url, and extract.');
+  }
+  const totalTimeoutMs = Math.max(1000, Number(operationTimeoutMs) || META_GRAPH_OPERATION_TIMEOUT_MS);
+  const attemptTimeoutMs = Math.min(totalTimeoutMs, Math.max(1000, Number(timeoutMs) || META_GRAPH_TIMEOUT_MS));
+  const result = await fetchWithFailover({
+    providers: [providerName],
+    retries: Math.max(0, Math.floor(Number(retries) || 0)),
+    backoffBaseMs: META_GRAPH_BACKOFF_BASE_MS,
+    backoffMaxMs: META_GRAPH_BACKOFF_MAX_MS,
+    operationTimeoutMs: totalTimeoutMs,
+    attemptTimeoutMs,
+    unhealthyCooldownMs,
+    signal,
+    healthStore,
+    random,
+    delay: retryDelay,
+    now,
+    isRetryableError: isRetryablePublicSocialFollowerError,
+    retryDelayMs: publicSocialFollowerRetryDelayMs,
+    async tryProvider(_provider, _attempt, { signal: attemptSignal }) {
+      const html = await fetchText(targetUrl, attemptTimeoutMs, RSS_FETCH_MAX_BYTES, { signal: attemptSignal });
+      const parsed = extract(html);
+      if (!Number.isFinite(parsed?.count)) {
+        throw Object.assign(new Error(missingErrorCode), {
+          code: 'public_social_parser_drift',
+          httpStatus: 502,
+          status: 502,
+        });
+      }
+      return { html, parsed };
+    },
+  });
+  return result.result;
 }
 
 const MIME = {
@@ -7440,6 +7517,7 @@ module.exports = {
   extractInstagramPublicFollowerEstimate,
   extractTikTokPublicFollowerEstimate,
   extractYouTubePublicSubscriberEstimate,
+  fetchPublicSocialFollowerEstimate,
   parseCompactCount,
   parseEbayTrafficReport,
   parseEbayMarketingReport,

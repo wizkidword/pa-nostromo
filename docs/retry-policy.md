@@ -46,3 +46,12 @@ variables still apply.
 The poll response and stale-cache behavior are unchanged: if Meta Graph is
 unavailable, the session/public fallbacks continue, and the last verified count
 remains available when no fallback can refresh it.
+
+## Public social follower refreshes
+
+TikTok follower and YouTube subscriber refreshes use the same deadline,
+jitter, cancellation, and cooldown settings as the social polling layer. A
+temporary fetch failure can retry, and an upstream `Retry-After` value is
+honored. A missing follower/subscriber signal is treated as parser drift rather
+than a transient network failure, so it does not create a synchronized retry
+loop; the existing last-known-good value is instead returned as stale data.
