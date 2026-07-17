@@ -85,15 +85,6 @@ function installSameOriginCsrfFetch(){
 installSameOriginCsrfFetch();
 window.NostromoSafeUI.installActiveUrlPolicy();
 
-const COLUMNS = [
-  ['inbox', 'Inbox'],
-  ['in_progress', 'In Progress'],
-  ['waiting_blocked', 'Debugging'],
-  ['ready_to_publish', 'Ready to Publish'],
-  ['done', 'Done'],
-];
-const KANBAN_COLUMN_KEYS = new Set(COLUMNS.map(([key]) => key));
-
 const themeFeature = window.MissionControlModules?.theme;
 if (!themeFeature) throw new Error('Theme feature failed to load.');
 const normalizeThemePreference = themeFeature.normalizeThemePreference;
@@ -103,6 +94,9 @@ const notesFeature = window.MissionControlModules?.notes;
 if (!notesFeature) throw new Error('Notes feature failed to load.');
 const remindersFeature = window.MissionControlModules?.reminders;
 if (!remindersFeature) throw new Error('Reminders feature failed to load.');
+const tasksFeature = window.MissionControlModules?.tasks;
+if (!tasksFeature) throw new Error('Tasks feature failed to load.');
+const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
   theme: 'dark',
@@ -904,6 +898,24 @@ const remindersController = remindersFeature.createRemindersController({
   deleteWithUndo,
 });
 
+const tasksController = tasksFeature.createTasksController({
+  document,
+  getState: () => state,
+  id,
+  now,
+  escapeText,
+  escapeAttribute,
+  escapeHtml,
+  renderFormattedText,
+  markdownToolbarButtons,
+  bindMarkdownToolbar,
+  projectName: (projectId) => projectsController.projectName(projectId),
+  commitState,
+  deleteWithUndo,
+  logChange,
+  confirm: window.confirm.bind(window),
+});
+
 let cameraSnapshotTimer = null;
 let cameraSnapshotBust = 0;
 let cameraLocalStream = null;
@@ -966,11 +978,6 @@ function ensureChangelogPatch(stateObj, message){
   stateObj.changelog.unshift({ id: id(), ts: now(), message });
   stateObj.changelog = stateObj.changelog.slice(0, 200);
 }
-function normalizeTaskColumn(column){
-  const key = String(column || '').trim();
-  return KANBAN_COLUMN_KEYS.has(key) ? key : 'inbox';
-}
-
 function normalizeSettingsState(input){
   const settings = { ...DEFAULT_SETTINGS, ...(input || {}) };
   settings.theme = normalizeThemePreference(settings.theme);
@@ -2191,10 +2198,7 @@ function renderSettings(){
   if (fs) fs.checked = !!document.fullscreenElement;
   if (rssInterval) rssInterval.value = String(state.rss?.refreshIntervalMin || RSS_DEFAULT_REFRESH_MIN);
 
-  const taskColumnSelect = document.querySelector('#taskForm select[name="column"]');
-  if (taskColumnSelect && !taskColumnSelect.value) {
-    taskColumnSelect.value = state.settings.defaultTaskColumn;
-  }
+  tasksController.applyDefaultColumn();
 
   renderPodVisibilitySettings();
   mountRssSettingsFeeds();
@@ -12497,16 +12501,21 @@ function applyFormat(input, format){
 }
 
 function bindMarkdownToolbar(toolbar, getInput, onApplied){
-  if (!toolbar) return;
+  if (!toolbar) return () => {};
+  const bindings = [];
   toolbar.querySelectorAll('button[data-md-format]').forEach((btn)=>{
-    btn.addEventListener('mousedown', (e)=> e.preventDefault());
-    btn.addEventListener('click', ()=>{
+    const preventMouseDown = (e) => e.preventDefault();
+    const applyToolbarFormat = () => {
       const input = typeof getInput === 'function' ? getInput(btn) : null;
       if (!input) return;
       applyFormat(input, btn.dataset.mdFormat);
       if (typeof onApplied === 'function') onApplied(input, btn);
-    });
+    };
+    btn.addEventListener('mousedown', preventMouseDown);
+    btn.addEventListener('click', applyToolbarFormat);
+    bindings.push([btn, 'mousedown', preventMouseDown], [btn, 'click', applyToolbarFormat]);
   });
+  return () => bindings.forEach(([target, eventName, listener]) => target.removeEventListener(eventName, listener));
 }
 
 function renderInlineMarkdown(text){
@@ -12567,97 +12576,15 @@ function renderFormattedText(markdown){
 }
 
 function renderBoard(){
-
-  const board = document.getElementById('board');
-  board.innerHTML = COLUMNS.map(([key,label])=>{
-    const colTasks = state.tasks.filter(t=>t.column===key);
-    const cards = colTasks.map(taskHtml).join('');
-    return `<div class="col"><div class="col-head"><h3>${label}</h3><span class="col-count">${colTasks.length}</span></div><div class="drop" data-col="${key}">${cards}</div></div>`;
-  }).join('');
-
-  document.querySelectorAll('.task').forEach(el=>{
-    el.addEventListener('dragstart', e=> {
-      e.dataTransfer.setData('text/plain', el.dataset.id);
-      el.classList.add('dragging');
-    });
-    el.addEventListener('dragend', ()=> el.classList.remove('dragging'));
-  });
-
-  document.querySelectorAll('.task-edit-btn').forEach((btn) => {
-    ['mousedown', 'pointerdown', 'dragstart'].forEach((evt) => {
-      btn.addEventListener(evt, (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      });
-    });
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      openEditTaskDialog(btn.dataset.id);
-    });
-  });
-
-  document.querySelectorAll('.drop').forEach(drop=>{
-    drop.addEventListener('dragenter', ()=> drop.classList.add('is-over'));
-    drop.addEventListener('dragover', e=> e.preventDefault());
-    drop.addEventListener('dragleave', ()=> drop.classList.remove('is-over'));
-    drop.addEventListener('drop', e=>{
-      e.preventDefault();
-      drop.classList.remove('is-over');
-      const id = e.dataTransfer.getData('text/plain');
-      const task = state.tasks.find(t=>t.id===id);
-      if(!task) return;
-      task.column = drop.dataset.col;
-      task.updatedAt = now();
-      commitState('task_column_changed_drag');
-    });
-  });
+  return tasksController.render();
 }
-
-function taskHtml(t){
-  const chips = [];
-  chips.push(`<span class="chip">${escapeText(projectName(t.projectId))}</span>`);
-  if(t.column==='waiting_blocked') chips.push('<span class="chip high">High</span>');
-  if(t.blockerType) chips.push(`<span class="chip ${escapeAttribute(t.blockerType)}">${escapeText(title(t.blockerType))}</span>`);
-  return `<div class="task" draggable="true" data-id="${escapeAttribute(t.id)}">
-    <div class="task-top-row">
-      <strong>${escapeHtml(t.title)}</strong>
-      <button type="button" class="btn ghost task-edit-btn" data-id="${escapeAttribute(t.id)}" draggable="false">Edit</button>
-    </div>
-    <div class="task-next-action md-preview">${renderFormattedText(t.nextAction || '')}</div>
-    <small>Owner: ${escapeHtml(t.owner || 'Rowan')}</small>
-    ${t.dueDate ? `<small>Due: ${escapeHtml(t.dueDate)}</small>` : ''}
-    <div class="task-chips">${chips.join('')}</div>
-  </div>`;
-}
-
-function title(v){ return v.charAt(0).toUpperCase()+v.slice(1); }
 
 function populateProjectSelect(){
-  const options = state.projects.map((p) => `<option value="${escapeAttribute(p.id)}">${escapeText(p.name)}</option>`).join('');
-  const sel = document.getElementById('taskProject');
-  if (sel) sel.innerHTML = options;
-  const editSel = document.getElementById('editTaskProject');
-  if (editSel) editSel.innerHTML = options;
+  return tasksController.populateProjectSelects();
 }
 
 function openEditTaskDialog(taskId){
-  const task = state.tasks.find((t) => t.id === taskId);
-  if (!task || !editTaskDialog || !editTaskForm) return;
-
-  editTaskForm.elements.id.value = task.id;
-  editTaskForm.elements.title.value = task.title || '';
-  editTaskForm.elements.projectId.value = task.projectId || state.projects[0]?.id || '';
-  editTaskForm.elements.column.value = normalizeTaskColumn(task.column);
-  editTaskForm.elements.blockerType.value = task.blockerType || '';
-  editTaskForm.elements.owner.value = task.owner || 'Rowan';
-  editTaskForm.elements.nextAction.value = task.nextAction || '';
-  editTaskForm.elements.dueDate.value = task.dueDate || '';
-
-  const preview = document.getElementById('editTaskNextActionPreview');
-  if (preview) preview.innerHTML = renderFormattedText(task.nextAction || '');
-
-  editTaskDialog.showModal();
+  return tasksController.openEditDialog(taskId);
 }
 
 function openShortcutDialog(shortcutId = ''){
@@ -12680,40 +12607,11 @@ function openShortcutDialog(shortcutId = ''){
 }
 
 // dialogs
-const taskDialog = document.getElementById('taskDialog');
-const editTaskDialog = document.getElementById('editTaskDialog');
-const editTaskForm = document.getElementById('editTaskForm');
 const shortcutDialog = document.getElementById('shortcutDialog');
 const shortcutForm = document.getElementById('shortcutForm');
 projectsController.bind();
-document.getElementById('addTaskBtn').onclick = ()=> taskDialog.showModal();
-document.getElementById('editTaskCancelBtn')?.addEventListener('click', ()=> editTaskDialog?.close());
-document.getElementById('editTaskDeleteBtn')?.addEventListener('click', () => {
-  const taskId = String(editTaskForm?.elements?.id?.value || '').trim();
-  if (!taskId) return;
-  const task = state.tasks.find((t) => t.id === taskId);
-  if (!task) return;
-  if (!window.confirm(`Delete task "${task.title}"?`)) return;
-  const deleted = deleteWithUndo({
-    collection: () => state.tasks,
-    itemId: taskId,
-    reason: 'task_deleted',
-    buildUndoLabel: () => `Task deleted (${task.title.slice(0, 30)}). Undo?`,
-  });
-  if (deleted) editTaskDialog?.close();
-});
+tasksController.bind();
 document.getElementById('addShortcutBtn')?.addEventListener('click', ()=> openShortcutDialog());
-
-const editTaskNextActionInput = document.getElementById('editTaskNextAction');
-const editTaskNextActionPreview = document.getElementById('editTaskNextActionPreview');
-const editTaskToolbar = document.getElementById('editTaskToolbar');
-if (editTaskToolbar) {
-  editTaskToolbar.innerHTML = markdownToolbarButtons();
-  bindMarkdownToolbar(editTaskToolbar, () => editTaskNextActionInput);
-}
-editTaskNextActionInput?.addEventListener('input', ()=> {
-  if (editTaskNextActionPreview) editTaskNextActionPreview.innerHTML = renderFormattedText(editTaskNextActionInput.value || '');
-});
 document.getElementById('shortcutCancelBtn')?.addEventListener('click', ()=> shortcutDialog?.close());
 
 const settingsPanel = document.getElementById('settingsPanel');
@@ -13009,51 +12907,6 @@ shortcutForm?.addEventListener('submit', (e) => {
 
   shortcutDialog?.close();
   commitState('shortcut_form_submitted');
-});
-
-document.getElementById('taskForm').addEventListener('submit', e=>{
-  e.preventDefault();
-  const f = new FormData(e.target);
-  state.tasks.push({
-    id: id(),
-    title: f.get('title'),
-    projectId: f.get('projectId'),
-    column: normalizeTaskColumn(f.get('column')),
-    blockerType: f.get('blockerType') || null,
-    owner: f.get('owner') || 'Rowan',
-    nextAction: f.get('nextAction'),
-    dueDate: f.get('dueDate') || '',
-    createdAt: now(),
-    updatedAt: now(),
-  });
-  taskDialog.close();
-  e.target.reset();
-  const colSel = document.querySelector('#taskForm select[name="column"]');
-  if (colSel) colSel.value = state.settings.defaultTaskColumn;
-  commitState('task_created');
-});
-
-editTaskForm?.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const f = new FormData(e.target);
-  const task = state.tasks.find((t) => t.id === f.get('id'));
-  if (!task) {
-    editTaskDialog?.close();
-    return;
-  }
-
-  task.title = f.get('title');
-  task.projectId = f.get('projectId');
-  task.column = normalizeTaskColumn(f.get('column'));
-  task.blockerType = f.get('blockerType') || null;
-  task.owner = f.get('owner') || 'Rowan';
-  task.nextAction = f.get('nextAction');
-  task.dueDate = f.get('dueDate') || '';
-  task.updatedAt = now();
-
-  editTaskDialog?.close();
-  logChange(`Edited task: ${task.title}`);
-  commitState('task_edited');
 });
 
 function enableProjectDragScroll(){
@@ -13516,9 +13369,6 @@ document.getElementById('cancelAlarmBtn')?.addEventListener('click', () => {
   if (alarmEndTs) logChange('Canceled active timer');
   cancelAlarm();
 });
-
-const colSelInit = document.querySelector('#taskForm select[name="column"]');
-if (colSelInit) colSelInit.value = state.settings.defaultTaskColumn;
 
 enableProjectDragScroll();
 enableBoardDragScroll();
