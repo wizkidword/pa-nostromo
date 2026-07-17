@@ -13,4 +13,9 @@ Home-device actions follow the same boundary:
 - `server/routes/devices.js` owns the `/api/home-devices/ping` and `/api/home-devices/wake` request validation and response shaping.
 - Command execution, host checks, and diagnostic logging stay injected from `server.js` so the route layer does not own process I/O.
 
+RSS refresh follows the same boundary:
+
+- `server/routes/rss.js` validates feeds, coordinates the request lifecycle, and shapes RSS responses.
+- Feed caching, safe outbound fetches, parsing, retry behavior, and abort-signal creation remain injected from `server.js`.
+
 Future route extractions should follow the same boundary: keep request parsing and response shaping in a route module, delegate business/persistence work to a focused service, and preserve externally visible behavior while moving one vertical area at a time.
