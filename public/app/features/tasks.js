@@ -57,6 +57,19 @@
     return true;
   }
 
+  function completeTask(task, now) {
+    return moveTask(task, 'done', now);
+  }
+
+  function snoozeTask(task, dueDate, now) {
+    if (!task || typeof now !== 'function') return false;
+    const normalizedDate = String(dueDate || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) return false;
+    task.dueDate = normalizedDate;
+    task.updatedAt = now();
+    return true;
+  }
+
   function titleCase(value) {
     const text = String(value || '');
     return text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
@@ -289,7 +302,7 @@
     return { render, populateProjectSelects, applyDefaultColumn, openEditDialog, bind, destroy };
   }
 
-  const api = { columns, normalizeTaskColumn, normalizeTaskDraft, createTask, updateTask, moveTask, createTasksController };
+  const api = { columns, normalizeTaskColumn, normalizeTaskDraft, createTask, updateTask, moveTask, completeTask, snoozeTask, createTasksController };
   global.MissionControlModules = global.MissionControlModules || {};
   global.MissionControlModules.tasks = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

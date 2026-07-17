@@ -357,14 +357,27 @@
     </div>
   </section>
 
+  <section class="card today-focus-card" aria-labelledby="todayFocusTitle">
+    <div class="today-focus-head">
+      <div>
+        <p class="today-focus-kicker">Daily queue</p>
+        <h2 id="todayFocusTitle" class="m0">Today / Focus</h2>
+        <p id="todayFocusSummary" class="note-meta" role="status" aria-live="polite"></p>
+      </div>
+      <div class="today-focus-pin-control">
+        <label for="todayFocusPinTaskSelect">Pin an active task</label>
+        <div class="row-wrap">
+          <select id="todayFocusPinTaskSelect" aria-label="Choose an active task to pin"></select>
+          <button id="todayFocusPinTaskBtn" class="btn ghost" type="button">Pin task</button>
+        </div>
+      </div>
+    </div>
+    <div id="todayFocusList" class="today-focus-list" aria-label="Ranked daily focus items"></div>
+  </section>
+
   <section class="card">
     <h2>Project Directory</h2>
     <div id="projectDirectory" class="project-grid"></div>
-  </section>
-
-  <section class="card mt14">
-    <h2>📌 Today Reminders</h2>
-    <div id="todayReminders" class="change-log-list"></div>
   </section>
 
   <section class="card">
@@ -562,6 +575,7 @@
     <script src="app/features/music-player-state.js"></script>
     <script src="app/features/rss-state.js"></script>
     <script src="app/features/integration-health.js"></script>
+    <script src="app/features/today-focus.js"></script>
   <script src="app/pods/date-time.pod.js"></script>
   <script src="app/pods/calendar.pod.js"></script>
   <script src="app/pods/weather.pod.js"></script>

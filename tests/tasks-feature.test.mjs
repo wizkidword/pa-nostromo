@@ -6,9 +6,11 @@ const {
   columns,
   createTask,
   createTasksController,
+  completeTask,
   moveTask,
   normalizeTaskColumn,
   normalizeTaskDraft,
+  snoozeTask,
   updateTask,
 } = require('../public/app/features/tasks.js');
 
@@ -64,6 +66,10 @@ const created = createTask({
 assert.equal(created.created, true);
 assert.equal(tasks[0].title, 'Ship release');
 assert.equal(moveTask(tasks[0], 'done', () => '2026-07-17T10:05:00.000Z'), true);
+assert.equal(tasks[0].column, 'done');
+assert.equal(snoozeTask(tasks[0], '2026-07-18', () => '2026-07-17T10:06:00.000Z'), true);
+assert.equal(tasks[0].dueDate, '2026-07-18');
+assert.equal(completeTask(tasks[0], () => '2026-07-17T10:07:00.000Z'), true);
 assert.equal(tasks[0].column, 'done');
 assert.equal(updateTask(tasks[0], {
   values: { title: 'Ship release now', projectId: 'project-1', column: 'ready_to_publish', nextAction: 'Push release' },

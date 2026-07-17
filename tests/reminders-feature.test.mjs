@@ -7,6 +7,7 @@ const {
   createRemindersController,
   normalizeReminderDraft,
   reminderDateSet,
+  snoozeReminder,
   sortReminders,
 } = require('../public/app/features/reminders.js');
 
@@ -59,6 +60,10 @@ assert.deepEqual(createReminder({
     createdAt: '2026-07-17T08:00:00.000Z',
   },
 });
+assert.equal(snoozeReminder(reminders[0], '2026-07-18', () => '2026-07-17T08:30:00.000Z'), true);
+assert.equal(reminders[0].date, '2026-07-18');
+assert.equal(reminders[0].updatedAt, '2026-07-17T08:30:00.000Z');
+reminders[0].date = '2026-07-17';
 reminders.push({ id: 'second-reminder', date: '2026-07-17', time: '08:00', text: 'Earlier reminder' });
 assert.deepEqual(sortReminders(reminders).map((reminder) => reminder.id), ['second-reminder', 'first-reminder']);
 assert.deepEqual([...reminderDateSet(reminders)], ['2026-07-17']);

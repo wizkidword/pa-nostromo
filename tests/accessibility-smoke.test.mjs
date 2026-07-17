@@ -105,6 +105,12 @@ try {
   await page.waitForTimeout(100);
   assert.equal(await noteBody.evaluate((element) => document.activeElement === element), true);
 
+  const focusTaskSelect = page.locator('#todayFocusPinTaskSelect');
+  await focusTaskSelect.selectOption({ index: 1 });
+  await page.getByRole('button', { name: 'Pin task' }).press('Enter');
+  assert.ok(await page.locator('#todayFocusList .today-focus-item').count() >= 1);
+  assert.equal(await page.locator('#todayFocusList').textContent().then((text) => text.includes('Pinned')), true);
+
   await page.getByRole('button', { name: /settings/i }).press('Enter');
   assert.equal(await page.locator('#settingsPanel').evaluate((panel) => panel.classList.contains('open')), true);
   assert.equal(await page.evaluate(() => document.activeElement?.id), 'closeSettingsBtn');

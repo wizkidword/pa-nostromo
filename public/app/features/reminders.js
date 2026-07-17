@@ -34,6 +34,14 @@
     return { created: true, reminder };
   }
 
+  function snoozeReminder(reminder, date, now) {
+    const nextDate = String(date || '').trim();
+    if (!reminder || !datePattern.test(nextDate) || typeof now !== 'function') return false;
+    reminder.date = nextDate;
+    reminder.updatedAt = now();
+    return true;
+  }
+
   function createRemindersController({
     document: documentRef,
     getState,
@@ -192,7 +200,7 @@
     };
   }
 
-  const api = { sortReminders, reminderDateSet, normalizeReminderDraft, createReminder, createRemindersController };
+  const api = { sortReminders, reminderDateSet, normalizeReminderDraft, createReminder, snoozeReminder, createRemindersController };
   global.MissionControlModules = global.MissionControlModules || {};
   global.MissionControlModules.reminders = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

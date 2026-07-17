@@ -130,6 +130,8 @@ const cryptoStateFeature = window.MissionControlModules?.cryptoState;
 if (!cryptoStateFeature) throw new Error('Crypto state feature failed to load.');
 const integrationHealthFeature = window.MissionControlModules?.integrationHealth;
 if (!integrationHealthFeature) throw new Error('Integration Health feature failed to load.');
+const todayFocusFeature = window.MissionControlModules?.todayFocus;
+if (!todayFocusFeature) throw new Error('Today/Focus feature failed to load.');
 const dateTimePodFeature = window.MissionControlModules?.dateTimePod;
 if (!dateTimePodFeature) throw new Error('Date & Time pod failed to load.');
 const calendarPodFeature = window.MissionControlModules?.calendarPod;
@@ -205,6 +207,7 @@ const seed = {
   notes: [],
   ideas: [],
   reminders: [],
+  todayFocus: { pinned: [], snoozedUntil: {}, dismissedOn: {} },
   settings: { ...DEFAULT_SETTINGS },
   nba: normalizeNbaState(),
   unreadEmailBlockedSenders: {},
@@ -730,6 +733,12 @@ function commitRemindersFeature(reason = 'updated'){
   });
 }
 
+function commitTodayFocus(reason = 'updated'){
+  return persistFeatureAction('today-focus', reason, {
+    changedAreas: ['today-focus'],
+  });
+}
+
 function commitSettingsFeature(reason = 'updated'){
   return persistFeatureAction('settings', reason, { changedAreas: ['settings'] });
 }
@@ -1000,6 +1009,7 @@ function load(){
   state.notes = state.notes.map((n)=>({ pinned: !!n.pinned, ...n }));
   state.ideas = Array.isArray(state.ideas) ? state.ideas : [];
   state.reminders = Array.isArray(state.reminders) ? state.reminders : [];
+  state.todayFocus = todayFocusFeature.normalizeFocusState(state.todayFocus);
   state.settings = normalizeSettingsState(state.settings);
   const migratedIdeasTaskCount = migrateIdeasTasksToNotes(state);
   if (migratedIdeasTaskCount > 0) {
@@ -1922,6 +1932,286 @@ function renderTodayReminders(){
   return remindersController.renderToday();
 }
 
+function getTodayFocusView(){
+  return todayFocusFeature.buildTodayFocusItems({
+    state,
+    now: new Date(),
+    integrations: getIntegrationHealthEntries(),
+    limit: todayFocusFeature.PRIMARY_LIMIT,
+  });
+}
+
+function todayFocusProjectOptions(selectedProjectId = ''){
+  const projects = state.projects.filter((project) => project?.status !== 'paused');
+  if (!projects.length) return '<option value="">No active projects</option>';
+  return projects.map((project) => `
+    <option value="${escapeAttribute(project.id)}" ${project.id === selectedProjectId ? 'selected' : ''}>${escapeHtml(project.name || 'Untitled project')}</option>
+  `).join('');
+}
+
+function createTodayFocusPin(item){
+  const locator = item?.sourceLocator || item?.pin || {};
+  return {
+    sourceType: item?.sourceType,
+    sourceId: item?.sourceId,
+    title: item?.title,
+    detail: item?.detail,
+    projectId: item?.projectId,
+    accountId: locator.accountId,
+    mailbox: locator.mailbox,
+    uid: locator.uid,
+    issuedAt: locator.issuedAt || item?.sortDate,
+    createdAt: now(),
+  };
+}
+
+function pinTodayFocusItem(item){
+  if (!item?.sourceKey) return false;
+  state.todayFocus = todayFocusFeature.withPinned(state.todayFocus, createTodayFocusPin(item));
+  commitTodayFocus('today_focus_item_pinned');
+  announceStatus(`Pinned ${item.title} to Today / Focus.`, { key: `today-focus:${item.sourceKey}` });
+  return true;
+}
+
+function unpinTodayFocusItem(item){
+  if (!item?.sourceKey) return false;
+  state.todayFocus = todayFocusFeature.withoutPinned(state.todayFocus, item.sourceKey);
+  commitTodayFocus('today_focus_item_unpinned');
+  announceStatus(`Unpinned ${item.title} from Today / Focus.`, { key: `today-focus:${item.sourceKey}` });
+  return true;
+}
+
+function dismissTodayFocusItem(item){
+  if (!item?.sourceKey) return false;
+  const today = todayFocusFeature.dateKey(new Date());
+  state.todayFocus = todayFocusFeature.withDismissal(state.todayFocus, item.sourceKey, today);
+  commitTodayFocus('today_focus_item_dismissed');
+  announceStatus(`Dismissed ${item.title} for today.`, { key: `today-focus:${item.sourceKey}` });
+  return true;
+}
+
+function snoozeTodayFocusItem(item){
+  if (!item?.sourceKey) return false;
+  const tomorrow = todayFocusFeature.addDays(new Date(), 1);
+  state.todayFocus = todayFocusFeature.withSnooze(state.todayFocus, item.sourceKey, tomorrow);
+  if (item.sourceType === 'task') {
+    const task = state.tasks.find((candidate) => candidate?.id === item.sourceId);
+    if (!tasksFeature.snoozeTask(task, tomorrow, now)) return false;
+    commitTasksFeature('today_focus_task_snoozed');
+  } else if (item.sourceType === 'reminder') {
+    const reminder = state.reminders.find((candidate) => candidate?.id === item.sourceId);
+    if (!remindersFeature.snoozeReminder(reminder, tomorrow, now)) return false;
+    commitRemindersFeature('today_focus_reminder_snoozed');
+  } else {
+    commitTodayFocus('today_focus_item_snoozed');
+  }
+  announceStatus(`Snoozed ${item.title} until tomorrow.`, { key: `today-focus:${item.sourceKey}` });
+  return true;
+}
+
+async function completeTodayFocusItem(item){
+  if (!item?.sourceKey) return false;
+  if (item.sourceType === 'task') {
+    const task = state.tasks.find((candidate) => candidate?.id === item.sourceId);
+    if (!tasksFeature.completeTask(task, now)) return false;
+    state.todayFocus = todayFocusFeature.withoutPinned(state.todayFocus, item.sourceKey);
+    commitTasksFeature('today_focus_task_completed');
+    announceStatus(`Completed ${item.title}.`, { key: `today-focus:${item.sourceKey}` });
+    return true;
+  }
+  if (item.sourceType === 'reminder') {
+    const deleted = deleteWithUndo({
+      collection: () => state.reminders,
+      itemId: item.sourceId,
+      reason: 'today_focus_reminder_completed',
+      commit: (reason) => {
+        state.todayFocus = todayFocusFeature.withoutPinned(state.todayFocus, item.sourceKey);
+        commitRemindersFeature(reason);
+      },
+      buildUndoLabel: () => `Reminder completed (${item.title.slice(0, 30)}). Undo?`,
+    });
+    if (deleted) announceStatus(`Completed ${item.title}.`, { key: `today-focus:${item.sourceKey}` });
+    return deleted;
+  }
+  if (item.sourceType === 'email') {
+    const locator = item.sourceLocator || item.pin || {};
+    const markedRead = await handleUnreadEmailMarkReadAction({
+      accountId: locator.accountId,
+      mailbox: locator.mailbox,
+      uid: locator.uid,
+    });
+    if (!markedRead) return false;
+    state.todayFocus = todayFocusFeature.withoutPinned(state.todayFocus, item.sourceKey);
+    commitTodayFocus('today_focus_email_completed');
+    announceStatus(`Marked ${item.title} as read.`, { key: `today-focus:${item.sourceKey}` });
+    return true;
+  }
+  return dismissTodayFocusItem(item);
+}
+
+function moveTodayFocusItemToProject(item, projectId){
+  const nextProjectId = String(projectId || '').trim();
+  if (!item?.sourceKey || !nextProjectId || !state.projects.some((project) => project.id === nextProjectId)) return false;
+  if (item.sourceType === 'task') {
+    const task = state.tasks.find((candidate) => candidate?.id === item.sourceId);
+    if (!task) return false;
+    task.projectId = nextProjectId;
+    task.updatedAt = now();
+    commitTasksFeature('today_focus_task_moved_to_project');
+  } else if (item.sourceType === 'reminder') {
+    const reminder = state.reminders.find((candidate) => candidate?.id === item.sourceId);
+    if (!reminder) return false;
+    reminder.projectId = nextProjectId;
+    reminder.updatedAt = now();
+    commitRemindersFeature('today_focus_reminder_moved_to_project');
+  } else if (item.sourceType === 'email') {
+    const pin = getTodayFocusView().focus.pinned.find((candidate) => candidate.sourceKey === item.sourceKey);
+    if (!pin) return false;
+    state.todayFocus = todayFocusFeature.withPinned(state.todayFocus, { ...pin, projectId: nextProjectId });
+    commitTodayFocus('today_focus_email_moved_to_project');
+  } else {
+    return false;
+  }
+  const projectName = state.projects.find((project) => project.id === nextProjectId)?.name || 'the selected project';
+  announceStatus(`Moved ${item.title} to ${projectName}.`, { key: `today-focus:${item.sourceKey}` });
+  return true;
+}
+
+function openTodayFocusSource(item){
+  if (!item) return false;
+  if (item.sourceType === 'task') {
+    tasksController.openEditDialog(item.sourceId);
+    return true;
+  }
+  if (item.sourceType === 'reminder') {
+    selectedCalendarDate = item.dueDate || todayFocusFeature.dateKey(new Date());
+    renderCalendar();
+    renderCalendarRemindersPanel();
+    document.querySelector('[data-pod-id="calendar"]')?.scrollIntoView({ behavior: 'auto', block: 'center' });
+    return true;
+  }
+  if (item.sourceType === 'email') {
+    const locator = item.sourceLocator || item.pin || {};
+    if (locator.accountId) setUnreadEmailActiveAccountId(locator.accountId);
+    if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload);
+    document.querySelector('[data-pod-id="unread-email"]')?.scrollIntoView({ behavior: 'auto', block: 'center' });
+    return true;
+  }
+  if (item.sourceType === 'integration') {
+    openSettingsPanel();
+    setActiveSettingsSection('integration-health');
+    return true;
+  }
+  return false;
+}
+
+function renderTodayFocus(){
+  const root = document.getElementById('todayFocusList');
+  const summary = document.getElementById('todayFocusSummary');
+  const pinSelect = document.getElementById('todayFocusPinTaskSelect');
+  const pinButton = document.getElementById('todayFocusPinTaskBtn');
+  if (!root || !summary || !pinSelect || !pinButton) return;
+
+  const view = getTodayFocusView();
+  const activeTasks = state.tasks
+    .filter((task) => task?.column !== 'done')
+    .slice()
+    .sort((left, right) => String(left?.title || '').localeCompare(String(right?.title || '')));
+  pinSelect.innerHTML = activeTasks.length
+    ? `<option value="">Choose a task…</option>${activeTasks.map((task) => `<option value="${escapeAttribute(task.id)}">${escapeHtml(task.title || 'Untitled task')}</option>`).join('')}`
+    : '<option value="">No active tasks to pin</option>';
+  pinButton.disabled = !activeTasks.length;
+  summary.textContent = view.primaryItems.length
+    ? `Showing ${view.primaryItems.length}${view.overflowCount ? ` of ${view.allItems.length}` : ''} primary items. Pinned items, failures, overdue tasks, due tasks, calendar reminders, then flagged email.`
+    : 'Nothing needs attention right now. Pin an active task to keep it visible here.';
+
+  if (!pinButton.dataset.todayFocusBound) {
+    pinButton.dataset.todayFocusBound = '1';
+    pinButton.addEventListener('click', () => {
+      const task = state.tasks.find((candidate) => candidate?.id === pinSelect.value);
+      if (!task) return;
+      pinTodayFocusItem({
+        sourceType: 'task',
+        sourceId: task.id,
+        sourceKey: todayFocusFeature.sourceKey('task', task.id),
+        title: task.title,
+        detail: task.nextAction,
+        projectId: task.projectId,
+        sortDate: task.updatedAt,
+      });
+    });
+  }
+
+  if (!view.primaryItems.length) {
+    root.innerHTML = '<div class="today-focus-empty"><strong>Clear runway.</strong><span>Due tasks, calendar reminders, flagged email, and integration exceptions will appear here when they need attention.</span></div>';
+    return;
+  }
+
+  const hasProjects = state.projects.some((project) => project?.status !== 'paused');
+  root.innerHTML = view.primaryItems.map((item) => {
+    const projectName = item.projectId
+      ? state.projects.find((project) => project.id === item.projectId)?.name || 'Unknown project'
+      : '';
+    const completeLabel = item.sourceType === 'email'
+      ? 'Mark read'
+      : item.sourceType === 'integration'
+        ? 'Dismiss'
+        : 'Done';
+    const canMove = hasProjects && ['task', 'reminder', 'email'].includes(item.sourceType);
+    return `
+      <article class="today-focus-item today-focus-item--${escapeAttribute(item.kind)}" data-today-focus-key="${escapeAttribute(item.sourceKey)}">
+        <div class="today-focus-item-copy">
+          <div class="today-focus-item-meta">
+            <span class="today-focus-kind">${escapeHtml(item.label)}</span>
+            ${item.pinned ? '<span class="today-focus-pin-badge">Pinned</span>' : ''}
+            ${projectName ? `<span>${escapeHtml(projectName)}</span>` : ''}
+          </div>
+          <strong>${escapeHtml(item.title)}</strong>
+          ${item.detail ? `<p>${escapeHtml(item.detail)}</p>` : ''}
+        </div>
+        <div class="today-focus-item-actions">
+          <button class="btn" type="button" data-today-focus-done="${escapeAttribute(item.sourceKey)}">${completeLabel}</button>
+          <button class="btn ghost" type="button" data-today-focus-snooze="${escapeAttribute(item.sourceKey)}">Snooze</button>
+          <button class="btn ghost" type="button" data-today-focus-open="${escapeAttribute(item.sourceKey)}">Open source</button>
+          <button class="btn ghost" type="button" data-today-focus-pin="${escapeAttribute(item.sourceKey)}">${item.pinned ? 'Unpin' : 'Pin'}</button>
+          ${canMove ? `
+            <div class="today-focus-project-move">
+              <select data-today-focus-project aria-label="Move ${escapeAttribute(item.title)} to project">${todayFocusProjectOptions(item.projectId)}</select>
+              <button class="btn ghost" type="button" data-today-focus-move="${escapeAttribute(item.sourceKey)}">Move</button>
+            </div>
+          ` : ''}
+        </div>
+      </article>
+    `;
+  }).join('');
+
+  const getItem = (source) => view.primaryItems.find((item) => item.sourceKey === String(source || '').trim());
+  root.querySelectorAll('[data-today-focus-done]').forEach((button) => {
+    button.addEventListener('click', async () => { await completeTodayFocusItem(getItem(button.dataset.todayFocusDone)); });
+  });
+  root.querySelectorAll('[data-today-focus-snooze]').forEach((button) => {
+    button.addEventListener('click', () => { snoozeTodayFocusItem(getItem(button.dataset.todayFocusSnooze)); });
+  });
+  root.querySelectorAll('[data-today-focus-open]').forEach((button) => {
+    button.addEventListener('click', () => { openTodayFocusSource(getItem(button.dataset.todayFocusOpen)); });
+  });
+  root.querySelectorAll('[data-today-focus-pin]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const item = getItem(button.dataset.todayFocusPin);
+      if (!item) return;
+      if (item.pinned) unpinTodayFocusItem(item);
+      else pinTodayFocusItem(item);
+    });
+  });
+  root.querySelectorAll('[data-today-focus-move]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const item = getItem(button.dataset.todayFocusMove);
+      const projectId = button.closest('[data-today-focus-key]')?.querySelector('[data-today-focus-project]')?.value;
+      moveTodayFocusItemToProject(item, projectId);
+    });
+  });
+}
+
 function renderThemeChoices(){
   return themeController.renderChoices();
 }
@@ -2824,6 +3114,7 @@ function setPodStatusSignal(podId, status = 'neutral', detail = ''){
   const allowed = new Set(['neutral', 'fresh', 'stale', 'degraded', 'error']);
   const mode = allowed.has(normalized) ? normalized : 'neutral';
   recordIntegrationHealthSignal(podId, mode, detail);
+  renderTodayFocus();
   const el = document.getElementById(`${podId}StatusSignal`);
   if (!el) return;
   const labelMap = {
@@ -5990,6 +6281,43 @@ function getUnreadEmailFilteredEntrySets(activeAccount = null, accountId = ''){
   };
 }
 
+function unreadEmailFocusSourceId(accountId = '', mailbox = '', uid = ''){
+  return createUnreadEmailMessageKey(accountId, mailbox, uid);
+}
+
+function isUnreadEmailFocusFlagged(accountId = '', mailbox = '', uid = ''){
+  const sourceId = unreadEmailFocusSourceId(accountId, mailbox, uid);
+  const key = todayFocusFeature.sourceKey('email', sourceId);
+  return !!key && state.todayFocus.pinned.some((pin) => pin.sourceKey === key);
+}
+
+function toggleUnreadEmailFocusFlag({ accountId = '', mailbox = '', uid = '', title = '', counterparty = '', issuedAt = '' } = {}){
+  const sourceId = unreadEmailFocusSourceId(accountId, mailbox, uid);
+  const key = todayFocusFeature.sourceKey('email', sourceId);
+  if (!sourceId || !key) return false;
+  const current = state.todayFocus.pinned.find((pin) => pin.sourceKey === key);
+  if (current) {
+    state.todayFocus = todayFocusFeature.withoutPinned(state.todayFocus, key);
+    commitTodayFocus('unread_email_focus_unflagged');
+    announceStatus(`Removed ${title || 'email'} from Today / Focus.`, { key: `today-focus:${key}` });
+    return false;
+  }
+  state.todayFocus = todayFocusFeature.withPinned(state.todayFocus, {
+    sourceType: 'email',
+    sourceId,
+    title,
+    detail: counterparty ? `From ${counterparty}` : 'Open the email source to review it.',
+    accountId,
+    mailbox,
+    uid,
+    issuedAt,
+    createdAt: now(),
+  });
+  commitTodayFocus('unread_email_focus_flagged');
+  announceStatus(`Added ${title || 'email'} to Today / Focus.`, { key: `today-focus:${key}` });
+  return true;
+}
+
 function renderUnreadEmailBlockedSenderPanel(activeAccountId = '', blockedSenderList = []){
   const list = Array.isArray(blockedSenderList) ? blockedSenderList.slice().sort((a, b) => String(a || '').localeCompare(String(b || ''))) : [];
   if (!list.length) return '';
@@ -6115,7 +6443,7 @@ async function handleUnreadEmailMarkReadAction({ accountId = '', mailbox = '', u
   const normalizedAccountId = String(accountId || '').trim();
   const normalizedMailbox = String(mailbox || '').trim();
   const normalizedUid = String(uid || '').trim();
-  if (!normalizedAccountId || !normalizedMailbox || !normalizedUid) return;
+  if (!normalizedAccountId || !normalizedMailbox || !normalizedUid) return false;
 
   unreadEmailMarkReadInFlight = unreadEmailDeleteKey(normalizedAccountId, normalizedMailbox, normalizedUid);
   if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
@@ -6131,11 +6459,13 @@ async function handleUnreadEmailMarkReadAction({ accountId = '', mailbox = '', u
     unreadEmailMarkReadInFlight = '';
     updateUnreadEmailRefreshButton();
     await renderUnreadEmailPod({ manual: true });
+    return true;
   } catch (error) {
     unreadEmailMarkReadInFlight = '';
     if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, renderOptions);
     updateUnreadEmailRefreshButton();
     window.alert(String(error?.message || 'Unable to mark this email as read.'));
+    return false;
   }
 }
 
@@ -6536,6 +6866,8 @@ function renderUnreadEmailMessageCard({
   const canMarkRead = direction === 'received' && !!deleteItem && showActions;
   const canSpam = direction === 'received' && !!deleteItem && showActions;
   const canBlockSender = direction === 'received' && !!deleteItem && showActions && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(senderEmailRaw);
+  const canFocus = direction === 'received' && !!messageKey && showActions;
+  const isFocused = canFocus && isUnreadEmailFocusFlagged(activeAccountId, entry?.mailbox, entry?.uid);
   const isMarkingRead = deleteKey && unreadEmailMarkReadInFlight === deleteKey;
   const isSpamming = deleteKey && unreadEmailSpamInFlight === deleteKey;
   const isDeleting = deleteKey && unreadEmailDeleteInFlight === deleteKey;
@@ -6603,6 +6935,20 @@ function renderUnreadEmailMessageCard({
                 data-unread-email-uid="${escapeHtml(String(deleteItem.uid || ''))}"
                 ${anyActionInFlight ? 'disabled' : ''}
               >${markReadLabel}</button>
+            ` : ''}
+            ${canFocus ? `
+              <button
+                class="btn ghost unread-email-focus-btn"
+                type="button"
+                data-unread-email-focus="1"
+                data-unread-email-account-id="${escapeHtml(activeAccountId)}"
+                data-unread-email-mailbox="${escapeHtml(String(entry?.mailbox || ''))}"
+                data-unread-email-uid="${escapeHtml(String(entry?.uid || ''))}"
+                data-unread-email-title="${escapeHtml(String(entry?.title || 'Untitled message'))}"
+                data-unread-email-counterparty="${escapeHtml(String(entry?.counterpartyName || entry?.counterpartyEmail || ''))}"
+                data-unread-email-issued-at="${escapeHtml(String(entry?.issuedAt || ''))}"
+                ${anyActionInFlight ? 'disabled' : ''}
+              >${isFocused ? 'Unfocus' : 'Focus'}</button>
             ` : ''}
             ${canSpam ? `
               <button
@@ -6732,6 +7078,21 @@ function bindUnreadEmailWidgetInteractions({
         mailbox: button.getAttribute('data-unread-email-mailbox') || '',
         uid: button.getAttribute('data-unread-email-uid') || '',
       }, options);
+    });
+  });
+
+  el.querySelectorAll('[data-unread-email-focus]').forEach((button) => {
+    button.addEventListener('click', () => {
+      if (button.disabled) return;
+      toggleUnreadEmailFocusFlag({
+        accountId: button.getAttribute('data-unread-email-account-id') || '',
+        mailbox: button.getAttribute('data-unread-email-mailbox') || '',
+        uid: button.getAttribute('data-unread-email-uid') || '',
+        title: button.getAttribute('data-unread-email-title') || '',
+        counterparty: button.getAttribute('data-unread-email-counterparty') || '',
+        issuedAt: button.getAttribute('data-unread-email-issued-at') || '',
+      });
+      if (unreadEmailLastPayload) renderUnreadEmailWidget(unreadEmailLastPayload, options);
     });
   });
 
@@ -11026,6 +11387,7 @@ function renderAll(){
   renderUnreadEmailWithLifecycle();
   renderCalendarRemindersPanel();
   renderTodayReminders();
+  renderTodayFocus();
   renderSettings();
   renderProjects();
   renderStats();
@@ -11070,6 +11432,9 @@ dashboardActionStore.subscribeAll((record) => {
       renderPodVisibilitySettings();
     });
     syncDashboardScheduling();
+  }
+  if (changed.has('tasks') || changed.has('reminders') || changed.has('calendar') || changed.has('projects') || changed.has('today-focus')) {
+    renderTodayFocus();
   }
   if (changed.has('tasks') || changed.has('notes') || changed.has('projects')) renderStats();
 });
