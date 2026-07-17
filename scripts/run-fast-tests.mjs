@@ -10,7 +10,7 @@ async function findTests(dir) {
   const nested = await Promise.all(entries.map(async (entry) => {
     const file = path.join(dir, entry.name);
     if (entry.isDirectory()) return findTests(file);
-    return entry.name.endsWith('.test.mjs') && entry.name !== 'dashboard-smoke.test.mjs' ? [file] : [];
+    return entry.name.endsWith('.test.mjs') && !['dashboard-smoke.test.mjs', 'accessibility-smoke.test.mjs'].includes(entry.name) ? [file] : [];
   }));
   return nested.flat();
 }

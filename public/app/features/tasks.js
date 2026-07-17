@@ -114,7 +114,7 @@
       return `<div class="task" draggable="true" data-id="${escapeAttribute(task.id)}">
         <div class="task-top-row">
           <strong>${escapeHtml(task.title)}</strong>
-          <button type="button" class="btn ghost task-edit-btn" data-id="${escapeAttribute(task.id)}" draggable="false">Edit</button>
+          <button type="button" class="btn ghost task-edit-btn" data-id="${escapeAttribute(task.id)}" draggable="false" aria-label="Edit task: ${escapeAttribute(task.title)}">Edit</button>
         </div>
         <div class="task-next-action md-preview">${renderFormattedText(task.nextAction || '')}</div>
         <small>Owner: ${escapeHtml(task.owner || 'Rowan')}</small>

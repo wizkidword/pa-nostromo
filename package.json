@@ -15,6 +15,7 @@
     "test:coverage": "c8 --all --reporter=text --reporter=json --include=lib/**/*.js --include=public/app/core/**/*.js node scripts/run-fast-tests.mjs",
     "audit:dependencies": "npm audit --audit-level=high",
     "test:e2e": "node tests/dashboard-smoke.test.mjs",
+    "test:a11y": "node tests/accessibility-smoke.test.mjs",
     "qa:reset-state": "node scripts/qa-reset-state.mjs --yes",
     "qa:smoke:1d1": "node scripts/qa-smoke-phase-1d-1.mjs",
     "qa:smoke:1e1": "node scripts/qa-phase1e-1-fix-pass.mjs",

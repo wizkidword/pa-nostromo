@@ -78,16 +78,29 @@ try {
       return { status: response.status, body: await response.json() };
     };
 
-    const before = await read();
-    let revision = Number(before.body?.__integrity?.revision);
-    if (!Number.isSafeInteger(revision) || revision < 0) revision = undefined;
-    const created = await write({ tasks: [{ id: 'smoke-task', title: 'Created by smoke test', column: 'inbox' }] }, revision);
+    const writeWithCurrentRevision = async (tasks) => {
+      let result = { status: 428, body: null };
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const current = await read();
+        let revision = Number(current.body?.__integrity?.revision);
+        if (current.status !== 200 || !Number.isSafeInteger(revision) || revision < 0) {
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          continue;
+        }
+        const payload = { ...current.body, tasks };
+        delete payload.__integrity;
+        result = await write(payload, revision);
+        if (result.status !== 409) return result;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+      return result;
+    };
+
+    const created = await writeWithCurrentRevision([{ id: 'smoke-task', title: 'Created by smoke test', column: 'inbox' }]);
     const afterCreate = await read();
-    revision = created.body?.revision;
-    const updated = await write({ tasks: [{ id: 'smoke-task', title: 'Updated by smoke test', column: 'inbox' }] }, revision);
+    const updated = await writeWithCurrentRevision([{ id: 'smoke-task', title: 'Updated by smoke test', column: 'inbox' }]);
     const afterUpdate = await read();
-    revision = updated.body?.revision;
-    const removed = await write({ tasks: [] }, revision);
+    const removed = await writeWithCurrentRevision([]);
     const afterRemove = await read();
     return { created, afterCreate, updated, afterUpdate, removed, afterRemove };
   });

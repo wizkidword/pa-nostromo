@@ -672,6 +672,60 @@ function commitLayoutFeature(reason = 'updated'){
   return persistFeatureAction('layout', reason, { changedAreas: ['layout'] });
 }
 
+function captureFocusState(){
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || active === document.body) return null;
+  const snapshot = {
+    id: active.id || '',
+    selectionStart: typeof active.selectionStart === 'number' ? active.selectionStart : null,
+    selectionEnd: typeof active.selectionEnd === 'number' ? active.selectionEnd : null,
+  };
+  const noteCard = active.closest?.('[data-note-id]');
+  if (noteCard && active.dataset?.field) {
+    snapshot.noteId = String(noteCard.dataset.noteId || '');
+    snapshot.field = String(active.dataset.field || '');
+  }
+  const taskButton = active.matches?.('.task-edit-btn[data-id]') ? active : null;
+  if (taskButton) snapshot.taskId = String(taskButton.dataset.id || '');
+  const podMove = active.matches?.('[data-focus-pod-id][data-pod-move]') ? active : null;
+  if (podMove) {
+    snapshot.podId = String(podMove.dataset.focusPodId || '');
+    snapshot.direction = String(podMove.dataset.podMove || '');
+  }
+  return snapshot;
+}
+
+function restoreFocusState(snapshot){
+  if (!snapshot) return;
+  window.requestAnimationFrame(() => {
+    let target = snapshot.id ? document.getElementById(snapshot.id) : null;
+    if (!target && snapshot.noteId && snapshot.field) {
+      target = [...document.querySelectorAll('[data-note-id] [data-field]')]
+        .find((element) => element.closest('[data-note-id]')?.dataset.noteId === snapshot.noteId && element.dataset.field === snapshot.field) || null;
+    }
+    if (!target && snapshot.taskId) {
+      target = [...document.querySelectorAll('.task-edit-btn[data-id]')]
+        .find((element) => element.dataset.id === snapshot.taskId) || null;
+    }
+    if (!target && snapshot.podId && snapshot.direction) {
+      target = [...document.querySelectorAll('[data-focus-pod-id][data-pod-move]')]
+        .find((element) => element.dataset.focusPodId === snapshot.podId && element.dataset.podMove === snapshot.direction) || null;
+    }
+    if (!(target instanceof HTMLElement) || target.matches(':disabled, [aria-hidden="true"]')) return;
+    target.focus({ preventScroll: true });
+    if (snapshot.selectionStart != null && typeof target.setSelectionRange === 'function') {
+      try { target.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd ?? snapshot.selectionStart); } catch {}
+    }
+  });
+}
+
+function renderWithPreservedFocus(render){
+  const snapshot = captureFocusState();
+  const result = render();
+  restoreFocusState(snapshot);
+  return result;
+}
+
 const themeController = themeFeature.createThemeController({
   document,
   window,
@@ -2638,8 +2692,13 @@ function setPodStatusSignal(podId, status = 'neutral', detail = ''){
   };
 
   const message = detail ? `${labelMap[mode]} · ${detail}` : labelMap[mode];
+  const previousMessage = el.dataset.statusMessage || '';
   el.className = `badge pod-signal pod-signal-${mode}`;
   el.setAttribute('aria-label', message);
+  el.setAttribute('role', 'status');
+  el.setAttribute('aria-live', 'polite');
+  el.setAttribute('aria-atomic', 'true');
+  el.dataset.statusMessage = message;
 
   const nodes = [];
   const icon = iconMap[mode];
@@ -2657,6 +2716,19 @@ function setPodStatusSignal(podId, status = 'neutral', detail = ''){
   nodes.push(labelEl);
 
   el.replaceChildren(...nodes);
+  if (previousMessage !== message && ['stale', 'degraded', 'error'].includes(mode)) {
+    announceStatus(`${getUtilityPodTitle(podId)}: ${message}`, { key: `pod:${podId}` });
+  }
+}
+
+const announcedStatusMessages = new Map();
+
+function announceStatus(message, { key = message } = {}){
+  const text = String(message || '').trim();
+  if (!text || announcedStatusMessages.get(key) === text) return;
+  announcedStatusMessages.set(key, text);
+  const element = document.getElementById('appAnnouncements');
+  if (element) element.textContent = text;
 }
 
 function formatLastSuccessMeta(lastSuccessAt, provider){
@@ -7107,7 +7179,12 @@ function syncMusicUiStatus(statusText = ''){
 
 function setMusicStatus(text){
   const el = document.getElementById('musicPlayerStatus');
-  if (el) el.textContent = text;
+  if (el) {
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.setAttribute('aria-atomic', 'true');
+    el.textContent = text;
+  }
   syncMusicUiStatus(text);
 }
 
@@ -7510,7 +7587,7 @@ function renderMusicPlayer(){
             <span class="music-player-kicker">Stream Deck</span>
             <strong>Streams, favorites, and local files</strong>
           </div>
-          <input id="musicStreamUrlInput" data-music-role="stream-input" placeholder="YouTube/live stream URL" value="${streamVal}" />
+          <input id="musicStreamUrlInput" data-music-role="stream-input" aria-label="Music stream URL" placeholder="YouTube/live stream URL" value="${streamVal}" />
           <div class="music-player-action-row">
             <button id="musicLoadStreamBtn" data-music-role="load-stream" class="btn">Load Stream</button>
             <button id="musicSaveFavoriteBtn" data-music-role="save-favorite" class="btn ghost">Save Favorite</button>
@@ -7817,7 +7894,12 @@ function syncCameraFeedUiStatus(statusText = ''){
 
 function setCameraFeedStatus(text){
   const el = document.getElementById('cameraFeedStatus');
-  if (el) el.textContent = text;
+  if (el) {
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.setAttribute('aria-atomic', 'true');
+    el.textContent = text;
+  }
   syncCameraFeedUiStatus(text);
 }
 
@@ -8153,7 +8235,7 @@ function renderCameraFeedPod(){
             <span class="camera-feed-panel-kicker">Source</span>
             <strong>${escapeHtml(cameraUi.sourceHeadline)}</strong>
           </div>
-          <input data-camera-role="url" placeholder="Camera URL (http/https)" value="${escapeHtml(state.cameraFeed.sourceUrl || '')}" ${urlDisabled ? 'disabled' : ''} />
+          <input data-camera-role="url" aria-label="Camera stream URL" placeholder="Camera URL (http/https)" value="${escapeHtml(state.cameraFeed.sourceUrl || '')}" ${urlDisabled ? 'disabled' : ''} />
           <div class="camera-feed-panel-note">${escapeHtml(cameraUi.sourceHint)}</div>
         </div>
 
@@ -8736,7 +8818,12 @@ function buildLiveStreamTarget(){
 
 function setLiveStreamsStatus(text){
   const el = document.getElementById('liveStreamsStatus');
-  if (el) el.textContent = text;
+  if (el) {
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.setAttribute('aria-atomic', 'true');
+    el.textContent = text;
+  }
   syncLiveStreamsUiStatus(text);
 }
 
@@ -9247,7 +9334,7 @@ function renderVoiceDeskPod(){
         <span class="voice-desk-pill">${voiceToRowanSupported ? 'Speech to draft' : 'Browser unsupported'}</span>
       </div>
       <div class="voice-desk-meta">${voiceToRowanSupported ? 'Capture once, then choose where the transcript should go.' : 'Voice transcription is not supported in this browser.'}</div>
-      <textarea id="voiceDeskTranscript" data-voice-desk-role="transcript" class="voice-desk-transcript" rows="5" placeholder="Transcript draft... edit before saving as a note or sending to Rowan.">${escapeHtml(voiceToRowanDraft)}</textarea>
+      <textarea id="voiceDeskTranscript" data-voice-desk-role="transcript" aria-label="Voice transcript draft" class="voice-desk-transcript" rows="5" placeholder="Transcript draft... edit before saving as a note or sending to Rowan.">${escapeHtml(voiceToRowanDraft)}</textarea>
       <div class="voice-desk-actions">
         <button data-voice-desk-role="save-note" class="btn ghost" ${hasDraft ? '' : 'disabled'}>Save as Note</button>
         <button data-voice-desk-role="send-rowan" class="btn" ${hasDraft ? '' : 'disabled'}>Send to Rowan</button>
@@ -10508,8 +10595,8 @@ function renderPodVisibilitySettings(){
             <div class="pod-toggle-meta">${escapeHtml(podId)} · Row ${rowIndex + 1}</div>
           </label>
           <div class="pod-toggle-actions">
-            <button type="button" class="btn ghost" data-pod-move="up" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" ${upDisabled}>↑</button>
-            <button type="button" class="btn ghost" data-pod-move="down" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" ${downDisabled}>↓</button>
+            <button type="button" class="btn ghost" data-pod-move="up" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" data-focus-pod-id="${escapeHtml(podId)}" aria-label="Move ${escapeHtml(getUtilityPodTitle(podId))} up in Utility Row ${rowIndex + 1}" title="Move up" ${upDisabled}>↑</button>
+            <button type="button" class="btn ghost" data-pod-move="down" data-pod-row="${rowIndex}" data-pod-index="${podIndex}" data-focus-pod-id="${escapeHtml(podId)}" aria-label="Move ${escapeHtml(getUtilityPodTitle(podId))} down in Utility Row ${rowIndex + 1}" title="Move down" ${downDisabled}>↓</button>
           </div>
         </div>
       `;
@@ -10811,24 +10898,28 @@ dashboardActionStore.subscribeAll((record) => {
   const changed = new Set(record.changedAreas);
   let notesRendered = false;
   if (changed.has('projects')) {
-    renderProjects();
-    populateProjectSelect();
-    renderNotes();
+    renderWithPreservedFocus(() => {
+      renderProjects();
+      populateProjectSelect();
+      renderNotes();
+    });
     notesRendered = true;
     renderShortcutsPod();
     renderShortcutsSettings();
   }
-  if (changed.has('tasks')) renderBoard();
-  if (changed.has('notes') && !notesRendered) renderNotes();
+  if (changed.has('tasks')) renderWithPreservedFocus(renderBoard);
+  if (changed.has('notes') && !notesRendered) renderWithPreservedFocus(renderNotes);
   if (changed.has('reminders') || changed.has('calendar')) {
     renderPodWithFallback('calendar', renderCalendar);
     renderCalendarRemindersPanel();
     renderTodayReminders();
   }
-  if (changed.has('settings')) renderSettings();
+  if (changed.has('settings')) renderWithPreservedFocus(renderSettings);
   if (changed.has('layout')) {
-    applyUtilityLayoutToDom();
-    renderPodVisibilitySettings();
+    renderWithPreservedFocus(() => {
+      applyUtilityLayoutToDom();
+      renderPodVisibilitySettings();
+    });
     syncDashboardScheduling();
   }
   if (changed.has('tasks') || changed.has('notes') || changed.has('projects')) renderStats();
@@ -10935,7 +11026,7 @@ function markdownToolbarButtons(){
     ['bullet', '• List', 'Bullet list'],
     ['numbered', '1. List', 'Numbered list'],
     ['clear', 'Clear', 'Clear formatting'],
-  ].map(([key, label, title]) => `<button type="button" class="btn ghost md-btn" data-md-format="${key}" title="${title}">${label}</button>`).join('');
+  ].map(([key, label, title]) => `<button type="button" class="btn ghost md-btn" data-md-format="${key}" title="${title}" aria-label="${title}">${label}</button>`).join('');
 }
 
 function applyWrapFormat(value, start, end, marker){
@@ -11124,15 +11215,59 @@ tasksController.bind();
 shortcutsController.bind();
 
 const settingsPanel = document.getElementById('settingsPanel');
-document.getElementById('openSettingsBtn')?.addEventListener('click', ()=> {
+let settingsFocusReturnTarget = null;
+
+function getSettingsFocusableElements(){
+  if (!settingsPanel) return [];
+  return [...settingsPanel.querySelectorAll('a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')]
+    .filter((element) => !element.closest('[hidden], [aria-hidden="true"]'));
+}
+
+function openSettingsPanel(){
+  if (!settingsPanel) return;
+  settingsFocusReturnTarget = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  settingsPanel.inert = false;
   settingsPanel?.classList.add('open');
   settingsPanel?.setAttribute('aria-hidden','false');
   setActiveSettingsSection(activeSettingsSection, { preserveScroll: true });
   refreshStateSafetyBackups(true);
-});
-document.getElementById('closeSettingsBtn')?.addEventListener('click', ()=> {
+  const [first] = getSettingsFocusableElements();
+  (first || settingsPanel).focus({ preventScroll: true });
+}
+
+function closeSettingsPanel(){
+  if (!settingsPanel) return;
   settingsPanel?.classList.remove('open');
   settingsPanel?.setAttribute('aria-hidden','true');
+  settingsPanel.inert = true;
+  if (settingsFocusReturnTarget?.isConnected) settingsFocusReturnTarget.focus({ preventScroll: true });
+  settingsFocusReturnTarget = null;
+}
+
+document.getElementById('openSettingsBtn')?.addEventListener('click', openSettingsPanel);
+document.getElementById('closeSettingsBtn')?.addEventListener('click', closeSettingsPanel);
+document.addEventListener('keydown', (event) => {
+  if (!settingsPanel?.classList.contains('open')) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeSettingsPanel();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const focusable = getSettingsFocusableElements();
+  if (!focusable.length) {
+    event.preventDefault();
+    settingsPanel.focus({ preventScroll: true });
+    return;
+  }
+  const currentIndex = focusable.indexOf(document.activeElement);
+  const nextIndex = event.shiftKey
+    ? (currentIndex <= 0 ? focusable.length - 1 : currentIndex - 1)
+    : (currentIndex === focusable.length - 1 ? 0 : currentIndex + 1);
+  if (currentIndex === -1 || nextIndex === 0 || nextIndex === focusable.length - 1) {
+    event.preventDefault();
+    focusable[nextIndex].focus({ preventScroll: true });
+  }
 });
 
 document.getElementById('settingTheme')?.addEventListener('change', (e)=> {
@@ -11182,6 +11317,8 @@ document.getElementById('settingsPodVisibilityList')?.addEventListener('click', 
   const direction = String(btn.dataset.podMove || '');
   if (!Number.isInteger(rowIndex) || !Number.isInteger(podIndex)) return;
   if (!movePodWithinRow(rowIndex, podIndex, direction)) return;
+  const podId = String(btn.dataset.focusPodId || 'pod').trim();
+  announceStatus(`Moved ${getUtilityPodTitle(podId)} ${direction === 'up' ? 'up' : 'down'} in its utility row.`, { key: `layout:${podId}` });
   commitLayoutFeature('pod_layout_reordered');
 });
 
@@ -11779,7 +11916,17 @@ function registerDashboardSchedulerJobs(){
 }
 
 function refreshScheduledPod(podId){
-  return dashboardScheduler.refresh(podId, { manual: true, reason: 'manual_refresh' }).catch(() => null);
+  const label = getUtilityPodTitle(podId);
+  announceStatus(`Refreshing ${label}.`, { key: `refresh:${podId}` });
+  return dashboardScheduler.refresh(podId, { manual: true, reason: 'manual_refresh' })
+    .then((result) => {
+      if (result?.ok) announceStatus(`${label} refreshed.`, { key: `refresh:${podId}` });
+      return result;
+    })
+    .catch((error) => {
+      announceStatus(`${label} refresh failed: ${String(error?.message || error || 'unknown error')}.`, { key: `refresh:${podId}` });
+      return null;
+    });
 }
 
 function syncDashboardScheduling(){

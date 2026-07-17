@@ -100,7 +100,10 @@
     frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-presentation');
     frame.setAttribute('allow', 'autoplay; fullscreen');
     frame.setAttribute('referrerpolicy', 'no-referrer');
-    frame.src = url || 'about:blank';
+    const nextSource = url || 'about:blank';
+    // This helper is also used from the active URL MutationObserver. Avoid
+    // emitting another src mutation when the sanitized value is unchanged.
+    if (frame.getAttribute('src') !== nextSource) frame.setAttribute('src', nextSource);
     return Boolean(url);
   }
 
@@ -134,7 +137,10 @@
       if (!url) {
         element.removeAttribute('href');
       } else {
-        element.href = url;
+        // Setting the href property writes an attribute mutation even when the
+        // destination is already safe. Only update it when normalization made
+        // a material change so observer processing always settles.
+        if (element.getAttribute('href') !== url) element.setAttribute('href', url);
         if (element.target === '_blank') element.rel = 'noopener noreferrer';
       }
     }

@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <a class="skip-link" href="#dashboardMain">Skip to dashboard</a>
   <header class="topbar">
     <div>
       <h1>🚀 PA Nostromo</h1>
@@ -32,9 +33,9 @@
     </div>
   </header>
 
-  <aside id="settingsPanel" class="settings-panel" aria-hidden="true">
+  <aside id="settingsPanel" class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settingsPanelTitle" aria-hidden="true" tabindex="-1" inert>
     <div class="settings-head">
-      <h2>Settings</h2>
+      <h2 id="settingsPanelTitle">Settings</h2>
       <button id="closeSettingsBtn" class="btn ghost">Close</button>
     </div>
 
@@ -102,8 +103,8 @@
               </select>
             </label>
             <div class="row-wrap">
-              <input id="rssFeedUrlInput" placeholder="https://example.com/feed.xml" />
-              <input id="rssFeedTagInput" placeholder="Tag (optional)" class="w-130" />
+              <input id="rssFeedUrlInput" aria-label="RSS feed URL" placeholder="https://example.com/feed.xml" />
+              <input id="rssFeedTagInput" aria-label="RSS feed tag" placeholder="Tag (optional)" class="w-130" />
               <button id="addRssFeedBtn" class="btn">+ Add Feed</button>
             </div>
             <div id="settingsRssFeedsList" class="change-log-list"></div>
@@ -154,6 +155,7 @@
     </div>
   </aside>
 
+  <main id="dashboardMain" tabindex="-1">
   <section id="utilityPodsLayout" class="utils-layout">
     <div class="utils-row" data-layout-row="utility-row-1">
       <div class="card utility-card utility-card-full utility-card-shortcuts" data-pod-id="shortcuts">
@@ -180,7 +182,7 @@
               </div>
             </div>
             <div class="date-time-timer-controls">
-              <input id="alarmMinutes" type="number" min="1" step="1" placeholder="Minutes" class="w-110 date-time-minutes-input" />
+              <input id="alarmMinutes" type="number" min="1" step="1" aria-label="Timer minutes" placeholder="Minutes" class="w-110 date-time-minutes-input" />
               <button id="startAlarmBtn" class="btn">Start Timer</button>
               <button id="cancelAlarmBtn" class="btn ghost">Cancel</button>
             </div>
@@ -206,8 +208,8 @@
         <div class="calendar-agenda-panel mt10">
           <div id="calendarSelectedDate" class="calendar-selected-date"></div>
           <div class="calendar-compose-row mt8">
-            <input id="calendarReminderText" placeholder="Reminder..." class="calendar-reminder-input" />
-            <input id="calendarReminderTime" type="time" class="w-130 calendar-reminder-time-input" />
+              <input id="calendarReminderText" aria-label="Reminder text" placeholder="Reminder..." class="calendar-reminder-input" />
+              <input id="calendarReminderTime" type="time" aria-label="Reminder time" class="w-130 calendar-reminder-time-input" />
             <button id="addCalendarReminderBtn" class="btn">+ Add</button>
           </div>
           <div id="calendarDayReminders" class="calendar-reminder-list mt8"></div>
@@ -218,16 +220,16 @@
           <h2>⛽ Gas Price Tracker <span id="gas-pricesStatusSignal" class="badge pod-signal pod-signal-neutral">Ready</span></h2>
         </div>
         <div class="row-wrap mt6">
-          <input id="gasLocationInput" placeholder="ZIP or City, ST" class="w-130" />
+          <input id="gasLocationInput" aria-label="Gas price location" placeholder="ZIP or City, ST" class="w-130" />
           <button id="gasFetchBtn" class="btn ghost">Auto Fetch</button>
         </div>
         <div id="gasPricesWidget" class="widget-block mt8">Enter a location and fetch gas prices, or save manual values.</div>
         <div id="gasPricesMeta" class="note-meta mt6"></div>
         <div class="row-wrap mt8">
-          <input id="gasManualRegular" placeholder="Regular" class="w-110" />
-          <input id="gasManualMid" placeholder="Mid" class="w-110" />
-          <input id="gasManualPremium" placeholder="Premium" class="w-110" />
-          <input id="gasManualDiesel" placeholder="Diesel" class="w-110" />
+          <input id="gasManualRegular" aria-label="Manual regular gas price" placeholder="Regular" class="w-110" />
+          <input id="gasManualMid" aria-label="Manual mid-grade gas price" placeholder="Mid" class="w-110" />
+          <input id="gasManualPremium" aria-label="Manual premium gas price" placeholder="Premium" class="w-110" />
+          <input id="gasManualDiesel" aria-label="Manual diesel gas price" placeholder="Diesel" class="w-110" />
           <button id="gasManualSaveBtn" class="btn">Save Manual</button>
         </div>
       </div>
@@ -362,8 +364,8 @@
     <div class="row-between-wrap gap10">
       <h2>Ideas</h2>
       <div class="row-wrap">
-        <input id="notesSearch" placeholder="Search notes..." class="minw-220" />
-        <select id="notesFilter">
+        <input id="notesSearch" aria-label="Search notes" placeholder="Search notes..." class="minw-220" />
+        <select id="notesFilter" aria-label="Filter notes">
           <option value="all">All</option>
           <option value="pinned">Pinned</option>
           <option value="today">Today</option>
@@ -381,9 +383,12 @@
 
   <section class="stats" id="stats"></section>
 
-  <section class="board" id="board"></section>
+  <section class="board" id="board" aria-label="Task board"></section>
+  </main>
 
-  <dialog id="socialAnalyticsDialog">
+  <div id="appAnnouncements" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <dialog id="socialAnalyticsDialog" aria-labelledby="socialAnalyticsDialogTitle">
     <form method="dialog" class="social-analytics-dialog-form">
       <div class="social-analytics-dialog-head">
         <div class="social-analytics-dialog-copy">
@@ -400,9 +405,9 @@
     </form>
   </dialog>
 
-  <dialog id="projectDialog">
+  <dialog id="projectDialog" aria-labelledby="projectDialogTitle">
     <form method="dialog" id="projectForm">
-      <h3>New Project</h3>
+      <h3 id="projectDialogTitle">New Project</h3>
       <label>Name <input name="name" required /></label>
       <label>Summary <input name="summary" required /></label>
       <label>Status
@@ -421,9 +426,9 @@
     </form>
   </dialog>
 
-  <dialog id="taskDialog">
+  <dialog id="taskDialog" aria-labelledby="taskDialogTitle">
     <form method="dialog" id="taskForm">
-      <h3>New Task</h3>
+      <h3 id="taskDialogTitle">New Task</h3>
       <label>Title <input name="title" required /></label>
       <label>Project
         <select name="projectId" id="taskProject"></select>
@@ -456,9 +461,9 @@
   </dialog>
 
 
-  <dialog id="editTaskDialog">
+  <dialog id="editTaskDialog" aria-labelledby="editTaskDialogTitle">
     <form method="dialog" id="editTaskForm">
-      <h3>Edit Task</h3>
+      <h3 id="editTaskDialogTitle">Edit Task</h3>
       <input type="hidden" name="id" />
       <label>Title <input name="title" required /></label>
       <label>Project
@@ -484,7 +489,7 @@
       <label>Owner <input name="owner" value="Rowan" /></label>
       <label>Next Action
         <div class="md-toolbar" id="editTaskToolbar"></div>
-        <textarea name="nextAction" id="editTaskNextAction" rows="4" required></textarea>
+        <textarea name="nextAction" id="editTaskNextAction" aria-label="Next Action" rows="4" required></textarea>
         <div class="md-preview" id="editTaskNextActionPreview"></div>
       </label>
       <label>Due Date <input name="dueDate" type="date" /></label>
@@ -496,7 +501,7 @@
     </form>
   </dialog>
 
-  <dialog id="shortcutDialog">
+  <dialog id="shortcutDialog" aria-labelledby="shortcutDialogTitle">
     <form method="dialog" id="shortcutForm">
       <h3 id="shortcutDialogTitle">New Shortcut</h3>
       <input type="hidden" name="id" />
