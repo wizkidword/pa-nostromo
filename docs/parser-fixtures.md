@@ -12,6 +12,7 @@ production URLs, imported user data, or full copies of third-party pages.
 | AAA gas prices | `aaa-gas-v1` | `tests/fixtures/parsers/aaa-current-avg-valid.html` | `aaa-current-avg-missing-column.html` |
 | Public social follower profiles | `social-followers-v2` | `social-{facebook,instagram,tiktok,youtube}-valid.html` | `social-follower-signal-missing.html` |
 | eBay analytics traffic | `ebay-analytics-v2` | `ebay-traffic-valid.json` | `ebay-traffic-missing-required-metric.json` |
+| ESPN NBA scoreboard | `espn-nba-scoreboard-v1` | `nba-scoreboard-valid.json` | `nba-scoreboard-missing-team.json` |
 
 Run `npm test` to execute the fixture checks. The checks assert the fields the
 dashboard needs and require a stable parser error code when a source loses

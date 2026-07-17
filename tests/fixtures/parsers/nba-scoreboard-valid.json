@@ -1,0 +1,26 @@
+{
+  "events": [
+    {
+      "id": "401000001",
+      "shortName": "LIONS @ BEARS",
+      "competitions": [
+        {
+          "startDate": "2026-07-16T23:00:00Z",
+          "status": { "type": { "state": "in", "completed": false, "shortDetail": "Q3 04:12" } },
+          "competitors": [
+            {
+              "homeAway": "home",
+              "score": "82",
+              "team": { "id": "home-1", "abbreviation": "BEARS", "displayName": "Example Bears" }
+            },
+            {
+              "homeAway": "away",
+              "score": "79",
+              "team": { "id": "away-1", "abbreviation": "LIONS", "displayName": "Example Lions" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "events": [
+    {
+      "id": "401000002",
+      "competitions": [
+        {
+          "competitors": [
+            {
+              "homeAway": "home",
+              "team": { "id": "home-2", "abbreviation": "BEARS", "displayName": "Example Bears" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

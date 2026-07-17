@@ -3198,7 +3198,8 @@ async function renderNbaScores(options = {}){
   try {
     const dateKey = estDateYmdCompact();
     let data = null;
-    if (options.useCached === true && nbaScoreboardCache.dateKey === dateKey && nbaScoreboardCache.data) {
+    const cacheHit = options.useCached === true && nbaScoreboardCache.dateKey === dateKey && nbaScoreboardCache.data;
+    if (cacheHit) {
       data = nbaScoreboardCache.data;
     } else {
       const url = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${dateKey}`;
@@ -3209,6 +3210,15 @@ async function renderNbaScores(options = {}){
         throw err;
       }
       data = await res.json();
+    }
+
+    const parsedScoreboard = window.MissionControlModules?.nbaScoreboard?.parseNbaScoreboard(data);
+    if (!parsedScoreboard?.ok) {
+      const error = new Error(parsedScoreboard?.errorCode || 'nba_scoreboard_parser_required_fields_missing');
+      error.code = parsedScoreboard?.errorCode || 'nba_scoreboard_parser_required_fields_missing';
+      throw error;
+    }
+    if (!cacheHit) {
       nbaScoreboardCache = {
         dateKey,
         fetchedAt: now(),
@@ -3216,7 +3226,7 @@ async function renderNbaScores(options = {}){
       };
     }
 
-    const events = Array.isArray(data?.events) ? data.events : [];
+    const events = parsedScoreboard.events;
     const favoriteTeams = new Set(state.nba?.favoriteTeams || []);
     const normalizedGames = events.map((event) => normalizeNbaEvent(event, favoriteTeams))
       .sort(compareNbaGames);
