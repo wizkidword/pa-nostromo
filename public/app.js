@@ -106,6 +106,8 @@ const socialFollowersAnalyticsFeature = window.MissionControlModules?.socialFoll
 if (!socialFollowersAnalyticsFeature) throw new Error('Social Followers analytics feature failed to load.');
 const nbaScoreStateFeature = window.MissionControlModules?.nbaScoreState;
 if (!nbaScoreStateFeature) throw new Error('NBA Scores state feature failed to load.');
+const gasPricesStateFeature = window.MissionControlModules?.gasPricesState;
+if (!gasPricesStateFeature) throw new Error('Gas Prices state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -270,33 +272,7 @@ function normalizeUtilityLayoutState(layoutInput, knownPodIds = []){
 }
 
 function normalizeGasPricesState(input){
-  const gasBaseValues = (values) => ({
-    regular: String(values?.regular || '').trim(),
-    mid: String(values?.mid || '').trim(),
-    premium: String(values?.premium || '').trim(),
-    diesel: String(values?.diesel || '').trim(),
-  });
-
-  const gas = {
-    location: String(input?.location || LOCAL_ZIP).trim().slice(0, 80),
-    resolvedLocation: String(input?.resolvedLocation || '').trim().slice(0, 120),
-    source: ['manual', 'aaa-state-average'].includes(input?.source) ? input.source : 'manual',
-    sourceUrl: String(input?.sourceUrl || '').trim().slice(0, 300),
-    fetchedAt: String(input?.fetchedAt || ''),
-    updatedAt: String(input?.updatedAt || ''),
-    manualUpdatedAt: String(input?.manualUpdatedAt || ''),
-    lastError: String(input?.lastError || '').slice(0, 300),
-    values: gasBaseValues(input?.values),
-    manualValues: gasBaseValues(input?.manualValues),
-  };
-
-  if (!Object.values(gas.values || {}).some(Boolean) && Object.values(gas.manualValues || {}).some(Boolean)) {
-    gas.values = { ...gas.manualValues };
-    gas.source = 'manual';
-    if (!gas.updatedAt) gas.updatedAt = gas.manualUpdatedAt || '';
-  }
-
-  return gas;
+  return gasPricesStateFeature.normalizeState(input, LOCAL_ZIP);
 }
 
 function normalizeEverydayCalculatorState(input){
@@ -2295,12 +2271,7 @@ async function renderWeather(options = {}){
 }
 
 function formatGasPriceValue(input){
-  const raw = String(input || '').trim();
-  if (!raw) return '';
-  const cleaned = raw.replace(/[^0-9.]/g, '');
-  const num = Number(cleaned);
-  if (!Number.isFinite(num) || num <= 0) return '';
-  return `$${num.toFixed(3)}`;
+  return gasPricesStateFeature.formatPrice(input);
 }
 
 function renderGasPricesView(){
@@ -2399,12 +2370,7 @@ async function fetchGasPricesAuto(locationInput = ''){
       throw err;
     }
 
-    const normalized = {
-      regular: formatGasPriceValue(data.prices.regular),
-      mid: formatGasPriceValue(data.prices.mid),
-      premium: formatGasPriceValue(data.prices.premium),
-      diesel: formatGasPriceValue(data.prices.diesel),
-    };
+    const normalized = gasPricesStateFeature.normalizePriceValues(data.prices);
 
     const hasAutoValue = Object.values(normalized).some(Boolean);
     if (!hasAutoValue) {
@@ -2443,12 +2409,7 @@ function saveGasPricesManual(){
     diesel: document.getElementById('gasManualDiesel')?.value,
   };
 
-  const manual = {
-    regular: formatGasPriceValue(fields.regular),
-    mid: formatGasPriceValue(fields.mid),
-    premium: formatGasPriceValue(fields.premium),
-    diesel: formatGasPriceValue(fields.diesel),
-  };
+  const manual = gasPricesStateFeature.normalizePriceValues(fields);
 
   if (!Object.values(manual).some(Boolean)) {
     state.gasPrices.lastError = 'Enter at least one manual price to save.';
