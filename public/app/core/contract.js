@@ -45,4 +45,4 @@
   root.podContract = {
     normalizePodDefinition,
   };
-})(window);
+})(typeof window !== 'undefined' ? window : globalThis);

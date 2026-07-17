@@ -10209,7 +10209,7 @@ function invokeLegacyRenderSafe(legacyRender){
   } catch {}
 }
 
-function runPodLifecycleAction(action, podId, legacyRender, extraCtx = {}){
+async function runPodLifecycleAction(action, podId, legacyRender, extraCtx = {}){
   const registry = getPodRegistry();
   const invoke = registry && typeof registry[action] === 'function' ? registry[action].bind(registry) : null;
   if (!invoke) {
@@ -10220,7 +10220,12 @@ function runPodLifecycleAction(action, podId, legacyRender, extraCtx = {}){
     return { ok: true, reason: 'no_registry' };
   }
 
-  const result = invoke(podId, { state, legacyRender, ...extraCtx });
+  let result;
+  try {
+    result = await invoke(podId, { state, legacyRender, ...extraCtx });
+  } catch {
+    result = null;
+  }
   if (result?.ok) return result;
 
   if (action === 'mount' || action === 'refresh' || action === 'render') {
