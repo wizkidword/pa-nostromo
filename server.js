@@ -22,8 +22,10 @@ const { createHomeDevicesApiHandlers } = require('./server/routes/devices.js');
 const { createRssApiHandler } = require('./server/routes/rss.js');
 const { createSystemResourcesApiHandler, createSystemSpeedTestApiHandler } = require('./server/routes/system.js');
 const { createGasPricesApiHandler } = require('./server/routes/gas.js');
+const { createCameraSnapshotApiHandler } = require('./server/routes/camera.js');
 const { createSystemResourcesService } = require('./server/services/system-resources.js');
 const { createSpeedTestService } = require('./server/services/speed-test.js');
+const { createCameraSnapshotService } = require('./server/services/camera-snapshot.js');
 const { createRequestId, createPublicErrorPayload, safeErrorCode, createBoundedJsonlLogWriter, configureDiagnosticLogSink, logDiagnostic } = require('./lib/observability.js');
 const { withIntegrationEnvelope } = require('./lib/integration-envelope.js');
 
@@ -6502,95 +6504,21 @@ async function handleApiRowanSend(req, res) {
   });
 }
 
-async function handleApiCameraSnapshot(req, res) {
-  if (req.method !== 'GET') {
-    return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/camera-snapshot?url=...' });
-  }
+const fetchCameraSnapshot = createCameraSnapshotService({
+  workCoordinator: WORK_COORDINATOR,
+  safeFetch,
+  timeoutMs: CAMERA_PROXY_TIMEOUT_MS,
+  maxBytes: CAMERA_PROXY_MAX_BYTES,
+  allowedHosts: CAMERA_PROXY_ALLOWLIST,
+});
 
-  const reqUrl = new URL(req.url || '/api/camera-snapshot', `http://localhost:${PORT}`);
-  const targetUrl = String(reqUrl.searchParams.get('url') || '').trim();
-  if (!targetUrl) {
-    return sendJson(res, 400, { ok: false, error: 'missing_url', message: 'Query parameter "url" is required.' });
-  }
-
-  const targetCheck = isCameraProxyTargetAllowed(targetUrl);
-  if (!targetCheck.ok) {
-    return sendJson(res, 403, { ok: false, error: targetCheck.code, message: targetCheck.message });
-  }
-
-  let upstream;
-  const clientRequest = createClientAbortSignal(req, res);
-  try {
-    const normalizedUrl = targetCheck.url.toString();
-    upstream = await WORK_COORDINATOR.run({
-      key: `camera:${normalizedUrl}`,
-      integration: 'camera',
-      host: targetCheck.url.hostname,
-      signal: clientRequest.signal,
-      timeoutMs: CAMERA_PROXY_TIMEOUT_MS,
-    }, ({ signal }) => safeFetch(normalizedUrl, {
-      method: 'GET',
-      signal,
-      timeoutMs: CAMERA_PROXY_TIMEOUT_MS,
-      firstByteTimeoutMs: CAMERA_PROXY_TIMEOUT_MS,
-      maxBytes: CAMERA_PROXY_MAX_BYTES,
-      maxRedirects: 0,
-      allowedHosts: CAMERA_PROXY_ALLOWLIST,
-      headers: {
-        'User-Agent': 'mission-control-lite-camera-proxy/1.0',
-        'Accept': 'image/jpeg,image/png,image/webp,image/gif;q=0.9',
-      },
-    }));
-  } catch (err) {
-    const status = Number(err?.status || 0) || (err?.code === 'response_too_large' ? 413 : err?.code === 'blocked_address' ? 403 : 502);
-    return sendJson(res, status, { ok: false, error: err?.code || 'upstream_fetch_failed', message: 'Camera source could not be fetched safely.' });
-  } finally {
-    clientRequest.dispose();
-  }
-
-  if (!upstream.ok) {
-    return sendJson(res, 502, {
-      ok: false,
-      error: 'upstream_http_error',
-      message: `Camera source returned HTTP ${upstream.status}.`,
-    });
-  }
-
-  const contentType = String(upstream.headers.get('content-type') || 'application/octet-stream');
-  if (!/^image\/(?:jpeg|png|webp|gif)$/i.test(contentType.split(';', 1)[0].trim())) {
-    return sendJson(res, 415, {
-      ok: false,
-      error: 'unsupported_media_type',
-      message: 'Camera proxy only returns JPEG, PNG, WebP, or GIF images.',
-    });
-  }
-  const contentLength = Number(upstream.headers.get('content-length') || 0);
-  if (contentLength && contentLength > CAMERA_PROXY_MAX_BYTES) {
-    return sendJson(res, 413, {
-      ok: false,
-      error: 'payload_too_large',
-      message: `Snapshot exceeds CAMERA_PROXY_MAX_BYTES (${CAMERA_PROXY_MAX_BYTES}).`,
-    });
-  }
-
-  const arrayBuf = await upstream.arrayBuffer();
-  const body = Buffer.from(arrayBuf);
-  if (body.length > CAMERA_PROXY_MAX_BYTES) {
-    return sendJson(res, 413, {
-      ok: false,
-      error: 'payload_too_large',
-      message: `Snapshot exceeds CAMERA_PROXY_MAX_BYTES (${CAMERA_PROXY_MAX_BYTES}).`,
-    });
-  }
-
-  res.writeHead(200, {
-    'Content-Type': contentType,
-    'Content-Length': String(body.length),
-    'Cache-Control': 'no-store, max-age=0',
-    'X-Content-Type-Options': 'nosniff',
-  });
-  res.end(body);
-}
+const handleApiCameraSnapshot = createCameraSnapshotApiHandler({
+  sendJson,
+  isCameraProxyTargetAllowed,
+  createClientAbortSignal,
+  fetchCameraSnapshot,
+  maxBytes: CAMERA_PROXY_MAX_BYTES,
+});
 
 function decodeXmlEntities(input) {
   const named = {
