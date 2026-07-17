@@ -26,6 +26,7 @@ const { createCameraSnapshotApiHandler } = require('./server/routes/camera.js');
 const { createSystemResourcesService } = require('./server/services/system-resources.js');
 const { createSpeedTestService } = require('./server/services/speed-test.js');
 const { createCameraSnapshotService } = require('./server/services/camera-snapshot.js');
+const { createApiRouter } = require('./server/router.js');
 const { createRequestId, createPublicErrorPayload, safeErrorCode, createBoundedJsonlLogWriter, configureDiagnosticLogSink, logDiagnostic } = require('./lib/observability.js');
 const { withIntegrationEnvelope } = require('./lib/integration-envelope.js');
 
@@ -7158,29 +7159,31 @@ async function handleStatic(req, res) {
   }
 }
 
-async function dispatchApiRoute(req, res, pathname) {
-  if (pathname === '/api/app-info') return handleApiAppInfo(req, res);
-  if (pathname.startsWith('/api/state')) return handleApiState(req, res);
-  if (pathname === '/api/rowan-send') return handleApiRowanSend(req, res);
-  if (pathname === '/api/camera-snapshot') return handleApiCameraSnapshot(req, res);
-  if (pathname === '/api/rss/fetch') return handleApiRssFetch(req, res);
-  if (pathname === '/api/gas-prices') return handleApiGasPrices(req, res);
-  if (pathname.startsWith('/api/crypto/')) return handleApiCryptoProxy(req, res);
-  if (pathname === '/api/system-resources') return handleApiSystemResources(req, res);
-  if (pathname === '/api/speed-test') return handleApiSpeedTest(req, res);
-  if (pathname === '/api/home-devices/ping') return handleApiHomeDevicePing(req, res);
-  if (pathname === '/api/home-devices/wake') return handleApiHomeDeviceWake(req, res);
-  if (pathname.startsWith('/api/email-unread')) return handleApiUnreadEmail(req, res);
-  if (pathname.startsWith('/api/ebay-traffic')) return handleApiEbayTraffic(req, res);
-  if (pathname.startsWith('/api/facebook-followers')) return handleApiFacebookFollowers(req, res);
-  if (pathname.startsWith('/api/facebook-group-members')) return handleApiFacebookGroupMembers(req, res);
-  if (pathname.startsWith('/api/facebook-content')) return handleApiFacebookContent(req, res);
-  if (pathname.startsWith('/api/instagram-content')) return handleApiInstagramContent(req, res);
-  if (pathname.startsWith('/api/instagram-followers')) return handleApiInstagramFollowers(req, res);
-  if (pathname.startsWith('/api/tiktok-followers')) return handleApiTikTokFollowers(req, res);
-  if (pathname.startsWith('/api/youtube-subscribers')) return handleApiYoutubeSubscribers(req, res);
-  return sendJson(res, 404, { ok: false, error: 'not_found' });
-}
+const dispatchApiRoute = createApiRouter({
+  sendJson,
+  handlers: {
+    appInfo: handleApiAppInfo,
+    state: handleApiState,
+    rowanSend: handleApiRowanSend,
+    cameraSnapshot: handleApiCameraSnapshot,
+    rssFetch: handleApiRssFetch,
+    gasPrices: handleApiGasPrices,
+    cryptoProxy: handleApiCryptoProxy,
+    systemResources: handleApiSystemResources,
+    speedTest: handleApiSpeedTest,
+    homeDevicePing: handleApiHomeDevicePing,
+    homeDeviceWake: handleApiHomeDeviceWake,
+    unreadEmail: handleApiUnreadEmail,
+    ebayTraffic: handleApiEbayTraffic,
+    facebookFollowers: handleApiFacebookFollowers,
+    facebookGroupMembers: handleApiFacebookGroupMembers,
+    facebookContent: handleApiFacebookContent,
+    instagramContent: handleApiInstagramContent,
+    instagramFollowers: handleApiInstagramFollowers,
+    tikTokFollowers: handleApiTikTokFollowers,
+    youtubeSubscribers: handleApiYoutubeSubscribers,
+  },
+});
 
 const server = http.createServer(async (req, res) => {
   const requestId = createRequestId(req.headers);

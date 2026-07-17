@@ -31,8 +31,13 @@ The browser application is being migrated incrementally from the legacy `public/
 | Date & Time | `public/app/pods/date-time.pod.js` | Time display rendering, timezone presentation, and alarm-status refresh. |
 | Calendar | `public/app/pods/calendar.pod.js` | Month-grid rendering, selected-date handling, and reminder-date indicators. |
 | Weather | `public/app/pods/weather.pod.js` | Current-condition and forecast display plus cached-result status presentation. |
+| Action store | `public/app/core/action-store.js` | Feature-area actions, revision tracking, targeted subscribers, and visible persistence status. |
+| Persistence platform | `public/app/core/persistence.js` | Independently coalesced local and shared persistence queues with surfaced write failures. |
+| Scheduler platform | `public/app/core/scheduler.js` | Visibility- and offline-aware, single-flight integration refreshes with backoff, jitter, cancellation, enable/disable control, next-refresh state, and cleanup. |
 
 `public/app.js` remains the composition layer for the migration. It supplies the current application state, logging, persistence callback, and settings rerender callback to a feature controller rather than duplicating the feature's behavior.
+
+Core project, task, note, reminder, settings, and layout changes now enter the composition layer through named feature actions. The action store updates only the declared feature areas: note drafting intentionally persists with `render: false`, so typing leaves the active editor, board, and unrelated pods intact. Full `renderAll()` calls are reserved for startup and whole-state replacement such as shared-state hydration/import.
 
 ## Extraction Rules
 
@@ -42,6 +47,6 @@ The browser application is being migrated incrementally from the legacy `public/
 - Load feature scripts before `public/app.js`; fail clearly if a required feature did not load.
 - Keep the migration additive and preserve existing controls and saved data formats.
 
-## Next Candidates
+## Remaining incremental candidates
 
-Date & Time, Calendar, and Weather now own their rendering. Unread Email, eBay Traffic, Social Followers, NBA Scores, Gas Prices, Everyday Calculator, System Monitor, Speed Test, Home Device Controls, Camera Feed, Live Streams, Music Player, RSS, Utility Layout, Settings, and Crypto Tracker are being decomposed incrementally: their state rules live in focused browser modules, while rendering and network actions remain in `public/app.js` for later packages. Other integrations remain in `public/app.js`; extract each feature one view at a time, then move related state helpers and selectors only after behavior is verified.
+Date & Time, Calendar, and Weather now own their rendering. Unread Email, eBay Traffic, Social Followers, NBA Scores, Gas Prices, Everyday Calculator, System Monitor, Speed Test, Home Device Controls, Camera Feed, Live Streams, Music Player, RSS, Utility Layout, Settings, and Crypto Tracker are decomposed incrementally: their state rules live in focused browser modules, while compatibility rendering and network actions remain in `public/app.js`. Future extractions should move a complete feature view and its events into the feature module, retaining the action-store and scheduler contracts rather than adding new global timers or broad rendering paths.

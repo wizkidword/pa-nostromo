@@ -136,6 +136,8 @@ const weatherPodFeature = window.MissionControlModules?.weatherPod;
 if (!weatherPodFeature) throw new Error('Weather pod failed to load.');
 const actionStoreFeature = window.MissionControlModules?.actionStore;
 if (!actionStoreFeature) throw new Error('Action store failed to load.');
+const persistenceFeature = window.MissionControlModules?.persistence;
+if (!persistenceFeature) throw new Error('Persistence platform failed to load.');
 if (!window.MissionControlModules?.scheduler) throw new Error('Scheduler failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
@@ -582,6 +584,22 @@ const dashboardScheduler = window.MissionControlModules.scheduler.createSchedule
   isDocumentVisible: () => !document.hidden,
   isOnline: () => navigator.onLine !== false,
 });
+const localPersistenceQueue = persistenceFeature.createCoalescedPersistence({
+  delayMs: 75,
+  run: ({ serialized }) => localStorage.setItem(STORAGE_KEY, serialized),
+  onError: (error) => dashboardActionStore.markPersistence('failed', { error: String(error?.message || error) }),
+});
+const sharedPersistenceQueue = persistenceFeature.createCoalescedPersistence({
+  delayMs: 300,
+  run: ({ reason }) => {
+    if (!sharedHydrationResolved) {
+      sharedPushPendingUntilHydration = true;
+      return false;
+    }
+    return pushStateToSharedApi(reason);
+  },
+  onError: (error) => dashboardActionStore.markPersistence('failed', { error: String(error?.message || error) }),
+});
 const SCHEDULED_POD_IDS = new Set(['date-time', 'weather', 'nba-scores', 'crypto-tracker', 'rss-feed', 'unread-email', MERGED_SOCIAL_FOLLOWERS_POD_ID, 'ebay-traffic', 'system-resource-monitor', 'speed-test']);
 
 function renderPersistenceStatus(status = {}){
@@ -646,6 +664,14 @@ function commitRemindersFeature(reason = 'updated'){
   });
 }
 
+function commitSettingsFeature(reason = 'updated'){
+  return persistFeatureAction('settings', reason, { changedAreas: ['settings'] });
+}
+
+function commitLayoutFeature(reason = 'updated'){
+  return persistFeatureAction('layout', reason, { changedAreas: ['layout'] });
+}
+
 const themeController = themeFeature.createThemeController({
   document,
   window,
@@ -653,7 +679,7 @@ const themeController = themeFeature.createThemeController({
   escapeHtml,
   onPreferenceChanged: ({ theme }) => {
     logChange(`Theme changed to ${theme.label}`);
-    commitState('theme_changed');
+    commitSettingsFeature('theme_changed');
   },
   onPreferenceUnchanged: () => renderSettings(),
 });
@@ -757,7 +783,6 @@ let voiceToRowanFinalTranscript = '';
 let voiceToRowanDraft = '';
 let voiceToRowanManualStop = false;
 let voiceToRowanLastError = '';
-let sharedSaveTimer = null;
 let sharedHydrationResolved = false;
 let sharedHydrationLastOutcome = 'pending';
 let sharedPushPendingUntilHydration = false;
@@ -1154,16 +1179,16 @@ async function hydrateStateFromSharedApi(){
   try {
     const res = await fetch(`${SHARED_STATE_API}?_=${Date.now()}`, { cache: 'no-store' });
     if (res.status === 404) return false;
-    if (!res.ok) return false;
+    if (!res.ok) throw new Error(`Shared state read failed (HTTP ${res.status})`);
     const remote = await res.json();
-    if (!remote || typeof remote !== 'object') return false;
+    if (!remote || typeof remote !== 'object') throw new Error('Shared state read returned an invalid payload.');
     const applied = applyIncomingState(remote, { render: false });
     return !!applied;
   } catch (error) {
     dashboardActionStore.markPersistence(navigator.onLine === false ? 'offline' : 'failed', {
       error: navigator.onLine === false ? '' : String(error?.message || error),
     });
-    return false;
+    return null;
   }
 }
 
@@ -1192,7 +1217,11 @@ async function writeStateToSharedApi(payload, { expectedRevision = extractStateR
     throw error;
   }
 
-  return res.json().catch(() => null);
+  try {
+    return await res.json();
+  } catch (error) {
+    throw new Error(`State sync returned an invalid response: ${String(error?.message || error)}`);
+  }
 }
 
 async function pushStateToSharedApi(reason = 'unspecified'){
@@ -1227,18 +1256,23 @@ async function pushStateToSharedApi(reason = 'unspecified'){
 function flushPendingSharedPush(reason = 'hydration_resolved'){
   if (!sharedHydrationResolved || !sharedPushPendingUntilHydration) return;
   sharedPushPendingUntilHydration = false;
-  pushStateToSharedApi(reason);
+  sharedPersistenceQueue.schedule({ reason }, reason);
 }
 
 function save(reason = 'unspecified', { pushShared = true } = {}){
+  let serialized;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    serialized = JSON.stringify(state);
+    localPersistenceQueue.schedule({ serialized }, reason);
   } catch (error) {
     dashboardActionStore.markPersistence('failed', { error: String(error?.message || error) });
     return false;
   }
   if (!pushShared) {
-    dashboardActionStore.markPersistence('saved', { lastSavedAt: now(), error: '' });
+    void localPersistenceQueue.flush().then((outcome) => {
+      if (outcome === false) return;
+      dashboardActionStore.markPersistence('saved', { lastSavedAt: now(), error: '' });
+    });
     return true;
   }
   if (navigator.onLine === false) {
@@ -1246,14 +1280,7 @@ function save(reason = 'unspecified', { pushShared = true } = {}){
     return false;
   }
   dashboardActionStore.markPersistence('saving', { error: '' });
-  if (sharedSaveTimer) clearTimeout(sharedSaveTimer);
-  sharedSaveTimer = setTimeout(() => {
-    if (!sharedHydrationResolved) {
-      sharedPushPendingUntilHydration = true;
-      return;
-    }
-    pushStateToSharedApi(reason);
-  }, 300);
+  sharedPersistenceQueue.schedule({ reason }, reason);
   return true;
 }
 
@@ -7943,7 +7970,12 @@ function startSnapshotMode(){
   renderCameraFeedPod();
 
   dashboardScheduler.start('camera-snapshot');
-  void dashboardScheduler.refresh('camera-snapshot', { reason: 'camera_started' }).catch(() => {});
+  void dashboardScheduler.refresh('camera-snapshot', { reason: 'camera_started' }).catch((error) => {
+    state.cameraFeed.status = 'error';
+    state.cameraFeed.lastError = String(error?.message || error || 'Snapshot refresh failed.');
+    setCameraFeedStatus(state.cameraFeed.lastError);
+    save('camera_snapshot_start_failed');
+  });
 }
 
 function startStreamMode(){
@@ -10793,6 +10825,12 @@ dashboardActionStore.subscribeAll((record) => {
     renderCalendarRemindersPanel();
     renderTodayReminders();
   }
+  if (changed.has('settings')) renderSettings();
+  if (changed.has('layout')) {
+    applyUtilityLayoutToDom();
+    renderPodVisibilitySettings();
+    syncDashboardScheduling();
+  }
   if (changed.has('tasks') || changed.has('notes') || changed.has('projects')) renderStats();
 });
 
@@ -11110,20 +11148,20 @@ document.getElementById('settingWeatherInterval')?.addEventListener('change', (e
   state.settings.weatherIntervalMin = Number(e.target.value || 15);
   setupWeatherTimer();
   logChange(`Weather refresh interval set to every ${state.settings.weatherIntervalMin} minutes`);
-  save();
+  commitSettingsFeature('weather_interval_changed');
 });
 
 document.getElementById('settingDefaultTaskColumn')?.addEventListener('change', (e)=> {
   state.settings.defaultTaskColumn = normalizeTaskColumn(e.target.value);
   logChange(`Default new task column set to ${state.settings.defaultTaskColumn}`);
-  save();
+  commitSettingsFeature('default_task_column_changed');
 });
 
 document.getElementById('settingRssInterval')?.addEventListener('change', (e)=> {
   const mins = Number(e.target.value || RSS_DEFAULT_REFRESH_MIN);
   state.rss.refreshIntervalMin = Number.isFinite(mins) ? Math.min(180, Math.max(5, Math.round(mins))) : RSS_DEFAULT_REFRESH_MIN;
   setupRssTimer();
-  save('rss_interval_changed');
+  commitSettingsFeature('rss_interval_changed');
 });
 
 document.getElementById('settingsPodVisibilityList')?.addEventListener('change', (e) => {
@@ -11132,9 +11170,7 @@ document.getElementById('settingsPodVisibilityList')?.addEventListener('change',
   const podId = String(checkbox.dataset.podVisibility || '').trim();
   if (!podId) return;
   state.layout.visibility[podId] = !!checkbox.checked;
-  save('pod_visibility_toggled');
-  applyUtilityLayoutToDom();
-  renderPodVisibilitySettings();
+  commitLayoutFeature('pod_visibility_toggled');
 });
 
 document.getElementById('settingsPodVisibilityList')?.addEventListener('click', (e) => {
@@ -11146,9 +11182,7 @@ document.getElementById('settingsPodVisibilityList')?.addEventListener('click', 
   const direction = String(btn.dataset.podMove || '');
   if (!Number.isInteger(rowIndex) || !Number.isInteger(podIndex)) return;
   if (!movePodWithinRow(rowIndex, podIndex, direction)) return;
-  save('pod_layout_reordered');
-  applyUtilityLayoutToDom();
-  renderPodVisibilitySettings();
+  commitLayoutFeature('pod_layout_reordered');
 });
 
 document.getElementById('settingsPodVisibilityList')?.addEventListener('dragstart', (e) => {
@@ -11198,9 +11232,7 @@ document.getElementById('settingsPodVisibilityList')?.addEventListener('drop', (
   clearPodDragUi();
   if (!moved) return;
 
-  save('pod_layout_reordered');
-  applyUtilityLayoutToDom();
-  renderPodVisibilitySettings();
+  commitLayoutFeature('pod_layout_reordered');
 });
 
 document.getElementById('settingsPodVisibilityList')?.addEventListener('dragend', () => {
@@ -11883,6 +11915,8 @@ window.addEventListener('storage', (event) => {
 });
 
 window.addEventListener('beforeunload', () => {
+  void localPersistenceQueue.flush();
+  sharedPersistenceQueue.cancel();
   dashboardScheduler.destroy();
   stopSystemMonitorPolling();
   stopSpeedTestAutoRun();
@@ -11936,20 +11970,27 @@ window.__MISSION_CONTROL_QA__ = {
 
 // Cross-browser sync bootstrap: pull shared disk-backed state if available.
 hydrateStateFromSharedApi().then((hydrated) => {
-  sharedHydrationResolved = true;
-  sharedHydrationLastOutcome = hydrated ? 'hydrated' : 'seeded_local';
+  sharedHydrationResolved = hydrated !== null;
 
-  if (!hydrated) {
+  if (hydrated === false) {
+    sharedHydrationLastOutcome = 'seeded_local';
     // Seed the shared store from the first browser that opens the dashboard.
     pushStateToSharedApi('startup_seed_no_remote_state');
     flushPendingSharedPush('startup_flush_pending_after_seed');
     return;
   }
 
-  renderAll();
-  flushPendingSharedPush('startup_flush_pending_after_hydration');
-}).catch(() => {
+  if (hydrated === true) {
+    sharedHydrationLastOutcome = 'hydrated';
+    renderAll();
+    flushPendingSharedPush('startup_flush_pending_after_hydration');
+    return;
+  }
+
+  sharedHydrationLastOutcome = 'hydrate_failed_local_only';
+  sharedPushPendingUntilHydration = false;
+}).catch((error) => {
   sharedHydrationResolved = true;
   sharedHydrationLastOutcome = 'hydrate_failed_local_only';
-  flushPendingSharedPush('startup_flush_pending_after_hydrate_error');
+  dashboardActionStore.markPersistence('failed', { error: String(error?.message || error) });
 });

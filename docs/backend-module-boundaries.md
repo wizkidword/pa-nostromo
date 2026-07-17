@@ -2,6 +2,8 @@
 
 `server.js` remains the application composition root: it loads configuration, creates shared services, applies the route-security manifest, and starts the HTTP server.
 
+`server/router.js` is the API dispatch boundary. After the manifest has matched a request and the security gate has authorized it, the composition root passes the request to this router's explicit route table. The router selects an injected handler or returns the established 404 envelope; it does not own security policy, business logic, or I/O. This keeps authorization ahead of every handler while allowing each route/service vertical to move independently.
+
 State persistence is the first extracted vertical route area:
 
 - `server/routes/state.js` parses and validates requests for `/api/state`, `/api/state/backups`, and `/api/state/restore`.
