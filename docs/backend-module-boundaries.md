@@ -18,4 +18,9 @@ RSS refresh follows the same boundary:
 - `server/routes/rss.js` validates feeds, coordinates the request lifecycle, and shapes RSS responses.
 - Feed caching, safe outbound fetches, parsing, retry behavior, and abort-signal creation remain injected from `server.js`.
 
+System resources use a route and service split:
+
+- `server/routes/system.js` translates the query-string allowlist into a system-resource request and sends the response.
+- `server/services/system-resources.js` samples host metrics and assembles the system-resource payload, using injected platform adapters from `server.js`.
+
 Future route extractions should follow the same boundary: keep request parsing and response shaping in a route module, delegate business/persistence work to a focused service, and preserve externally visible behavior while moving one vertical area at a time.

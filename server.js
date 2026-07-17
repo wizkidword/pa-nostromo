@@ -20,6 +20,8 @@ const { StateStore, StateStoreError } = require('./lib/state-store.js');
 const { createStateApiHandler } = require('./server/routes/state.js');
 const { createHomeDevicesApiHandlers } = require('./server/routes/devices.js');
 const { createRssApiHandler } = require('./server/routes/rss.js');
+const { createSystemResourcesApiHandler } = require('./server/routes/system.js');
+const { createSystemResourcesService } = require('./server/services/system-resources.js');
 const { createRequestId, createPublicErrorPayload, safeErrorCode, createBoundedJsonlLogWriter, configureDiagnosticLogSink, logDiagnostic } = require('./lib/observability.js');
 const { withIntegrationEnvelope } = require('./lib/integration-envelope.js');
 
@@ -5604,81 +5606,19 @@ function readTopProcesses() {
   });
 }
 
-async function handleApiSystemResources(req, res) {
-  const reqUrl = new URL(req.url || '/api/system-resources', `http://localhost:${PORT}`);
-  const allowlist = parseAllowlistInput(reqUrl.searchParams.get('allowlist') || '');
-  const memTotal = os.totalmem();
-  const memFree = os.freemem();
-  const netBefore = readNetTotals();
-  const cpuBefore = os.cpus();
+const sampleSystemResources = createSystemResourcesService({
+  os,
+  platform: process.platform,
+  readNetTotals,
+  readDiskUsagePercent,
+  readTopProcesses,
+});
 
-  await new Promise((r) => setTimeout(r, 250));
-
-  const [diskPercent, processes] = await Promise.all([
-    readDiskUsagePercent(),
-    readTopProcesses(),
-  ]);
-
-  const cpuAfter = os.cpus();
-  const netAfter = readNetTotals();
-
-  let cpuPercent = null;
-  if (Array.isArray(cpuBefore) && Array.isArray(cpuAfter) && cpuBefore.length && cpuBefore.length === cpuAfter.length) {
-    let totalIdle = 0;
-    let totalTick = 0;
-    for (let i = 0; i < cpuBefore.length; i += 1) {
-      const a = cpuBefore[i].times;
-      const b = cpuAfter[i].times;
-      const idle = Math.max(0, (b.idle || 0) - (a.idle || 0));
-      const totalA = (a.user || 0) + (a.nice || 0) + (a.sys || 0) + (a.irq || 0) + (a.idle || 0);
-      const totalB = (b.user || 0) + (b.nice || 0) + (b.sys || 0) + (b.irq || 0) + (b.idle || 0);
-      totalIdle += idle;
-      totalTick += Math.max(0, totalB - totalA);
-    }
-    if (totalTick > 0) cpuPercent = Math.max(0, Math.min(100, Number((((totalTick - totalIdle) / totalTick) * 100).toFixed(1))));
-  }
-
-  const memUsedPercent = memTotal > 0
-    ? Math.max(0, Math.min(100, Number((((memTotal - memFree) / memTotal) * 100).toFixed(1))))
-    : null;
-
-  const topCpu = [...processes].sort((a, b) => b.cpuPercent - a.cpuPercent).slice(0, 3);
-  const topMemory = [...processes].sort((a, b) => b.memPercent - a.memPercent).slice(0, 3);
-  const allowlistMatches = allowlist.length
-    ? processes.filter((proc) => allowlist.some((needle) => proc.name.toLowerCase().includes(needle))).slice(0, 8)
-    : [];
-
-  const netRx = (netBefore && netAfter) ? Math.max(0, netAfter.rxBytes - netBefore.rxBytes) : null;
-  const netTx = (netBefore && netAfter) ? Math.max(0, netAfter.txBytes - netBefore.txBytes) : null;
-
-  return sendJson(res, 200, {
-    ok: true,
-    sampledAt: new Date().toISOString(),
-    platform: {
-      os: process.platform,
-      diskAdapter: process.platform === 'win32' ? 'powershell_cim' : 'df',
-      processAdapter: process.platform === 'win32' ? 'powershell_get_process' : 'ps',
-      networkAdapter: process.platform === 'win32' ? 'unavailable' : 'proc_net_dev',
-    },
-    host: {
-      cpuPercent,
-      memoryPercent: memUsedPercent,
-      diskPercent,
-      network: {
-        downBytesPerSec: netRx != null ? Math.round(netRx * 4) : null,
-        upBytesPerSec: netTx != null ? Math.round(netTx * 4) : null,
-      },
-      uptimeSec: Math.floor(os.uptime()),
-    },
-    processes: {
-      scanned: processes.length,
-      topCpu,
-      topMemory,
-      allowlist,
-      allowlistMatches,
-    },
-  });
-}
+const handleApiSystemResources = createSystemResourcesApiHandler({
+  sendJson,
+  parseAllowlistInput,
+  sampleSystemResources,
+});
 
 function isPrivateOrLocalHost(hostValue) {
   const host = String(hostValue || '').trim().toLowerCase();
