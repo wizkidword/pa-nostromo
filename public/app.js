@@ -114,6 +114,8 @@ const systemMonitorStateFeature = window.MissionControlModules?.systemMonitorSta
 if (!systemMonitorStateFeature) throw new Error('System Monitor state feature failed to load.');
 const speedTestStateFeature = window.MissionControlModules?.speedTestState;
 if (!speedTestStateFeature) throw new Error('Speed Test state feature failed to load.');
+const homeDeviceStateFeature = window.MissionControlModules?.homeDeviceState;
+if (!homeDeviceStateFeature) throw new Error('Home Device state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -295,43 +297,7 @@ function normalizeSpeedTestState(input){
 
 
 function normalizeHomeDeviceControlState(input){
-  const devicesRaw = Array.isArray(input?.devices) ? input.devices : [];
-  const normalized = devicesRaw
-    .map((device, index) => {
-      const name = String(device?.name || '').trim().slice(0, 80);
-      const host = String(device?.host || '').trim().slice(0, 255);
-      if (!name) return null;
-      const idVal = String(device?.id || `device-${index + 1}`).trim() || `device-${index + 1}`;
-      const tags = Array.isArray(device?.tags)
-        ? [...new Set(device.tags.map((tag) => String(tag || '').trim()).filter(Boolean))].slice(0, 10)
-        : String(device?.tags || '').split(',').map((tag) => tag.trim()).filter(Boolean).slice(0, 10);
-      return {
-        id: idVal,
-        name,
-        type: String(device?.type || 'device').trim().slice(0, 40) || 'device',
-        host,
-        uiUrl: String(device?.uiUrl || '').trim().slice(0, 400),
-        sshTarget: String(device?.sshTarget || '').trim().slice(0, 160),
-        rdpUrl: String(device?.rdpUrl || '').trim().slice(0, 400),
-        macAddress: String(device?.macAddress || '').trim().slice(0, 32),
-        notes: String(device?.notes || '').trim().slice(0, 240),
-        tags,
-        lastWakeStatus: String(device?.lastWakeStatus || ''),
-        lastWakeAt: String(device?.lastWakeAt || ''),
-      };
-    })
-    .filter(Boolean);
-
-  return {
-    devices: normalized.slice(0, 60),
-    settingsOpen: !!input?.settingsOpen,
-    pingByDevice: (input?.pingByDevice && typeof input.pingByDevice === 'object') ? input.pingByDevice : {},
-    wakeModalDeviceId: String(input?.wakeModalDeviceId || ''),
-    scanRunning: !!input?.scanRunning,
-    lastScanAt: String(input?.lastScanAt || ''),
-    toast: String(input?.toast || '').slice(0, 200),
-    toastAt: String(input?.toastAt || ''),
-  };
+  return homeDeviceStateFeature.normalizeState(input);
 }
 
 const NBA_VIEW_MODES = nbaScoreStateFeature.viewModes;
@@ -11190,20 +11156,11 @@ function clearPodDragUi(){
 }
 
 function normalizeMacAddress(value){
-  const clean = String(value || '').trim().replace(/-/g, ':').toUpperCase();
-  if (!clean) return '';
-  return /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(clean) ? clean : clean;
+  return homeDeviceStateFeature.normalizeMacAddress(value);
 }
 
 function homeDeviceActionAvailability(device){
-  const hasRemote = !!(device?.rdpUrl || device?.sshTarget || device?.uiUrl);
-  return {
-    remote: { enabled: hasRemote, reason: hasRemote ? '' : 'Add rdpUrl, sshTarget, or uiUrl.' },
-    ui: { enabled: !!device?.uiUrl, reason: device?.uiUrl ? '' : 'Missing uiUrl.' },
-    ping: { enabled: !!device?.host, reason: device?.host ? '' : 'Missing host.' },
-    copySsh: { enabled: !!device?.sshTarget, reason: device?.sshTarget ? '' : 'Missing sshTarget.' },
-    wake: { enabled: !!device?.macAddress, reason: device?.macAddress ? '' : 'Missing macAddress.' },
-  };
+  return homeDeviceStateFeature.getActionAvailability(device);
 }
 
 function resolveRemoteTarget(device){
