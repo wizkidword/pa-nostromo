@@ -55,6 +55,10 @@ try {
   const pageResponse = await page.goto(`${origin}/`, { waitUntil: 'networkidle' });
   assert.equal(pageResponse?.status(), 200);
   assert.match(await page.title(), /Nostromo|Mission Control/i);
+  const csp = pageResponse?.headers()['content-security-policy'] || '';
+  assert.match(csp, /default-src 'self'/);
+  assert.match(csp, /script-src 'self' https:\/\/www\.youtube\.com/);
+  assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval/);
 
   const stateResult = await page.evaluate(async () => {
     const read = async () => {
@@ -106,6 +110,88 @@ try {
   assert.equal(conflictResult.saved, false);
   assert.equal(conflictResult.conflictVisible, true);
   assert.equal(conflictResult.draftPreserved, true);
+
+  const hostileContentResult = await page.evaluate(async () => {
+    window.__nostromoStoredXss = 0;
+    const payload = '<img src=x onerror="window.__nostromoStoredXss=1">';
+    applyIncomingState({
+      projects: [{
+        id: 'project-x',
+        name: payload,
+        summary: payload,
+        status: 'active',
+        appLink: 'javascript:alert(1)',
+        repoLink: 'data:text/html,blocked',
+      }],
+      tasks: [{
+        id: 'task-x',
+        title: payload,
+        column: 'inbox',
+        projectId: 'project-x',
+        nextAction: payload,
+        owner: payload,
+      }],
+      notes: [{
+        id: 'note-x',
+        title: payload,
+        body: `${payload}\n**safe formatting**`,
+        projectId: 'project-x',
+        updatedAt: new Date().toISOString(),
+      }],
+      shortcuts: [{ id: 'shortcut-x', title: payload, category: payload, url: 'javascript:alert(1)', enabled: true }],
+      rss: {
+        feeds: [{ id: 'feed-x', url: 'https://example.com/rss.xml', tag: payload }],
+        items: [{ id: 'rss-x', link: 'javascript:alert(1)', title: payload, summary: payload }],
+      },
+      cameraFeed: { mode: 'stream', active: true, sourceUrl: 'javascript:alert(1)' },
+      liveStreams: {
+        sourceType: 'generic',
+        inputs: { generic: 'javascript:alert(1)' },
+        active: true,
+        status: 'loading',
+        renderMode: 'iframe',
+        embedUrl: 'javascript:alert(1)',
+        externalUrl: 'javascript:alert(1)',
+      },
+    }, { render: true });
+
+    const forcedLink = document.createElement('a');
+    forcedLink.setAttribute('href', 'javascript:window.__nostromoStoredXss=2');
+    forcedLink.setAttribute('onclick', 'window.__nostromoStoredXss=3');
+    document.body.append(forcedLink);
+    const nestedEvent = document.createElement('div');
+    nestedEvent.innerHTML = '<span onmouseover="window.__nostromoStoredXss=4">nested event</span>';
+    document.body.append(nestedEvent);
+    const inlineScript = document.createElement('script');
+    inlineScript.textContent = 'window.__nostromoInlineScriptRan = true';
+    window.__nostromoInlineScriptRan = false;
+    document.body.append(inlineScript);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return {
+      xssValue: window.__nostromoStoredXss,
+      inlineScriptRan: window.__nostromoInlineScriptRan,
+      hasEventAttributes: Boolean(document.querySelector('[onerror], [onclick], [onload]')),
+      hasUnsafeHref: [...document.querySelectorAll('a[href]')]
+        .some((link) => /^(?:javascript|data|file|vbscript):/i.test(link.getAttribute('href') || '')),
+      projectTextWasEscaped: document.querySelector('#projectDirectory')?.textContent.includes(payload) || false,
+      notePreviewWasEscaped: document.querySelector('.md-preview')?.textContent.includes(payload) || false,
+      shortcutWasBlocked: document.querySelector('#shortcutsWidget .shortcut-link.is-disabled')?.textContent.includes('Blocked unsafe URL') || false,
+      cameraFrameWasBlanked: document.querySelector('[data-camera-role="stream-frame"]')?.getAttribute('src') === 'about:blank',
+      liveFrameWasBlanked: document.querySelector('[data-live-role="frame"]')?.getAttribute('src') === 'about:blank',
+      frameSandboxed: document.querySelector('[data-live-role="frame"]')?.getAttribute('sandbox') === 'allow-scripts allow-same-origin allow-presentation',
+    };
+  });
+  assert.equal(hostileContentResult.xssValue, 0);
+  assert.equal(hostileContentResult.inlineScriptRan, false);
+  assert.equal(hostileContentResult.hasEventAttributes, false);
+  assert.equal(hostileContentResult.hasUnsafeHref, false);
+  assert.equal(hostileContentResult.projectTextWasEscaped, true);
+  assert.equal(hostileContentResult.notePreviewWasEscaped, true);
+  assert.equal(hostileContentResult.shortcutWasBlocked, true);
+  assert.equal(hostileContentResult.cameraFrameWasBlanked, true);
+  assert.equal(hostileContentResult.liveFrameWasBlanked, true);
+  assert.equal(hostileContentResult.frameSandboxed, true);
   assert.deepEqual(pageErrors, []);
 } finally {
   await browser?.close();

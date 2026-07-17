@@ -82,6 +82,7 @@ function installSameOriginCsrfFetch(){
 }
 
 installSameOriginCsrfFetch();
+window.NostromoSafeUI.installActiveUrlPolicy();
 
 const COLUMNS = [
   ['inbox', 'Inbox'],
@@ -1358,10 +1359,9 @@ function showSharedStateConflict(error){
   if (existing) return;
   const notice = document.createElement('section');
   notice.id = 'sharedStateConflictNotice';
-  notice.className = 'change-log-item';
+  notice.className = 'change-log-item shared-state-conflict-notice';
   notice.setAttribute('role', 'alert');
-  notice.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:9999;max-width:430px;border:1px solid #d08b31;background:#241a10;color:#fff;padding:14px;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.35)';
-  notice.innerHTML = `<strong>Shared state changed elsewhere</strong><div class="note-meta" style="color:inherit;margin:8px 0;">Your local edits are still kept in this browser. Reload the newer shared copy, export your edits, or explicitly overwrite it.</div><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn ghost" data-state-conflict="reload" type="button">Reload shared</button><button class="btn ghost" data-state-conflict="export" type="button">Export my edits</button><button class="btn" data-state-conflict="overwrite" type="button">Keep my edits</button></div>`;
+  notice.innerHTML = `<strong>Shared state changed elsewhere</strong><div class="note-meta shared-state-conflict-copy">Your local edits are still kept in this browser. Reload the newer shared copy, export your edits, or explicitly overwrite it.</div><div class="shared-state-conflict-actions"><button class="btn ghost" data-state-conflict="reload" type="button">Reload shared</button><button class="btn ghost" data-state-conflict="export" type="button">Export my edits</button><button class="btn" data-state-conflict="overwrite" type="button">Keep my edits</button></div>`;
   document.body.appendChild(notice);
   notice.querySelector('[data-state-conflict="reload"]')?.addEventListener('click', async () => {
     await runSharedHydrateNow();
@@ -1925,7 +1925,7 @@ function renderChangeLog(){
   const moreBtn = document.getElementById('changeLogLoadMoreBtn');
   if (!section || !toggleBtn || !el) return;
 
-  section.style.display = changeLogVisible ? 'block' : 'none';
+  section.classList.toggle('is-hidden', !changeLogVisible);
   toggleBtn.textContent = changeLogVisible ? 'Hide Patch Notes' : 'Show Patch Notes';
 
   if (!changeLogVisible) {
@@ -1935,7 +1935,7 @@ function renderChangeLog(){
 
   if (!state.changelog.length) {
     el.innerHTML = '<div class="note-meta">No patch notes yet.</div>';
-    if (moreBtn) moreBtn.style.display = 'none';
+    if (moreBtn) moreBtn.classList.add('is-hidden');
     updatePatchNotesOverflowAffordance();
     return;
   }
@@ -1946,7 +1946,7 @@ function renderChangeLog(){
     .join('');
 
   if (moreBtn) {
-    moreBtn.style.display = state.changelog.length > changeLogLimit ? 'inline-block' : 'none';
+    moreBtn.classList.toggle('is-hidden', state.changelog.length <= changeLogLimit);
   }
   updatePatchNotesOverflowAffordance();
 }
@@ -2497,7 +2497,7 @@ function renderCalendar(){
   const diaryDayCount = diaryDates.size;
   const heads = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<div class="cal-cell cal-head">${d}</div>`).join('');
   let cells = '';
-  for (let i=0;i<start;i++) cells += '<div class="cal-cell" style="opacity:.25">&nbsp;</div>';
+  for (let i=0;i<start;i++) cells += '<div class="cal-cell cal-cell-empty">&nbsp;</div>';
   for (let d=1; d<=days; d++) {
     const key = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     const isToday = key===todayKey;
@@ -2589,10 +2589,10 @@ function renderCalendarRemindersPanel(){
   list.innerHTML = items.map((r)=>`
     <div class="calendar-reminder-card">
       <div class="calendar-reminder-copy">
-        <div class="calendar-reminder-time">${r.time || 'Anytime'}</div>
+        <div class="calendar-reminder-time">${escapeText(r.time || 'Anytime')}</div>
         <div class="calendar-reminder-text">${escapeHtml(r.text)}</div>
       </div>
-      <button class="btn note-delete calendar-reminder-delete" data-rem-del="${r.id}" type="button">Delete</button>
+      <button class="btn note-delete calendar-reminder-delete" data-rem-del="${escapeAttribute(r.id)}" type="button">Delete</button>
     </div>
   `).join('');
   list.querySelectorAll('[data-rem-del]').forEach((b)=>{
@@ -2616,7 +2616,7 @@ function renderTodayReminders(){
     el.innerHTML = '<div class="note-meta">No reminders for today.</div>';
     return;
   }
-  el.innerHTML = items.map((r)=>`<div class="change-log-item"><strong>${r.time || 'Anytime'}</strong> — ${escapeHtml(r.text)}</div>`).join('');
+  el.innerHTML = items.map((r)=>`<div class="change-log-item"><strong>${escapeText(r.time || 'Anytime')}</strong> — ${escapeHtml(r.text)}</div>`).join('');
 }
 
 function renderThemeChoices(){
@@ -2626,7 +2626,7 @@ function renderThemeChoices(){
   wrap.innerHTML = THEME_OPTIONS.map((theme) => {
     const active = theme.id === activeTheme;
     const swatches = theme.swatches
-      .map((color) => `<span class="theme-choice-swatch" style="background:${escapeHtml(color)}"></span>`)
+      .map((_, index) => `<span class="theme-choice-swatch theme-choice-swatch--${theme.id}-${index}"></span>`)
       .join('');
     return `<button type="button" class="theme-choice${active ? ' is-active' : ''}" data-theme-choice="${escapeHtml(theme.id)}" aria-pressed="${active ? 'true' : 'false'}">
       <span class="theme-choice-swatches" aria-hidden="true">${swatches}</span>
@@ -2733,9 +2733,9 @@ async function renderWeather(options = {}){
       const l = lows[i] != null ? Math.round(lows[i]) : '--';
       return `
         <div class="forecast-item date-forecast-item">
-          <div class="forecast-day">${day}</div>
-          <div class="forecast-icon">${iconForCode(code)}</div>
-          <div class="forecast-cond">${c}</div>
+          <div class="forecast-day">${escapeText(day)}</div>
+          <div class="forecast-icon">${escapeText(iconForCode(code))}</div>
+          <div class="forecast-cond">${escapeText(c)}</div>
           <div class="forecast-temp">H ${h}° / L ${l}°</div>
         </div>
       `;
@@ -2747,8 +2747,8 @@ async function renderWeather(options = {}){
         <div class="date-weather-current">
           <div class="date-weather-temp">${Math.round(current.temperature_2m ?? 0)}°</div>
           <div class="date-weather-summary">
-            <div class="date-weather-condition">${desc}</div>
-            <div class="date-weather-location">${locationLabel}</div>
+            <div class="date-weather-condition">${escapeText(desc)}</div>
+            <div class="date-weather-location">${escapeText(locationLabel)}</div>
           </div>
         </div>
         <div class="date-weather-facts">
@@ -2758,7 +2758,7 @@ async function renderWeather(options = {}){
           </div>
           <div class="date-weather-fact">
             <span>Humidity</span>
-            <strong>${current.relative_humidity_2m ?? '--'}%</strong>
+            <strong>${escapeText(current.relative_humidity_2m ?? '--')}%</strong>
           </div>
           <div class="date-weather-fact">
             <span>Today</span>
@@ -2814,13 +2814,13 @@ function renderGasPricesView(){
     ['Premium', displayValues.premium],
     ['Diesel', displayValues.diesel],
   ].map(([label, value]) => `
-    <div class="change-log-item" style="padding:8px 10px;min-width:120px;">
+    <div class="change-log-item gas-price-card">
       <div class="note-meta">${label}</div>
-      <div style="font-weight:700;font-size:1.05rem;">${escapeHtml(value || '—')}</div>
+      <div class="gas-price-value">${escapeHtml(value || '—')}</div>
     </div>
   `).join('');
 
-  widget.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;">${cards}</div>`;
+  widget.innerHTML = `<div class="gas-price-grid">${cards}</div>`;
 
   const parts = [];
   if (gas.resolvedLocation) parts.push(`Area: ${gas.resolvedLocation}`);
@@ -3170,9 +3170,9 @@ function renderEverydayCalculatorPod(){
         <button class="btn" data-calc-action="digit" data-calc-value="1" type="button">1</button>
         <button class="btn" data-calc-action="digit" data-calc-value="2" type="button">2</button>
         <button class="btn" data-calc-action="digit" data-calc-value="3" type="button">3</button>
-        <button class="btn" data-calc-action="equals" type="button" style="grid-row: span 2;">=</button>
+        <button class="btn everyday-calc-equals" data-calc-action="equals" type="button">=</button>
 
-        <button class="btn" data-calc-action="digit" data-calc-value="0" type="button" style="grid-column: span 2;">0</button>
+        <button class="btn everyday-calc-zero" data-calc-action="digit" data-calc-value="0" type="button">0</button>
         <button class="btn" data-calc-action="decimal" type="button">.</button>
       </div>
       <button class="btn ghost mt8" data-calc-action="toggle-tip-tax" type="button">${calc.tipPanelOpen ? 'Hide' : 'Show'} Tip/Tax</button>
@@ -3491,10 +3491,14 @@ function renderNbaControls(games){
 
 function renderNbaActionLinks(game){
   const actions = [];
-  if (game.actions.gamecast) actions.push(`<a class="btn ghost" href="${encodeURI(game.actions.gamecast)}" target="_blank" rel="noopener">Gamecast</a>`);
-  if (game.actions.boxScore) actions.push(`<a class="btn ghost" href="${encodeURI(game.actions.boxScore)}" target="_blank" rel="noopener">Box Score</a>`);
-  if (game.statusBucket === 'final' && game.actions.recap) actions.push(`<a class="btn ghost" href="${encodeURI(game.actions.recap)}" target="_blank" rel="noopener">Recap</a>`);
-  else if (game.statusBucket === 'live' && game.actions.playByPlay) actions.push(`<a class="btn ghost" href="${encodeURI(game.actions.playByPlay)}" target="_blank" rel="noopener">Play-by-Play</a>`);
+  const add = (url, label) => {
+    const safe = safeExternalUrl(url);
+    if (safe) actions.push(`<a class="btn ghost" href="${escapeAttribute(safe)}" target="_blank" rel="noopener noreferrer">${label}</a>`);
+  };
+  add(game.actions.gamecast, 'Gamecast');
+  add(game.actions.boxScore, 'Box Score');
+  if (game.statusBucket === 'final') add(game.actions.recap, 'Recap');
+  else if (game.statusBucket === 'live') add(game.actions.playByPlay, 'Play-by-Play');
   return actions.slice(0, 3).join('');
 }
 
@@ -3503,7 +3507,7 @@ function renderNbaTeamLine(team, emphasis = ''){
   return `
     <div class="nba-team-line ${emphasis}">
       <div class="nba-team-ident">
-        ${team.logo ? `<img class="nba-team-logo" src="${encodeURI(team.logo)}" alt="${escapeHtml(team.name)} logo" loading="lazy" />` : '<span class="nba-team-logo nba-team-logo--placeholder"></span>'}
+        ${safeMediaUrl(team.logo) ? `<img class="nba-team-logo" src="${escapeAttribute(safeMediaUrl(team.logo))}" alt="${escapeAttribute(team.name)} logo" loading="lazy" />` : '<span class="nba-team-logo nba-team-logo--placeholder"></span>'}
         <div>
           <div class="nba-team-name">${escapeHtml(team.abbr)}</div>
           <div class="nba-team-record">${escapeHtml(team.record || team.name)}</div>
@@ -4523,12 +4527,12 @@ function mountRssSettingsFeeds(){
   }
 
   wrap.innerHTML = feeds.map((feed) => `
-    <div class="change-log-item row-between-wrap" style="gap:8px;align-items:flex-start;">
-      <div style="min-width:0;">
-        <div style="font-weight:600;word-break:break-all;">${escapeHtml(feed.url)}</div>
+    <div class="change-log-item row-between-wrap rss-feed-setting-row">
+      <div class="rss-feed-setting-copy">
+        <div class="rss-feed-setting-url">${escapeHtml(feed.url)}</div>
         <div class="note-meta">${escapeHtml(feed.tag || 'General')}</div>
       </div>
-      <button class="btn note-delete" data-rss-feed-remove="${feed.id}" type="button">Remove</button>
+      <button class="btn note-delete" data-rss-feed-remove="${escapeAttribute(feed.id)}" type="button">Remove</button>
     </div>
   `).join('');
 
@@ -5004,7 +5008,7 @@ function renderSocialFollowersTile(config){
       <div class="social-followers-tile-subtitle">${escapeHtml(audienceLabel)}</div>
       <div class="social-followers-tile-count social-followers-tile-count--label">Blast From the Ads</div>
       <div class="note-meta">Community member counts are not publicly exposed while logged out.</div>
-      <div class="social-followers-tile-meta">${escapeHtml(identityLabel || 'Facebook Group')}${groupHref ? ` <a class="social-followers-link" href="${escapeHtml(groupHref)}" target="_blank" rel="noopener">Open group</a>` : ''}</div>
+      <div class="social-followers-tile-meta">${escapeText(identityLabel || 'Facebook Group')}${safeExternalUrl(groupHref) ? ` <a class="social-followers-link" href="${escapeAttribute(safeExternalUrl(groupHref))}" target="_blank" rel="noopener noreferrer">Open group</a>` : ''}</div>
     </article>`;
   }
 
@@ -5026,7 +5030,7 @@ function renderSocialFollowersTile(config){
         <strong>${escapeHtml(metricSecondaryValue)}</strong>
       </div>
     </div>
-    <div class="social-followers-tile-meta">${escapeHtml(identityLabel || 'Unknown')} <span class="badge">${escapeHtml(source || 'fallback')}</span>${href ? ` <a class="social-followers-link" href="${escapeHtml(String(href))}" target="_blank" rel="noopener">Open</a>` : ''}</div>
+    <div class="social-followers-tile-meta">${escapeText(identityLabel || 'Unknown')} <span class="badge">${escapeText(source || 'fallback')}</span>${safeExternalUrl(String(href || '')) ? ` <a class="social-followers-link" href="${escapeAttribute(safeExternalUrl(String(href || '')))}" target="_blank" rel="noopener noreferrer">Open</a>` : ''}</div>
   </article>`;
 }
 
@@ -5239,7 +5243,7 @@ function renderInstagramAnalyticsDialog(){
   const contentSummary = contentAnalytics.summary || null;
   const contentInsights = contentAnalytics.insights && typeof contentAnalytics.insights === 'object' ? contentAnalytics.insights : null;
   title.textContent = analytics.title;
-  meta.innerHTML = `<span>${escapeHtml(analytics.subtitle)}</span> <span class="badge">${escapeHtml(analytics.sourceLabel)}</span>${analytics.profileUrl ? ` <a class="social-followers-link" href="${escapeHtml(analytics.profileUrl)}" target="_blank" rel="noopener">Open</a>` : ''}`;
+  meta.innerHTML = `<span>${escapeText(analytics.subtitle)}</span> <span class="badge">${escapeText(analytics.sourceLabel)}</span>${safeExternalUrl(analytics.profileUrl) ? ` <a class="social-followers-link" href="${escapeAttribute(safeExternalUrl(analytics.profileUrl))}" target="_blank" rel="noopener noreferrer">Open</a>` : ''}`;
 
   if (latestCount == null) {
     body.innerHTML = `<div class="note-meta">${escapeHtml(analytics.emptyMessage)}</div>`;
@@ -5276,7 +5280,7 @@ function renderInstagramAnalyticsDialog(){
           <span class="social-analytics-kicker">#${index + 1} · ${escapeHtml(formatSocialContentType(item))}</span>
           <strong>${escapeHtml(trimSocialCaption(item.caption, 132))}</strong>
         </div>
-        ${item.permalink ? `<a class="social-followers-link" href="${escapeHtml(item.permalink)}" target="_blank" rel="noopener">Open</a>` : ''}
+        ${safeExternalUrl(item.permalink) ? `<a class="social-followers-link" href="${escapeAttribute(safeExternalUrl(item.permalink))}" target="_blank" rel="noopener noreferrer">Open</a>` : ''}
       </div>
       <div class="social-analytics-content-metrics">
         <span>Posted ${escapeHtml(formatFollowerTimestamp(item.takenAt))}</span>
@@ -6197,9 +6201,9 @@ function renderEbayTrafficTopListings(store){
                 <div class="ebay-traffic-listing-title">
                   <a
                     class="ebay-traffic-listing-link"
-                    href="${escapeHtml(buildEbayListingUrl(entry?.listingId, store?.marketplaceId || 'EBAY_US'))}"
+                    href="${escapeAttribute(safeExternalUrl(buildEbayListingUrl(entry?.listingId, store?.marketplaceId || 'EBAY_US')) || '#')}"
                     target="_blank"
-                    rel="noopener"
+                    rel="noopener noreferrer"
                   >${escapeHtml(String(entry?.title || 'Untitled listing'))}</a>
                 </div>
                 <div class="ebay-traffic-listing-meta">${escapeHtml(String(entry?.listingId || ''))}</div>
@@ -6238,13 +6242,18 @@ function renderEbayTrafficViewSources(store){
               <strong>${escapeHtml(String(entry?.label || 'Source'))}</strong>
               <span>${escapeHtml(formatEbayTrafficPercent(entry?.sharePercent))} of views</span>
             </div>
-            <div class="ebay-traffic-source-bar"><span style="width:${width}%"></span></div>
+            <div class="ebay-traffic-source-bar"><span class="${ebayTrafficWidthClass(width)}"></span></div>
             <div class="ebay-traffic-source-value">${escapeHtml(formatEbayTrafficNumber(value))}</div>
           </div>
         `;
       }).join('')}
     </div>
   `;
+}
+
+function ebayTrafficWidthClass(width){
+  const normalized = Math.max(0, Math.min(100, Math.round(Number(width) || 0) / 5) * 5);
+  return `ebay-traffic-bar-fill ebay-traffic-bar-fill--w-${normalized}`;
 }
 
 function renderEbayTrafficPromotionMix(store){
@@ -6265,9 +6274,9 @@ function renderEbayTrafficPromotionMix(store){
     `;
   }
   const maxValue = Math.max(...items.map((entry) => Number(entry?.value || 0)), 1);
-  const toneMap = {
-    organic: 'linear-gradient(90deg, rgba(45, 212, 191, 0.78), rgba(59, 130, 246, 0.48))',
-    promoted: 'linear-gradient(90deg, rgba(168, 85, 247, 0.82), rgba(59, 130, 246, 0.55))',
+  const toneClassMap = {
+    organic: 'ebay-traffic-bar-fill--organic',
+    promoted: 'ebay-traffic-bar-fill--promoted',
     offsite: 'linear-gradient(90deg, rgba(251, 191, 36, 0.82), rgba(244, 114, 182, 0.52))',
   };
   const lead = Number.isFinite(Number(mix?.promotedImpressions))
@@ -6320,14 +6329,14 @@ function renderEbayTrafficPromotionMix(store){
         ${items.map((entry) => {
           const value = Number(entry?.value || 0);
           const width = Math.max(value > 0 ? 12 : 0, Math.round((value / maxValue) * 100));
-          const tone = toneMap[String(entry?.id || '').trim()] || toneMap.organic;
+          const toneClass = toneClassMap[String(entry?.id || '').trim()] || toneClassMap.organic;
           return `
             <div class="ebay-traffic-source-row">
               <div class="ebay-traffic-source-labels">
                 <strong>${escapeHtml(String(entry?.label || 'Channel'))}</strong>
                 <span>${escapeHtml(formatEbayTrafficPercent(entry?.sharePercent))} of daily impressions</span>
               </div>
-              <div class="ebay-traffic-source-bar"><span style="width:${width}%; background:${tone}"></span></div>
+              <div class="ebay-traffic-source-bar"><span class="${ebayTrafficWidthClass(width)} ${toneClass}"></span></div>
               <div class="ebay-traffic-source-value">${escapeHtml(formatEbayTrafficNumber(value))}</div>
             </div>
           `;
@@ -6447,7 +6456,7 @@ function renderEbayTrafficDailyTrend(store){
         return `
           <div class="ebay-traffic-trend-row">
             <div class="ebay-traffic-trend-date">${escapeHtml(formatEbayTrafficDateLabel(entry?.label || ''))}</div>
-            <div class="ebay-traffic-trend-bar"><span style="width:${width}%"></span></div>
+            <div class="ebay-traffic-trend-bar"><span class="${ebayTrafficWidthClass(width)}"></span></div>
             <div class="ebay-traffic-trend-values">
               <strong>${escapeHtml(formatEbayTrafficNumber(impressions))} impr.</strong>
               <span>${escapeHtml(formatEbayTrafficNumber(views))} views · ${escapeHtml(formatEbayTrafficNumber(entry?.transactions || 0))} sold</span>
@@ -6675,7 +6684,7 @@ function renderEbayTrafficWidget(payload = {}, options = {}){
           </div>
           <p>${escapeHtml(freshnessLabel)}</p>
           <div class="ebay-traffic-focus-actions">
-            ${activeStore?.storeUrl ? `<a class="btn ghost" href="${encodeURI(activeStore.storeUrl)}" target="_blank" rel="noopener">Open store</a>` : ''}
+            ${safeExternalUrl(activeStore?.storeUrl) ? `<a class="btn ghost" href="${escapeAttribute(safeExternalUrl(activeStore.storeUrl))}" target="_blank" rel="noopener noreferrer">Open store</a>` : ''}
             ${renderEbayTrafficTag(`30d ${formatEbayTrafficNumber(activeSummary?.impressions || 0)} impressions`, 'neutral')}
             ${renderEbayTrafficTag(`30d ${formatEbayTrafficNumber(activeSummary?.transactions || 0)} sold`, 'success')}
             ${renderEbayTrafficTag(`CTR ${formatEbayTrafficPercent(dailySnapshot?.metrics?.clickThroughRate?.value ?? activeSummary?.clickThroughRate)}`, 'neutral')}
@@ -6893,11 +6902,11 @@ function renderRssListFromState(){
             <span class="rss-source-chip">${sourceLabel}</span>
             <span class="rss-story-time">${escapeHtml(relative)} · ${escapeHtml(published)}</span>
           </div>
-          <a class="rss-story-title" href="${encodeURI(item.link)}" target="_blank" rel="noopener">${escapeHtml(item.title || 'Untitled')}</a>
+          <a class="rss-story-title" href="${escapeAttribute(safeExternalUrl(item.link) || '#')}" target="_blank" rel="noopener noreferrer">${escapeText(item.title || 'Untitled')}</a>
           ${summary ? `<div class="rss-story-summary">${summary}</div>` : '<div class="rss-story-summary rss-story-summary-empty">Open the story for the full article.</div>'}
           <div class="rss-story-actions">
-            ${isRead ? '<span class="rss-read-state">Read</span>' : `<button class="btn ghost rss-mark-read-btn" data-rss-read="${item.id}" type="button">Mark read</button>`}
-            <a class="btn rss-open-link-btn" href="${encodeURI(item.link)}" target="_blank" rel="noopener">Open story</a>
+            ${isRead ? '<span class="rss-read-state">Read</span>' : `<button class="btn ghost rss-mark-read-btn" data-rss-read="${escapeAttribute(item.id)}" type="button">Mark read</button>`}
+            <a class="btn rss-open-link-btn" href="${escapeAttribute(safeExternalUrl(item.link) || '#')}" target="_blank" rel="noopener noreferrer">Open story</a>
           </div>
         </article>
       `;
@@ -7566,9 +7575,12 @@ function renderUnreadEmailReaderParagraph(paragraph = '', className = ''){
   const parts = text.split(urlPattern);
   const markup = parts.map((part, index) => {
     if (index % 2 === 1) {
-      return `<a href="${escapeHtml(part)}" target="_blank" rel="noopener">${escapeHtml(part)}</a>`;
+      const safe = safeExternalUrl(part);
+      return safe
+        ? `<a href="${escapeAttribute(safe)}" target="_blank" rel="noopener noreferrer">${escapeText(part)}</a>`
+        : escapeText(part);
     }
-    return escapeHtml(part);
+    return escapeText(part);
   }).join('');
   return `<p${attrs}>${markup}</p>`;
 }
@@ -8117,9 +8129,9 @@ function renderUnreadEmailWidget(payload, options = {}){
               </div>
             </div>
             <div class="unread-email-focus-actions">
-              ${inboxUrl ? `<a class="btn ghost" href="${encodeURI(inboxUrl)}" target="_blank" rel="noopener">Open inbox</a>` : ''}
+              ${safeExternalUrl(inboxUrl) ? `<a class="btn ghost" href="${escapeAttribute(safeExternalUrl(inboxUrl))}" target="_blank" rel="noopener noreferrer">Open inbox</a>` : ''}
               <button class="btn ghost unread-email-bulk-btn" type="button" data-unread-email-toggle-recent="1">${unreadEmailShowRecentInbox ? 'Hide latest 5 overall' : 'Show latest 5 overall'}</button>
-              ${(activeAccount.includeSent && sentOpenUrl) ? `<a class="btn ghost" href="${encodeURI(sentOpenUrl)}" target="_blank" rel="noopener">Open sent</a>` : ''}
+              ${(activeAccount.includeSent && safeExternalUrl(sentOpenUrl)) ? `<a class="btn ghost" href="${escapeAttribute(safeExternalUrl(sentOpenUrl))}" target="_blank" rel="noopener noreferrer">Open sent</a>` : ''}
             </div>
             ${renderUnreadEmailBlockedSenderPanel(activeAccountId, blockedSenderList)}
             ${activeAccount.message ? `<p>${escapeHtml(activeAccount.message)}</p>` : ''}
@@ -8399,8 +8411,10 @@ function ensureMusicIframe(){
   iframe.id = 'musicStreamIframe';
   iframe.className = 'music-player-hidden';
   iframe.setAttribute('data-music-role', 'iframe');
-  iframe.setAttribute('allow', 'autoplay; encrypted-media');
   iframe.setAttribute('title', 'Music stream player');
+  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-presentation');
+  iframe.setAttribute('allow', 'autoplay; encrypted-media');
+  iframe.setAttribute('referrerpolicy', 'no-referrer');
   if (audioEl?.parentElement === pod) {
     pod.insertBefore(iframe, audioEl);
   } else {
@@ -8695,7 +8709,7 @@ function setMusicMode(mode){
 }
 
 function loadManualStream(url){
-  const trimmed = String(url || '').trim();
+  const trimmed = safeMediaUrl(String(url || '').trim()) || safeFrameUrl(String(url || '').trim());
   if (!trimmed) return false;
   state.musicPlayer.mode = 'stream';
   state.musicPlayer.sourceType = 'stream';
@@ -8707,7 +8721,7 @@ function loadManualStream(url){
 }
 
 function saveFavoriteStream(url){
-  const trimmed = String(url || '').trim();
+  const trimmed = safeMediaUrl(String(url || '').trim()) || safeFrameUrl(String(url || '').trim());
   if (!trimmed) return false;
   state.musicPlayer.favoriteStreamUrl = trimmed;
   save();
@@ -8772,7 +8786,7 @@ function loadStreamIntoPlayer(url){
     audio.pause();
     audio.loop = false;
     audio.removeAttribute('src');
-    iframe.src = `https://www.youtube.com/embed/${encodeURIComponent(ytId)}?enablejsapi=1&autoplay=0&playsinline=1`;
+    setSafeFrameSource(iframe, `https://www.youtube.com/embed/${encodeURIComponent(ytId)}?enablejsapi=1&autoplay=0&playsinline=1`);
     ensureYoutubeApi();
     if (window.YT?.Player) initYouTubePlayerIfReady();
     if (state.musicPlayer.mode !== 'ambient') {
@@ -8785,8 +8799,12 @@ function loadStreamIntoPlayer(url){
   pendingYoutubeAction = null;
   clearAmbientYoutubeFallbackTimer();
   clearYoutubePlayGuardTimer();
-  iframe.src = '';
-  audio.src = rawUrl;
+  iframe.src = 'about:blank';
+  if (!setSafeMediaSource(audio, rawUrl)) {
+    state.musicPlayer.streamMode = 'unknown';
+    setMusicStatus('Only HTTPS direct streams and approved embedded providers are allowed.');
+    return;
+  }
   audio.loop = state.musicPlayer.mode === 'ambient';
   audio.volume = state.musicPlayer.volume;
   if (state.musicPlayer.mode !== 'ambient') {
@@ -8853,7 +8871,11 @@ function playMusic(){
   }
 
   if (state.musicPlayer.streamMode === 'embed') {
-    if (iframe && iframe.src !== url) iframe.src = url;
+    if (!iframe || !setSafeFrameSource(iframe, url)) {
+      state.musicPlayer.isPlaying = false;
+      setMusicStatus('This embed URL is not an approved provider.');
+      return;
+    }
     state.musicPlayer.isPlaying = true;
     save();
     setMusicStatus('Embed stream active. Use controls inside the embedded player if needed.');
@@ -8861,7 +8883,10 @@ function playMusic(){
   }
 
   if (audio) {
-    if (!audio.src) audio.src = url;
+    if (!audio.src && !setSafeMediaSource(audio, url)) {
+      setMusicStatus('This direct stream URL is not allowed.');
+      return;
+    }
     audio.play().then(() => {
       state.musicPlayer.isPlaying = true;
       save();
@@ -8870,7 +8895,10 @@ function playMusic(){
       if (iframe) {
         state.musicPlayer.streamMode = 'embed';
         audio.pause();
-        iframe.src = url;
+        if (!setSafeFrameSource(iframe, url)) {
+          setMusicStatus('Direct playback failed and this URL is not an approved embed provider.');
+          return;
+        }
         state.musicPlayer.isPlaying = true;
         save();
         setMusicStatus('Direct audio playback failed; switched to embedded stream mode. Use controls inside the embedded player.');
@@ -8909,7 +8937,7 @@ function stopMusic(){
   } else if (state.musicPlayer.streamMode === 'youtube' && streamIframePlayer?.stopVideo) {
     streamIframePlayer.stopVideo();
   } else if (state.musicPlayer.streamMode === 'embed' && iframe) {
-    iframe.src = '';
+    iframe.src = 'about:blank';
   }
   clearMusicSleepTimer();
   state.musicPlayer.sleepTimerMin = 0;
@@ -9031,7 +9059,7 @@ function renderMusicPlayer(){
         </div>
       </div>
 
-      <iframe id="musicStreamIframe" data-music-role="iframe" class="music-player-hidden" allow="autoplay; encrypted-media" title="Music stream player"></iframe>
+      <iframe id="musicStreamIframe" data-music-role="iframe" class="music-player-hidden" sandbox="allow-scripts allow-same-origin allow-presentation" allow="autoplay; encrypted-media" referrerpolicy="no-referrer" title="Music stream player"></iframe>
       <audio id="musicLocalAudio" data-music-role="audio" class="music-player-hidden" preload="metadata"></audio>
       <div class="music-player-mini">Source: ${state.musicPlayer.sourceType === 'local' ? 'Local file' : (isAmbientMode ? `Ambient · ${escapeHtml(ambient.preset.label)}` : 'Stream URL')}${hasFav ? ' · Favorite saved' : ''}${state.musicPlayer.sleepTimerMin ? ` · Sleep ${state.musicPlayer.sleepTimerMin}m` : ''}</div>
     </div>
@@ -9419,7 +9447,7 @@ function stopLocalCameraStream(){
   const video = getCameraFeedEls().localVideo;
   if (video) {
     try { video.srcObject = null; } catch {}
-    video.style.display = 'none';
+    video.classList.add('is-hidden');
   }
 }
 
@@ -9458,14 +9486,14 @@ function stopCameraFeed(options = {}){
   const els = getCameraFeedEls();
   if (els.streamFrame) {
     els.streamFrame.src = 'about:blank';
-    els.streamFrame.style.display = 'none';
+    els.streamFrame.classList.add('is-hidden');
   }
   if (els.snapshotImg) {
     els.snapshotImg.removeAttribute('src');
-    els.snapshotImg.style.display = 'none';
+    els.snapshotImg.classList.add('is-hidden');
   }
   if (els.localVideo) {
-    els.localVideo.style.display = 'none';
+    els.localVideo.classList.add('is-hidden');
   }
 
   state.cameraFeed.active = false;
@@ -9517,7 +9545,11 @@ function startSnapshotMode(){
       setCameraFeedStatus(state.cameraFeed.lastError);
       save();
     };
-    img.src = cameraSnapshotUrl(sourceUrl);
+    if (!setSafeMediaSource(img, cameraSnapshotUrl(sourceUrl))) {
+      state.cameraFeed.status = 'error';
+      state.cameraFeed.lastError = 'Snapshot source URL is not allowed.';
+      setCameraFeedStatus(state.cameraFeed.lastError);
+    }
   };
 
   tick();
@@ -9558,7 +9590,13 @@ function startStreamMode(){
     setCameraFeedStatus(state.cameraFeed.lastError);
     save();
   };
-  frame.src = sourceUrl;
+  if (!setSafeFrameSource(frame, sourceUrl)) {
+    state.cameraFeed.status = 'error';
+    state.cameraFeed.lastError = 'Camera embeds are restricted to approved HTTPS providers. Use Snapshot or Local mode for other cameras.';
+    setCameraFeedStatus(state.cameraFeed.lastError);
+    save();
+    return;
+  }
 }
 
 async function startLocalMode(){
@@ -9604,7 +9642,7 @@ async function startLocalMode(){
     const video = getCameraFeedEls().localVideo;
     if (video) {
       video.srcObject = stream;
-      video.style.display = '';
+      video.classList.remove('is-hidden');
       try { await video.play(); } catch {}
     }
 
@@ -9747,10 +9785,10 @@ function renderCameraFeedPod(){
             <span class="camera-feed-stage-chip">${escapeHtml(cameraUi.sourceHeadline)}</span>
           </div>
         </div>
-        <div class="camera-feed-frame-wrap" data-camera-role="frame-wrap" style="width:min(100%, ${viewport.width}px); height:${viewport.height}px;">
-          <iframe data-camera-role="stream-frame" title="Camera feed stream" ${showStream ? '' : 'style="display:none;"'} referrerpolicy="no-referrer"></iframe>
-          <img data-camera-role="snapshot-img" alt="Camera snapshot" ${showSnapshot ? '' : 'style="display:none;"'} />
-          <video data-camera-role="local-video" autoplay playsinline muted ${showLocal ? '' : 'style="display:none;"'}></video>
+        <div class="camera-feed-frame-wrap" data-camera-role="frame-wrap">
+          <iframe data-camera-role="stream-frame" title="Camera feed stream" sandbox="allow-scripts allow-same-origin allow-presentation" ${showStream ? '' : 'class="is-hidden"'} referrerpolicy="no-referrer"></iframe>
+          <img data-camera-role="snapshot-img" alt="Camera snapshot" ${showSnapshot ? '' : 'class="is-hidden"'} />
+          <video data-camera-role="local-video" autoplay playsinline muted ${showLocal ? '' : 'class="is-hidden"'}></video>
           <button class="camera-feed-resize-handle" data-camera-role="resize-handle" aria-label="Resize camera feed" title="Drag to resize" type="button"></button>
         </div>
       </div>
@@ -9760,6 +9798,10 @@ function renderCameraFeedPod(){
   `;
 
   const els = getCameraFeedEls();
+  if (els.frameWrap) {
+    els.frameWrap.style.width = `min(100%, ${viewport.width}px)`;
+    els.frameWrap.style.height = `${viewport.height}px`;
+  }
   bindCameraResizeHandle(els);
 
   if (mode === 'local' && !cameraDeviceRefreshInFlight && navigator?.mediaDevices?.enumerateDevices) {
@@ -9853,17 +9895,20 @@ function renderCameraFeedPod(){
   });
 
   if (showStream && els.streamFrame) {
-    els.streamFrame.src = state.cameraFeed.sourceUrl;
+    if (!setSafeFrameSource(els.streamFrame, state.cameraFeed.sourceUrl)) {
+      state.cameraFeed.status = 'error';
+      state.cameraFeed.lastError = 'Camera embed URL is not an approved HTTPS provider.';
+    }
   }
 
   if (showSnapshot && els.snapshotImg) {
-    els.snapshotImg.src = cameraSnapshotUrl(state.cameraFeed.sourceUrl);
+    setSafeMediaSource(els.snapshotImg, cameraSnapshotUrl(state.cameraFeed.sourceUrl));
   }
 
   if (showLocal && els.localVideo) {
     try {
       els.localVideo.srcObject = cameraLocalStream;
-      els.localVideo.style.display = '';
+      els.localVideo.classList.remove('is-hidden');
     } catch {}
   }
 
@@ -10111,7 +10156,7 @@ function normalizeFacebookLiveInput(raw){
 
 function openLiveStreamsPopout(url){
   if (!url) return false;
-  const popout = window.open(url, '_blank', [
+  const popout = openSafeExternal(url, [
     'popup=yes',
     'noopener',
     'noreferrer',
@@ -10495,8 +10540,8 @@ function renderLiveStreamsPod(){
           </div>
         </div>
         <div class="live-streams-frame-wrap" data-live-role="player-wrap">
-          <iframe data-live-role="frame" title="Live stream" referrerpolicy="no-referrer" allow="autoplay; fullscreen" ${isFrame ? '' : 'style="display:none;"'}></iframe>
-          <video data-live-role="video" controls autoplay playsinline ${isVideo ? '' : 'style="display:none;"'}></video>
+          <iframe data-live-role="frame" title="Live stream" sandbox="allow-scripts allow-same-origin allow-presentation" referrerpolicy="no-referrer" allow="autoplay; fullscreen" class="${isFrame ? '' : 'is-hidden'}"></iframe>
+          <video data-live-role="video" controls autoplay playsinline class="${isVideo ? '' : 'is-hidden'}"></video>
         </div>
       </div>
 
@@ -10623,7 +10668,7 @@ function renderLiveStreamsPod(){
     event.preventDefault();
     event.stopPropagation();
     if (!state.liveStreams.externalUrl) return;
-    window.open(state.liveStreams.externalUrl, '_blank', 'noopener,noreferrer');
+    openSafeExternal(state.liveStreams.externalUrl);
   });
 
   els.savePresetBtn?.addEventListener('click', (event) => {
@@ -10681,7 +10726,10 @@ function renderLiveStreamsPod(){
       save();
       setLiveStreamsStatus(`Live stream loaded (${liveSourceLabel(state.liveStreams.sourceType)}). If playback is blocked, use Pop-out Player or open in new tab.`);
     }, { once: true });
-    els.frame.src = state.liveStreams.embedUrl;
+    if (!setSafeFrameSource(els.frame, state.liveStreams.embedUrl)) {
+      setLiveStreamsStatus('This embed URL is not an approved provider. Use Open in new tab if available.');
+      return;
+    }
   }
 
   if (isVideo && els.video && state.liveStreams.embedUrl) {
@@ -10699,7 +10747,10 @@ function renderLiveStreamsPod(){
     };
     els.video.addEventListener('loadeddata', onLoaded, { once: true });
     els.video.addEventListener('error', onError, { once: true });
-    els.video.src = state.liveStreams.embedUrl;
+    if (!setSafeMediaSource(els.video, state.liveStreams.embedUrl)) {
+      setLiveStreamsStatus('This video URL is not allowed.');
+      return;
+    }
   }
 
   if (state.liveStreams.status === 'error' && state.liveStreams.lastError) {
@@ -10746,7 +10797,7 @@ function setVoiceDeskDraftValue(text){
 function showVoiceDeskFallbackTools(show){
   const toolsEl = document.getElementById('voiceDeskFallbackTools');
   if (!toolsEl) return;
-  toolsEl.style.display = show ? 'flex' : 'none';
+  toolsEl.classList.toggle('is-hidden', !show);
 }
 
 function getVoiceDeskControls(){
@@ -10849,7 +10900,7 @@ function renderVoiceDeskPod(){
         <button data-voice-desk-role="send-rowan" class="btn" ${hasDraft ? '' : 'disabled'}>Send to Rowan</button>
         <button data-voice-desk-role="clear" class="btn ghost" ${hasDraft ? '' : 'disabled'}>Clear</button>
       </div>
-      <div id="voiceDeskFallbackTools" class="voice-desk-actions" style="display:none;">
+      <div id="voiceDeskFallbackTools" class="voice-desk-actions is-hidden">
         <button id="voiceDeskCopyBtn" class="btn ghost">Copy draft</button>
         <a id="voiceDeskOpenChatLink" class="btn ghost" href="#chat" title="Open host chat">Open chat</a>
       </div>
@@ -11243,7 +11294,7 @@ function sendVoiceToRowanViaParentBridge(text){
 function showVoiceToRowanFallbackTools(show){
   const toolsEl = document.getElementById('voiceToRowanFallbackTools');
   if (!toolsEl) return;
-  toolsEl.style.display = show ? 'flex' : 'none';
+  toolsEl.classList.toggle('is-hidden', !show);
 }
 
 async function sendVoiceToRowanMessage(text){
@@ -11378,7 +11429,7 @@ function renderVoiceToRowanPod(){
       <button id="voiceToRowanSendBtn" class="btn">Send</button>
       <button id="voiceToRowanClearBtn" class="btn ghost">Clear</button>
     </div>
-    <div id="voiceToRowanFallbackTools" class="row-wrap mt6" style="display:none;">
+    <div id="voiceToRowanFallbackTools" class="row-wrap mt6 is-hidden">
       <button id="voiceToRowanCopyBtn" class="btn ghost">Copy draft</button>
       <a id="voiceToRowanOpenChatLink" class="btn ghost" href="#chat" title="Open host chat">Open chat</a>
     </div>
@@ -12359,7 +12410,7 @@ function renderHomeDeviceControlPod(){
         <button class="btn ghost" data-home-device-action="copy-ssh" data-device-id="${escapeHtml(device.id)}" ${av.copySsh.enabled ? '' : 'disabled'} title="${escapeHtml(av.copySsh.reason)}">Copy SSH</button>
         <button class="btn" data-home-device-action="wake" data-device-id="${escapeHtml(device.id)}" ${av.wake.enabled ? '' : 'disabled'} title="${escapeHtml(av.wake.reason)}">Wake</button>
       </div>
-      <div class="note-meta mt6">Ping: ${status.status === 'running' ? 'Running…' : (status.message || 'Not checked')} ${status.latencyMs != null ? `(${Math.round(status.latencyMs)}ms)` : ''}</div>
+      <div class="note-meta mt6">Ping: ${escapeText(status.status === 'running' ? 'Running…' : (status.message || 'Not checked'))} ${status.latencyMs != null ? `(${Math.round(status.latencyMs)}ms)` : ''}</div>
       <div class="note-meta">Wake: ${escapeHtml(wakeMeta)}</div>
     </article>`;
   }).join('')}</div>`;
@@ -12373,8 +12424,8 @@ function renderHomeDeviceControlPod(){
       const device = state.homeDeviceControl.devices.find((d) => d.id === deviceId);
       if (!device) return;
 
-      if (action === 'remote') { const target = resolveRemoteTarget(device); if (target?.value) window.open(target.value, '_blank', 'noopener,noreferrer'); }
-      if (action === 'ui' && device.uiUrl) window.open(device.uiUrl, '_blank', 'noopener,noreferrer');
+      if (action === 'remote') { const target = resolveRemoteTarget(device); if (target?.value) openSafeExternal(target.value); }
+      if (action === 'ui' && device.uiUrl) openSafeExternal(device.uiUrl);
       if (action === 'ping') await pingHomeDevice(device.id);
       if (action === 'copy-ssh' && device.sshTarget) { try { await navigator.clipboard.writeText(device.sshTarget); } catch {} }
       if (action === 'wake') { state.homeDeviceControl.wakeModalDeviceId = device.id; renderHomeDeviceControlPod(); }
@@ -12463,20 +12514,24 @@ function renderAll(){
 function renderProjects(){
   const wrap = document.getElementById('projectDirectory');
   if (!wrap) return;
-  wrap.innerHTML = state.projects.map(p=>`
+  wrap.innerHTML = state.projects.map((p) => {
+    const appHref = safeExternalUrl(p.appLink);
+    const repoHref = safeExternalUrl(p.repoLink);
+    return `
     <div class="project-item">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-        <strong>${escapeHtml(p.name)}</strong>
-        <span class="badge">${escapeHtml(p.status)}</span>
+      <div class="project-item-head">
+        <strong>${escapeText(p.name)}</strong>
+        <span class="badge">${escapeText(p.status)}</span>
       </div>
-      <p style="margin:.4rem 0 .6rem;opacity:.85">${escapeHtml(p.summary)}</p>
+      <p class="project-item-summary">${escapeText(p.summary)}</p>
       <small>Updated: ${new Date(p.lastUpdated).toLocaleString()}</small>
-      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-        ${p.appLink ? `<a class="btn ghost" href="${encodeURI(p.appLink)}" target="_blank" rel="noopener">App</a>` : ''}
-        ${p.repoLink ? `<a class="btn ghost" href="${encodeURI(p.repoLink)}" target="_blank" rel="noopener">Repo</a>` : ''}
+      <div class="project-item-actions">
+        ${appHref ? `<a class="btn ghost" href="${escapeAttribute(appHref)}" target="_blank" rel="noopener noreferrer">App</a>` : ''}
+        ${repoHref ? `<a class="btn ghost" href="${escapeAttribute(repoHref)}" target="_blank" rel="noopener noreferrer">Repo</a>` : ''}
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function renderStats(){
@@ -12535,10 +12590,10 @@ function renderNotes(){
   });
 
   const renderCard = (n)=>{
-    const opts = state.projects.map((p)=>`<option value="${p.id}" ${p.id===n.projectId?'selected':''}>${p.name}</option>`).join('');
-    return `<div class="note-card ${n.pinned?'pinned':''}" data-note-id="${n.id}">
+    const opts = state.projects.map((p)=>`<option value="${escapeAttribute(p.id)}" ${p.id===n.projectId?'selected':''}>${escapeText(p.name)}</option>`).join('');
+    return `<div class="note-card ${n.pinned?'pinned':''}" data-note-id="${escapeAttribute(n.id)}">
       <div class="note-top">
-        <strong>${n.title || 'Quick Note'}</strong>
+        <strong>${escapeText(n.title || 'Quick Note')}</strong>
         <span class="note-meta">${new Date(n.updatedAt).toLocaleString()}</span>
       </div>
       <input data-field="title" value="${escapeHtml(n.title || '')}" placeholder="Note title" />
@@ -12549,7 +12604,7 @@ function renderNotes(){
       <div class="md-preview" data-rendered="body">${renderFormattedText(n.body || '')}</div>
       <div class="note-actions">
         <select data-field="projectId">${opts}</select>
-        <div style="display:flex;gap:8px;">
+        <div class="note-action-buttons">
           <button class="btn note-pin" data-action="pin">${n.pinned ? 'Unpin' : 'Pin'}</button>
           <button class="btn" data-action="to-task">To Task</button>
           <button class="btn note-delete" data-action="delete">Delete</button>
@@ -12659,8 +12714,8 @@ function renderShortcutProjectChecklist(targetId, selectedIds = []){
   const selected = new Set(selectedIds.length ? selectedIds : [SHORTCUT_GLOBAL_PROJECT_ID]);
   wrap.innerHTML = shortcutAssignmentOptions().map((p) => `
     <label class="shortcut-check-row">
-      <input type="checkbox" value="${p.id}" ${selected.has(p.id) ? 'checked' : ''} />
-      <span class="shortcut-check-label">${escapeHtml(p.name)}</span>
+      <input type="checkbox" value="${escapeAttribute(p.id)}" ${selected.has(p.id) ? 'checked' : ''} />
+      <span class="shortcut-check-label">${escapeText(p.name)}</span>
     </label>
   `).join('');
 }
@@ -12719,12 +12774,16 @@ function renderShortcutsPod(){
   const visible = (state.shortcuts || []).filter((sc) => sc.enabled !== false);
 
   const cards = visible.length
-    ? visible.map((sc) => `
-      <a class="shortcut-link" href="${escapeHtml(sc.url)}" target="_blank" rel="noopener">
-        <strong>${escapeHtml(sc.title)}</strong>
-        <span>${escapeHtml(sc.category || 'Shortcut')}</span>
+    ? visible.map((sc) => {
+      const href = safeExternalUrl(sc.url);
+      if (!href) return `<div class="shortcut-link is-disabled"><strong>${escapeText(sc.title)}</strong><span>Blocked unsafe URL</span></div>`;
+      return `
+      <a class="shortcut-link" href="${escapeAttribute(href)}" target="_blank" rel="noopener noreferrer">
+        <strong>${escapeText(sc.title)}</strong>
+        <span>${escapeText(sc.category || 'Shortcut')}</span>
       </a>
-    `).join('')
+    `;
+    }).join('')
     : '<div class="note-meta">No shortcuts yet. Drop a link below or add one in Settings.</div>';
 
   wrap.innerHTML = `
@@ -12755,7 +12814,8 @@ function renderShortcutsPod(){
       setOver(false);
 
       const url = extractUrlFromDrop(e.dataTransfer);
-      if (!url || !/^https?:\/\//i.test(url)) return;
+      const safeUrl = safeExternalUrl(url);
+      if (!safeUrl) return;
 
       const droppedText = String(e.dataTransfer?.getData('text/plain') || '').trim();
       const projectIds = shortcutDefaultsFromActiveFilters();
@@ -12763,7 +12823,7 @@ function renderShortcutsPod(){
       state.shortcuts.push({
         id: id(),
         title,
-        url,
+        url: safeUrl,
         category: 'Bookmark',
         projectIds,
         enabled: true,
@@ -12791,9 +12851,9 @@ function renderShortcutsSettings(){
         </div>
         <div class="note-meta mt6">${escapeHtml(sc.category || 'No category')} · ${(sc.projectIds || []).map(projectDisplayName).map(escapeHtml).join(', ')}</div>
         <div class="shortcut-admin-actions mt8">
-          <button class="btn ghost" data-shortcut-edit="${sc.id}" type="button">Edit</button>
-          <button class="btn ghost" data-shortcut-toggle="${sc.id}" type="button">${sc.enabled === false ? 'Enable' : 'Disable'}</button>
-          <button class="btn note-delete" data-shortcut-delete="${sc.id}" type="button">Delete</button>
+          <button class="btn ghost" data-shortcut-edit="${escapeAttribute(sc.id)}" type="button">Edit</button>
+          <button class="btn ghost" data-shortcut-toggle="${escapeAttribute(sc.id)}" type="button">${sc.enabled === false ? 'Enable' : 'Disable'}</button>
+          <button class="btn note-delete" data-shortcut-delete="${escapeAttribute(sc.id)}" type="button">Delete</button>
         </div>
       </div>
     `).join('');
@@ -12829,12 +12889,42 @@ function renderShortcutsSettings(){
   });
 }
 
-function escapeHtml(str){
-  return String(str || '')
-    .replaceAll('&','&amp;')
-    .replaceAll('<','&lt;')
-    .replaceAll('>','&gt;')
-    .replaceAll('"','&quot;');
+function escapeText(value){
+  return window.NostromoSafeUI.escapeText(value);
+}
+
+function escapeAttribute(value){
+  return window.NostromoSafeUI.escapeAttribute(value);
+}
+
+// Legacy renderer alias. New template code must choose escapeText or
+// escapeAttribute according to its HTML context rather than treating URLs as text.
+function escapeHtml(value){
+  return escapeAttribute(value);
+}
+
+function safeExternalUrl(value){
+  return window.NostromoSafeUI.safeExternalUrl(value);
+}
+
+function safeFrameUrl(value, options){
+  return window.NostromoSafeUI.safeFrameUrl(value, options);
+}
+
+function safeMediaUrl(value){
+  return window.NostromoSafeUI.safeMediaUrl(value);
+}
+
+function openSafeExternal(value, features){
+  return window.NostromoSafeUI.openExternal(value, features);
+}
+
+function setSafeFrameSource(frame, value, options){
+  return window.NostromoSafeUI.setSafeFrameSource(frame, value, options);
+}
+
+function setSafeMediaSource(element, value){
+  return window.NostromoSafeUI.setSafeMediaSource(element, value);
 }
 
 const EDITOR_CONFIG = {
@@ -13067,25 +13157,25 @@ function renderBoard(){
 
 function taskHtml(t){
   const chips = [];
-  chips.push(`<span class="chip">${projectName(t.projectId)}</span>`);
+  chips.push(`<span class="chip">${escapeText(projectName(t.projectId))}</span>`);
   if(t.column==='waiting_blocked') chips.push('<span class="chip high">High</span>');
-  if(t.blockerType) chips.push(`<span class="chip ${t.blockerType}">${title(t.blockerType)}</span>`);
-  return `<div class="task" draggable="true" data-id="${t.id}">
+  if(t.blockerType) chips.push(`<span class="chip ${escapeAttribute(t.blockerType)}">${escapeText(title(t.blockerType))}</span>`);
+  return `<div class="task" draggable="true" data-id="${escapeAttribute(t.id)}">
     <div class="task-top-row">
       <strong>${escapeHtml(t.title)}</strong>
-      <button type="button" class="btn ghost task-edit-btn" data-id="${t.id}" draggable="false">Edit</button>
+      <button type="button" class="btn ghost task-edit-btn" data-id="${escapeAttribute(t.id)}" draggable="false">Edit</button>
     </div>
     <div class="task-next-action md-preview">${renderFormattedText(t.nextAction || '')}</div>
     <small>Owner: ${escapeHtml(t.owner || 'Rowan')}</small>
     ${t.dueDate ? `<small>Due: ${escapeHtml(t.dueDate)}</small>` : ''}
-    <div style="margin-top:6px">${chips.join('')}</div>
+    <div class="task-chips">${chips.join('')}</div>
   </div>`;
 }
 
 function title(v){ return v.charAt(0).toUpperCase()+v.slice(1); }
 
 function populateProjectSelect(){
-  const options = state.projects.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  const options = state.projects.map((p) => `<option value="${escapeAttribute(p.id)}">${escapeText(p.name)}</option>`).join('');
   const sel = document.getElementById('taskProject');
   if (sel) sel.innerHTML = options;
   const editSel = document.getElementById('editTaskProject');
@@ -13447,6 +13537,11 @@ document.getElementById('notesClearFiltersBtn')?.addEventListener('click', () =>
 shortcutForm?.addEventListener('submit', (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
+  const safeUrl = safeExternalUrl(String(f.get('url') || ''));
+  if (!safeUrl) {
+    alert('Shortcut URLs must be valid http(s) links without embedded credentials.');
+    return;
+  }
   const selectedProjectIds = [...document.querySelectorAll('#shortcutProjectChecklist input[type="checkbox"]:checked')]
     .map((el) => el.value)
     .filter(Boolean);
@@ -13455,7 +13550,7 @@ shortcutForm?.addEventListener('submit', (e) => {
   const existing = state.shortcuts.find((x) => x.id === f.get('id'));
   if (existing) {
     existing.title = String(f.get('title') || '').trim();
-    existing.url = String(f.get('url') || '').trim();
+    existing.url = safeUrl;
     existing.category = String(f.get('category') || '').trim();
     existing.projectIds = projectIds;
     existing.enabled = f.get('enabled') === 'on';
@@ -13466,7 +13561,7 @@ shortcutForm?.addEventListener('submit', (e) => {
     state.shortcuts.push({
       id: id(),
       title,
-      url: String(f.get('url') || '').trim(),
+      url: safeUrl,
       category: String(f.get('category') || '').trim(),
       projectIds,
       enabled: f.get('enabled') === 'on',

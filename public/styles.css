@@ -309,6 +309,28 @@ body.theme-light .social-icon-link img {
   box-shadow: 0 1px 5px rgba(0, 0, 0, 0.16);
 }
 
+.theme-choice-swatch--dark-0 { background: #0b1020; }
+.theme-choice-swatch--dark-1 { background: #111831; }
+.theme-choice-swatch--dark-2 { background: #2563eb; }
+.theme-choice-swatch--light-0 { background: #f3f6fb; }
+.theme-choice-swatch--light-1 { background: #ffffff; }
+.theme-choice-swatch--light-2 { background: #2563eb; }
+.theme-choice-swatch--system-0 { background: #f8fafc; }
+.theme-choice-swatch--system-1 { background: #111831; }
+.theme-choice-swatch--system-2 { background: #2563eb; }
+.theme-choice-swatch--ember-0 { background: #15100d; }
+.theme-choice-swatch--ember-1 { background: #241713; }
+.theme-choice-swatch--ember-2 { background: #f97316; }
+.theme-choice-swatch--forest-0 { background: #08130f; }
+.theme-choice-swatch--forest-1 { background: #10231b; }
+.theme-choice-swatch--forest-2 { background: #22c55e; }
+.theme-choice-swatch--terminal-0 { background: #030712; }
+.theme-choice-swatch--terminal-1 { background: #07120d; }
+.theme-choice-swatch--terminal-2 { background: #84cc16; }
+.theme-choice-swatch--aurora-0 { background: #10131f; }
+.theme-choice-swatch--aurora-1 { background: #172033; }
+.theme-choice-swatch--aurora-2 { background: #14b8a6; }
+
 .theme-choice-copy {
   display: grid;
   gap: 2px;
@@ -797,6 +819,8 @@ body.theme-light .social-icon-link img {
   transform: translateY(-1px);
   border-color: rgba(143, 169, 244, 0.18);
 }
+
+.cal-cell-empty { opacity: 0.25; }
 
 .cal-cell.has-reminder::after {
   content: '';
@@ -1369,6 +1393,33 @@ form { display: grid; gap: 8px; }
   gap: 8px;
   flex-wrap: wrap;
 }
+
+.is-hidden { display: none !important; }
+
+.shared-state-conflict-notice {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 9999;
+  max-width: 430px;
+  border: 1px solid #d08b31;
+  background: #241a10;
+  color: #fff;
+  padding: 14px;
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.shared-state-conflict-copy { color: inherit; margin: 8px 0; }
+.shared-state-conflict-actions,
+.gas-price-grid { display: flex; gap: 8px; flex-wrap: wrap; }
+.gas-price-card { padding: 8px 10px; min-width: 120px; }
+.gas-price-value { font-weight: 700; font-size: 1.05rem; }
+.everyday-calc-equals { grid-row: span 2; }
+.everyday-calc-zero { grid-column: span 2; }
+.rss-feed-setting-row { align-items: flex-start; }
+.rss-feed-setting-copy { min-width: 0; }
+.rss-feed-setting-url { font-weight: 600; word-break: break-all; }
 
 .gap10 { gap: 10px; }
 .mt6 { margin-top: 6px; }
@@ -2023,6 +2074,7 @@ menu {
 
 .note-meta { font-size: 11px; color: var(--muted); }
 .note-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.note-action-buttons { display: flex; gap: 8px; }
 .note-delete { background: #7f1d1d; }
 .note-pin { background: #4c1d95; }
 .note-card.pinned { border-color: #8b5cf6; box-shadow: 0 0 0 1px rgba(139,92,246,.35) inset; }
@@ -5602,6 +5654,34 @@ menu {
   inset: 0 auto 0 0;
   border-radius: 999px;
   background: linear-gradient(90deg, rgba(74, 222, 128, 0.82), rgba(59, 130, 246, 0.52));
+}
+
+.ebay-traffic-bar-fill--w-0 { width: 0; }
+.ebay-traffic-bar-fill--w-5 { width: 5%; }
+.ebay-traffic-bar-fill--w-10 { width: 10%; }
+.ebay-traffic-bar-fill--w-15 { width: 15%; }
+.ebay-traffic-bar-fill--w-20 { width: 20%; }
+.ebay-traffic-bar-fill--w-25 { width: 25%; }
+.ebay-traffic-bar-fill--w-30 { width: 30%; }
+.ebay-traffic-bar-fill--w-35 { width: 35%; }
+.ebay-traffic-bar-fill--w-40 { width: 40%; }
+.ebay-traffic-bar-fill--w-45 { width: 45%; }
+.ebay-traffic-bar-fill--w-50 { width: 50%; }
+.ebay-traffic-bar-fill--w-55 { width: 55%; }
+.ebay-traffic-bar-fill--w-60 { width: 60%; }
+.ebay-traffic-bar-fill--w-65 { width: 65%; }
+.ebay-traffic-bar-fill--w-70 { width: 70%; }
+.ebay-traffic-bar-fill--w-75 { width: 75%; }
+.ebay-traffic-bar-fill--w-80 { width: 80%; }
+.ebay-traffic-bar-fill--w-85 { width: 85%; }
+.ebay-traffic-bar-fill--w-90 { width: 90%; }
+.ebay-traffic-bar-fill--w-95 { width: 95%; }
+.ebay-traffic-bar-fill--w-100 { width: 100%; }
+.ebay-traffic-source-bar .ebay-traffic-bar-fill--organic {
+  background: linear-gradient(90deg, rgba(45, 212, 191, 0.78), rgba(59, 130, 246, 0.48));
+}
+.ebay-traffic-source-bar .ebay-traffic-bar-fill--promoted {
+  background: linear-gradient(90deg, rgba(168, 85, 247, 0.82), rgba(59, 130, 246, 0.55));
 }
 
 .ebay-traffic-source-value {

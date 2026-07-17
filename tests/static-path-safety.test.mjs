@@ -53,6 +53,9 @@ try {
   assert.equal(home.headers['referrer-policy'], 'no-referrer');
   assert.equal(home.headers['cross-origin-resource-policy'], 'same-origin');
   assert.equal(home.headers['x-frame-options'], 'DENY');
+  assert.match(home.headers['content-security-policy'], /default-src 'self'/);
+  assert.match(home.headers['content-security-policy'], /object-src 'none'/);
+  assert.doesNotMatch(home.headers['content-security-policy'], /unsafe-inline|unsafe-eval/);
   assert.match(home.body, /PA Nostromo|Mission Control/i);
   assert.ok(home.headers.etag);
 

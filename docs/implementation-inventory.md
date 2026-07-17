@@ -1,6 +1,6 @@
 # PA Nostromo implementation inventory
 
-Baseline recorded for Phase 0 on 2026-07-16 and updated through Phase 3. This is the current map of the application surface after centralized route authorization and outbound-network controls.
+Baseline recorded for Phase 0 on 2026-07-16 and updated through Phase 5. This is the current map of the application surface after centralized route authorization, outbound-network controls, durable shared-state handling, and browser-rendering hardening.
 
 ## Runtime layout
 
@@ -75,14 +75,14 @@ All routes are dispatched through `ROUTE_MANIFEST` before reaching their handler
 
 ## Browser rendering and navigation sinks
 
-- `public/app.js` is the primary renderer and contains `innerHTML`, dynamic media `src`, dynamic links, `window.open`, `URL.createObjectURL`, and iframe/media handling.
+- `public/app.js` is the primary renderer and contains classified `innerHTML` template sinks, dynamic media `src`, dynamic links, `URL.createObjectURL`, and iframe/media handling. Dynamic text/attributes use `public/app/core/safe-ui.js`; links, frames, media, and pop-outs use its centralized URL policy.
 - `public/index.html` statically loads the core/pod scripts and static social icons.
 - Dynamic browser fetches include state, eBay, RSS, social metrics, system, devices, relay, weather, crypto, and gas.
-- Phase 5 audits each HTML/URL sink, removes stored-XSS paths, and adds CSP. Until then, all content flowing to a rendering sink must be treated as untrusted.
+- CSP is strict (`default-src 'self'`, no `unsafe-inline`/`unsafe-eval`) with narrowly declared weather/sports, YouTube API, image/media, and frame-provider exceptions. See `docs/rendering-sink-audit.md` for the sink classification and the exact policy.
 
 ## Persisted dashboard state
 
-`public/app.js` loads browser state and can synchronize it with `/api/state`. The primary persisted areas include projects, tasks, notes, ideas, reminders, shortcuts, calendar/layout/settings, changelog, media/stream preferences, pod configuration, and migration/integrity metadata. The server writes `__integrity`; client-side compatibility state is normalized in the frontend persistence helpers. Phase 4 introduces an explicit schema, migrations, revision compare-and-swap, and durable atomic state writes.
+`public/app.js` loads browser state and can synchronize it with `/api/state`. The primary persisted areas include projects, tasks, notes, ideas, reminders, shortcuts, calendar/layout/settings, changelog, media/stream preferences, pod configuration, and migration/integrity metadata. The server validates and migrates known state, writes `__integrity`, performs revision compare-and-swap, makes durable atomic writes, and preserves bounded backups; client-side compatibility state remains normalized in the frontend persistence helpers.
 
 ## Integrations and credential classes
 

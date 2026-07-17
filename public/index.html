@@ -12,18 +12,18 @@
       <h1>🚀 PA Nostromo</h1>
       <p class="sub">Project dashboard + execution board</p>
       <div class="social-quick-links" aria-label="Blast From The Ads social links">
-        <a class="social-icon-link" href="https://www.instagram.com/ablastfromtheads/" target="_blank" rel="noopener" title="Instagram" aria-label="Instagram"><img src="assets/social/instagram.svg" alt="Instagram" /></a>
-        <a class="social-icon-link" href="https://www.tiktok.com/@ablastfromtheads" target="_blank" rel="noopener" title="TikTok" aria-label="TikTok"><img src="assets/social/tiktok.svg" alt="TikTok" /></a>
-        <a class="social-icon-link" href="https://www.facebook.com/groups/blastfromtheads" target="_blank" rel="noopener" title="Community" aria-label="Community"><img src="assets/social/facebook.svg" alt="Community" /></a>
-        <a class="social-icon-link" href="https://www.facebook.com/profile.php?id=61587986203145" target="_blank" rel="noopener" title="Facebook" aria-label="Facebook"><img src="assets/social/facebook.svg" alt="Facebook" /></a>
-        <a class="social-icon-link" href="https://x.com/blastfromtheads" target="_blank" rel="noopener" title="X" aria-label="X"><img src="assets/social/x.svg" alt="X" /></a>
-        <a class="social-icon-link" href="https://bsky.app/profile/blastfromtheads.bsky.social" target="_blank" rel="noopener" title="Bluesky" aria-label="Bluesky"><img src="assets/social/bluesky.svg" alt="Bluesky" /></a>
-        <a class="social-icon-link" href="https://mastodon.social/@blastfromtheads" target="_blank" rel="noopener" title="Mastodon" aria-label="Mastodon"><img src="assets/social/mastodon.svg" alt="Mastodon" /></a>
-        <a class="social-icon-link" href="https://github.com/wizkidword/pa-nostromo" target="_blank" rel="noopener" title="GitHub" aria-label="GitHub"><img src="assets/social/github.svg" alt="GitHub" /></a>
+        <a class="social-icon-link" href="https://www.instagram.com/ablastfromtheads/" target="_blank" rel="noopener noreferrer" title="Instagram" aria-label="Instagram"><img src="assets/social/instagram.svg" alt="Instagram" /></a>
+        <a class="social-icon-link" href="https://www.tiktok.com/@ablastfromtheads" target="_blank" rel="noopener noreferrer" title="TikTok" aria-label="TikTok"><img src="assets/social/tiktok.svg" alt="TikTok" /></a>
+        <a class="social-icon-link" href="https://www.facebook.com/groups/blastfromtheads" target="_blank" rel="noopener noreferrer" title="Community" aria-label="Community"><img src="assets/social/facebook.svg" alt="Community" /></a>
+        <a class="social-icon-link" href="https://www.facebook.com/profile.php?id=61587986203145" target="_blank" rel="noopener noreferrer" title="Facebook" aria-label="Facebook"><img src="assets/social/facebook.svg" alt="Facebook" /></a>
+        <a class="social-icon-link" href="https://x.com/blastfromtheads" target="_blank" rel="noopener noreferrer" title="X" aria-label="X"><img src="assets/social/x.svg" alt="X" /></a>
+        <a class="social-icon-link" href="https://bsky.app/profile/blastfromtheads.bsky.social" target="_blank" rel="noopener noreferrer" title="Bluesky" aria-label="Bluesky"><img src="assets/social/bluesky.svg" alt="Bluesky" /></a>
+        <a class="social-icon-link" href="https://mastodon.social/@blastfromtheads" target="_blank" rel="noopener noreferrer" title="Mastodon" aria-label="Mastodon"><img src="assets/social/mastodon.svg" alt="Mastodon" /></a>
+        <a class="social-icon-link" href="https://github.com/wizkidword/pa-nostromo" target="_blank" rel="noopener noreferrer" title="GitHub" aria-label="GitHub"><img src="assets/social/github.svg" alt="GitHub" /></a>
       </div>
     </div>
     <div class="top-actions">
-      <a class="btn ghost" href="http://localhost:3399" target="_blank" rel="noopener">Open Radio Map</a>
+      <a class="btn ghost" href="http://localhost:3399" target="_blank" rel="noopener noreferrer">Open Radio Map</a>
       <button id="openSettingsBtn" class="btn ghost">⚙️ Settings</button>
       <button id="addProjectBtn" class="btn">+ New Project</button>
       <button id="addTaskBtn" class="btn primary">+ New Task</button>
@@ -138,7 +138,7 @@
           <section class="settings-section" data-settings-section="patch-notes" hidden>
             <h3 class="m0">Patch Notes</h3>
             <button id="toggleChangeLogBtn" class="btn ghost settings-toggle-start">Show Patch Notes</button>
-            <div id="changeLogSection" class="patch-notes-panel" style="display:none">
+            <div id="changeLogSection" class="patch-notes-panel is-hidden">
               <label>Add manual note
                 <input id="changeLogInput" placeholder="e.g. Added changelog to settings panel" />
               </label>
@@ -424,7 +424,7 @@
       <label>App Link <input name="appLink" placeholder="https://..." /></label>
       <label>Repo Link <input name="repoLink" placeholder="https://..." /></label>
       <menu>
-        <button type="button" id="projectCancelBtn" class="btn ghost" onclick="document.getElementById('projectDialog').close()">Cancel</button>
+        <button type="button" id="projectCancelBtn" class="btn ghost">Cancel</button>
         <button value="default" class="btn primary">Save</button>
       </menu>
     </form>
@@ -526,6 +526,7 @@
       </menu>
     </form>
   </dialog>
+  <script src="app/core/safe-ui.js"></script>
   <script src="app/core/contract.js"></script>
   <script src="app/core/debug.js"></script>
   <script src="app/core/registry.js"></script>
