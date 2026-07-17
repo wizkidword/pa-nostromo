@@ -15,7 +15,7 @@ The browser application is being migrated incrementally from the legacy `public/
 | Unread Email state | `public/app/features/unread-email-state.js` | Account resolution, safe message identifiers, state pruning after refresh, and per-account blocked-sender validation and filtering. |
 | eBay Traffic state | `public/app/features/ebay-traffic-state.js` | Store and view selection, display formatting, report-age classification, safe listing URL construction, and top-listing selection. |
 | Social Followers analytics | `public/app/features/social-followers-analytics.js` | Follower-history normalization and calculations, range filtering, content-item normalization, and status summaries. |
-| NBA Scores state | `public/app/features/nba-score-state.js` | Saved view and favorite-team validation, team catalog, game ordering, view filtering, and featured-game selection. |
+| NBA Scores state | `public/app/features/nba-score-state.js` | Saved view and favorite-team validation, team catalog, score-event normalization and tags, game ordering, view filtering, and featured-game selection. |
 
 `public/app.js` remains the composition layer for the migration. It supplies the current application state, logging, persistence callback, and settings rerender callback to a feature controller rather than duplicating the feature's behavior.
 
