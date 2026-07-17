@@ -27,6 +27,7 @@ The browser application is being migrated incrementally from the legacy `public/
 | RSS state | `public/app/features/rss-state.js` | Saved feed and item normalization, read-state cleanup, and refresh settings. |
 | Utility Layout state | `public/app/core/layout.js` | Default pod layout, legacy pod migrations, visibility normalization, and custom-pod placement. |
 | Settings state | `public/app/features/settings-state.js` | Saved dashboard preferences, theme/task validation, and shortcut-filter state. |
+| Crypto Tracker state | `public/app/features/crypto-state.js` | Saved watchlist and holdings normalization plus provider-failover ordering. |
 
 `public/app.js` remains the composition layer for the migration. It supplies the current application state, logging, persistence callback, and settings rerender callback to a feature controller rather than duplicating the feature's behavior.
 
@@ -40,4 +41,4 @@ The browser application is being migrated incrementally from the legacy `public/
 
 ## Next Candidates
 
-Unread Email, eBay Traffic, Social Followers, NBA Scores, Gas Prices, Everyday Calculator, System Monitor, Speed Test, Home Device Controls, Camera Feed, Live Streams, Music Player, RSS, Utility Layout, and Settings are now being decomposed incrementally: their state rules live in focused browser modules, while rendering and network actions remain in `public/app.js` for later packages. Other integrations remain in `public/app.js`; extract each feature one view at a time, then move related state helpers and selectors only after behavior is verified.
+Unread Email, eBay Traffic, Social Followers, NBA Scores, Gas Prices, Everyday Calculator, System Monitor, Speed Test, Home Device Controls, Camera Feed, Live Streams, Music Player, RSS, Utility Layout, Settings, and Crypto Tracker are now being decomposed incrementally: their state rules live in focused browser modules, while rendering and network actions remain in `public/app.js` for later packages. Other integrations remain in `public/app.js`; extract each feature one view at a time, then move related state helpers and selectors only after behavior is verified.

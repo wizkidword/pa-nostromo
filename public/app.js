@@ -126,6 +126,8 @@ const rssStateFeature = window.MissionControlModules?.rssState;
 if (!rssStateFeature) throw new Error('RSS state feature failed to load.');
 const settingsStateFeature = window.MissionControlModules?.settingsState;
 if (!settingsStateFeature) throw new Error('Settings state feature failed to load.');
+const cryptoStateFeature = window.MissionControlModules?.cryptoState;
+if (!cryptoStateFeature) throw new Error('Crypto state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = settingsStateFeature.defaults;
@@ -785,35 +787,9 @@ function load(){
     column: normalizeTaskColumn(task?.column),
   }));
   state.layout = normalizeUtilityLayoutState(state.layout);
-  state.cryptoWatchlist = Array.isArray(state.cryptoWatchlist) ? state.cryptoWatchlist : ['bitcoin', 'ethereum'];
-  // Migration: repair legacy/ambiguous crypto watchlist ids from older resolver behavior.
-  const cryptoIdAliases = {
-    btc: 'bitcoin',
-    eth: 'ethereum',
-    doge: 'dogecoin',
-    sol: 'solana',
-  };
-  state.cryptoWatchlist = [...new Set(
-    state.cryptoWatchlist
-      .map((v) => String(v || '').trim().toLowerCase())
-      .filter(Boolean)
-      .map((v) => v.replace(/^[@#$]+/, ''))
-      .map((v) => cryptoIdAliases[v] || v)
-  )];
-
-  const holdingsRaw = (state.cryptoHoldings && typeof state.cryptoHoldings === 'object') ? state.cryptoHoldings : {};
-  state.cryptoHoldings = {};
-  for (const [coinIdRaw, holding] of Object.entries(holdingsRaw)) {
-    const coinIdNorm = String(coinIdRaw || '').trim().toLowerCase();
-    const coinId = cryptoIdAliases[coinIdNorm] || coinIdNorm;
-    if (!coinId) continue;
-    const quantity = Number(holding?.quantity ?? 0);
-    const avgBuyPrice = Number(holding?.avgBuyPrice ?? holding?.averageBuyPrice ?? 0);
-    state.cryptoHoldings[coinId] = {
-      quantity: Number.isFinite(quantity) && quantity >= 0 ? quantity : 0,
-      avgBuyPrice: Number.isFinite(avgBuyPrice) && avgBuyPrice >= 0 ? avgBuyPrice : 0,
-    };
-  }
+  const cryptoState = cryptoStateFeature.normalizeState(state.cryptoWatchlist, state.cryptoHoldings);
+  state.cryptoWatchlist = cryptoState.watchlist;
+  state.cryptoHoldings = cryptoState.holdings;
   state.musicPlayer = musicPlayerStateFeature.normalizeState(state.musicPlayer, {
     ambientPresetIds: AMBIENT_PRESETS.map((preset) => preset.id),
   });
@@ -2547,14 +2523,10 @@ async function getCoinDirectory(force = false){
   return coinDirectory;
 }
 
-const CRYPTO_PROVIDER_CHAIN = ['coincap', 'coingecko', 'cryptocompare'];
-const CRYPTO_PROVIDER_LABELS = {
-  coingecko: 'CoinGecko',
-  coincap: 'CoinCap',
-  cryptocompare: 'CryptoCompare',
-};
-const CRYPTO_PROVIDER_DEFAULT = 'coincap';
-const CRYPTO_PROVIDER_PREFERRED_FALLBACK = 'coingecko';
+const CRYPTO_PROVIDER_CHAIN = cryptoStateFeature.providerChain;
+const CRYPTO_PROVIDER_LABELS = cryptoStateFeature.providerLabels;
+const CRYPTO_PROVIDER_DEFAULT = cryptoStateFeature.defaultProvider;
+const CRYPTO_PROVIDER_PREFERRED_FALLBACK = cryptoStateFeature.preferredFallback;
 const CRYPTO_PROVIDER_RETRY_COUNT = 1;
 const CRYPTO_PROVIDER_RETRY_BASE_MS = 500;
 const CRYPTO_PROVIDER_RETRY_MAX_MS = 2200;
@@ -2666,21 +2638,7 @@ function setCryptoWatchCache(payload){
 }
 
 function normalizeCryptoProviderChain(chain){
-  const allowed = new Set(Object.keys(CRYPTO_PROVIDER_LABELS));
-  const ordered = [];
-
-  const add = (provider) => {
-    const key = String(provider || '').toLowerCase();
-    if (!allowed.has(key) || ordered.includes(key)) return;
-    ordered.push(key);
-  };
-
-  add(CRYPTO_PROVIDER_DEFAULT);
-  add(CRYPTO_PROVIDER_PREFERRED_FALLBACK);
-  for (const provider of Array.isArray(chain) ? chain : []) add(provider);
-  for (const provider of CRYPTO_PROVIDER_CHAIN) add(provider);
-
-  return ordered;
+  return cryptoStateFeature.normalizeProviderChain(chain);
 }
 
 function getCryptoProviderChain(){
