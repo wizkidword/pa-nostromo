@@ -956,6 +956,11 @@ let nbaScoreboardCache = {
   fetchedAt: '',
   data: null,
 };
+let weatherSnapshotCache = {
+  zip: '',
+  fetchedAt: '',
+  snapshot: null,
+};
 
 function id(){ return Math.random().toString(36).slice(2,10); }
 function now(){ return new Date().toISOString(); }
@@ -2299,6 +2304,89 @@ function renderSettings(){
   if (settingsPanel?.classList.contains('open')) refreshStateSafetyBackups();
 }
 
+function renderWeatherSnapshot(snapshot, { stale = false, retryInMs = 0, fetchedAt = '' } = {}){
+  const el = document.getElementById('weatherWidget');
+  if (!el) return;
+  const current = snapshot.weather?.current || {};
+  const daily = snapshot.weather?.daily || {};
+  const hi = Array.isArray(daily.temperature_2m_max) ? daily.temperature_2m_max[0] : null;
+  const lo = Array.isArray(daily.temperature_2m_min) ? daily.temperature_2m_min[0] : null;
+  const times = Array.isArray(daily.time) ? daily.time : [];
+  const highs = Array.isArray(daily.temperature_2m_max) ? daily.temperature_2m_max : [];
+  const lows = Array.isArray(daily.temperature_2m_min) ? daily.temperature_2m_min : [];
+  const codes = Array.isArray(daily.weather_code) ? daily.weather_code : [];
+  const codeMap = {
+    0:'Clear',1:'Mostly clear',2:'Partly cloudy',3:'Overcast',
+    45:'Fog',48:'Rime fog',51:'Light drizzle',53:'Drizzle',55:'Heavy drizzle',
+    61:'Light rain',63:'Rain',65:'Heavy rain',71:'Light snow',73:'Snow',75:'Heavy snow',
+    80:'Rain showers',81:'Rain showers',82:'Heavy showers',95:'Thunderstorm'
+  };
+  const iconForCode = (code) => {
+    if (code === 0) return '☀️';
+    if ([1,2].includes(code)) return '🌤️';
+    if (code === 3) return '☁️';
+    if ([45,48].includes(code)) return '🌫️';
+    if ([51,53,55,61,63,65,80,81,82].includes(code)) return '🌧️';
+    if ([71,73,75].includes(code)) return '❄️';
+    if (code === 95) return '⛈️';
+    return '🌡️';
+  };
+  const forecast = times.slice(0, 3).map((d, i) => {
+    const day = new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' });
+    const code = Number(codes[i]);
+    const c = codeMap[code] || 'Conditions';
+    const h = highs[i] != null ? Math.round(highs[i]) : '--';
+    const l = lows[i] != null ? Math.round(lows[i]) : '--';
+    return `
+      <div class="forecast-item date-forecast-item">
+        <div class="forecast-day">${escapeText(day)}</div>
+        <div class="forecast-icon">${escapeText(iconForCode(code))}</div>
+        <div class="forecast-cond">${escapeText(c)}</div>
+        <div class="forecast-temp">H ${h}° / L ${l}°</div>
+      </div>
+    `;
+  }).join('');
+  const desc = codeMap[current.weather_code] || 'Current conditions';
+
+  el.innerHTML = `
+    <div class="date-weather-shell">
+      <div class="date-weather-current">
+        <div class="date-weather-temp">${Math.round(current.temperature_2m ?? 0)}°</div>
+        <div class="date-weather-summary">
+          <div class="date-weather-condition">${escapeText(desc)}</div>
+          <div class="date-weather-location">${escapeText(snapshot.location?.label || 'Local weather')}</div>
+        </div>
+      </div>
+      <div class="date-weather-facts">
+        <div class="date-weather-fact">
+          <span>Feels like</span>
+          <strong>${Math.round(current.apparent_temperature ?? 0)}°F</strong>
+        </div>
+        <div class="date-weather-fact">
+          <span>Humidity</span>
+          <strong>${escapeText(current.relative_humidity_2m ?? '--')}%</strong>
+        </div>
+        <div class="date-weather-fact">
+          <span>Today</span>
+          <strong>H ${hi != null ? Math.round(hi) : '--'}° / L ${lo != null ? Math.round(lo) : '--'}°</strong>
+        </div>
+      </div>
+      <div class="date-weather-forecast-head">
+        <strong>3-Day Forecast</strong>
+        <span>Quick look ahead</span>
+      </div>
+      <div class="forecast-row date-weather-forecast">${forecast}</div>
+    </div>
+  `;
+  const ts = document.getElementById('weatherUpdatedAt');
+  if (stale) {
+    const cachedAt = fetchedAt ? new Date(fetchedAt).toLocaleTimeString() : 'earlier';
+    if (ts) ts.textContent = `Showing cached weather from ${cachedAt}; retry in ${Math.ceil(retryInMs / 1000)}s`;
+    return;
+  }
+  if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()}`;
+}
+
 async function renderWeather(options = {}){
   const el = document.getElementById('weatherWidget');
   if (!el) return;
@@ -2310,108 +2398,28 @@ async function renderWeather(options = {}){
     return;
   }
   try {
-    // 1) Resolve ZIP to precise lat/lon (US ZIP endpoint)
-    const zipRes = await fetch(`https://api.zippopotam.us/us/${LOCAL_ZIP}`);
-    if (!zipRes.ok) {
-      const err = new Error(`ZIP lookup failed (${zipRes.status})`);
-      err.status = zipRes.status;
-      throw err;
+    const weatherApi = window.MissionControlModules?.weatherRefresh;
+    if (!weatherApi?.fetchWeatherSnapshot) throw new Error('weather_refresh_module_unavailable');
+    const cacheHit = options.useCached === true && weatherSnapshotCache.zip === LOCAL_ZIP && weatherSnapshotCache.snapshot;
+    const snapshot = cacheHit
+      ? weatherSnapshotCache.snapshot
+      : await weatherApi.fetchWeatherSnapshot(LOCAL_ZIP, LOCAL_TZ);
+    if (!cacheHit) {
+      weatherSnapshotCache = { zip: LOCAL_ZIP, fetchedAt: now(), snapshot };
     }
-    const zipJson = await zipRes.json();
-    const place = zipJson?.places?.[0];
-    const lat = Number(place?.latitude);
-    const lon = Number(place?.longitude);
-
-    // 2) Pull current + daily weather from Open-Meteo
-    const wxUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&timezone=${encodeURIComponent(LOCAL_TZ)}`;
-    const wxRes = await fetch(wxUrl);
-    if (!wxRes.ok) {
-      const err = new Error(`Weather upstream failed (${wxRes.status})`);
-      err.status = wxRes.status;
-      throw err;
-    }
-    const wx = await wxRes.json();
-
-    const current = wx?.current || {};
-    const daily = wx?.daily || {};
-    const hi = Array.isArray(daily.temperature_2m_max) ? daily.temperature_2m_max[0] : null;
-    const lo = Array.isArray(daily.temperature_2m_min) ? daily.temperature_2m_min[0] : null;
-
-    const times = Array.isArray(daily.time) ? daily.time : [];
-    const highs = Array.isArray(daily.temperature_2m_max) ? daily.temperature_2m_max : [];
-    const lows = Array.isArray(daily.temperature_2m_min) ? daily.temperature_2m_min : [];
-    const codes = Array.isArray(daily.weather_code) ? daily.weather_code : [];
-
-    const codeMap = {
-      0:'Clear',1:'Mostly clear',2:'Partly cloudy',3:'Overcast',
-      45:'Fog',48:'Rime fog',51:'Light drizzle',53:'Drizzle',55:'Heavy drizzle',
-      61:'Light rain',63:'Rain',65:'Heavy rain',71:'Light snow',73:'Snow',75:'Heavy snow',
-      80:'Rain showers',81:'Rain showers',82:'Heavy showers',95:'Thunderstorm'
-    };
-    const desc = codeMap[current.weather_code] || 'Current conditions';
-
-    const iconForCode = (code) => {
-      if (code === 0) return '☀️';
-      if ([1,2].includes(code)) return '🌤️';
-      if (code === 3) return '☁️';
-      if ([45,48].includes(code)) return '🌫️';
-      if ([51,53,55,61,63,65,80,81,82].includes(code)) return '🌧️';
-      if ([71,73,75].includes(code)) return '❄️';
-      if (code === 95) return '⛈️';
-      return '🌡️';
-    };
-
-    const forecast = times.slice(0, 3).map((d, i) => {
-      const day = new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' });
-      const code = Number(codes[i]);
-      const c = codeMap[code] || 'Conditions';
-      const h = highs[i] != null ? Math.round(highs[i]) : '--';
-      const l = lows[i] != null ? Math.round(lows[i]) : '--';
-      return `
-        <div class="forecast-item date-forecast-item">
-          <div class="forecast-day">${escapeText(day)}</div>
-          <div class="forecast-icon">${escapeText(iconForCode(code))}</div>
-          <div class="forecast-cond">${escapeText(c)}</div>
-          <div class="forecast-temp">H ${h}° / L ${l}°</div>
-        </div>
-      `;
-    }).join('');
-
-    const locationLabel = `${place['place name']}, ${place['state abbreviation']}`;
-    el.innerHTML = `
-      <div class="date-weather-shell">
-        <div class="date-weather-current">
-          <div class="date-weather-temp">${Math.round(current.temperature_2m ?? 0)}°</div>
-          <div class="date-weather-summary">
-            <div class="date-weather-condition">${escapeText(desc)}</div>
-            <div class="date-weather-location">${escapeText(locationLabel)}</div>
-          </div>
-        </div>
-        <div class="date-weather-facts">
-          <div class="date-weather-fact">
-            <span>Feels like</span>
-            <strong>${Math.round(current.apparent_temperature ?? 0)}°F</strong>
-          </div>
-          <div class="date-weather-fact">
-            <span>Humidity</span>
-            <strong>${escapeText(current.relative_humidity_2m ?? '--')}%</strong>
-          </div>
-          <div class="date-weather-fact">
-            <span>Today</span>
-            <strong>H ${hi != null ? Math.round(hi) : '--'}° / L ${lo != null ? Math.round(lo) : '--'}°</strong>
-          </div>
-        </div>
-        <div class="date-weather-forecast-head">
-          <strong>3-Day Forecast</strong>
-          <span>Quick look ahead</span>
-        </div>
-        <div class="forecast-row date-weather-forecast">${forecast}</div>
-      </div>
-    `;
+    renderWeatherSnapshot(snapshot);
     clearPollingBackoff('weather');
-    if (ts) ts.textContent = `Updated: ${new Date().toLocaleTimeString()}`;
   } catch (error) {
     const backoffMs = registerPollingFailure('weather', error, 'Weather service temporarily unavailable');
+    const cached = weatherSnapshotCache.zip === LOCAL_ZIP && weatherSnapshotCache.snapshot;
+    if (cached) {
+      renderWeatherSnapshot(weatherSnapshotCache.snapshot, {
+        stale: true,
+        retryInMs: backoffMs,
+        fetchedAt: weatherSnapshotCache.fetchedAt,
+      });
+      return;
+    }
     el.textContent = 'Weather unavailable right now.';
     if (ts) ts.textContent = `Update delayed: retry in ${Math.ceil(backoffMs / 1000)}s`;
   }

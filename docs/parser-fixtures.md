@@ -9,6 +9,8 @@ production URLs, imported user data, or full copies of third-party pages.
 | Integration | Parser version | Valid fixture | Required-structure fixture |
 | --- | --- | --- | --- |
 | RSS and Atom feeds | `rss-atom-v1` | `tests/fixtures/parsers/rss-valid.xml`, `atom-valid.xml` | `rss-missing-channel.xml`, `rss-item-missing-link.xml` |
+| Weather ZIP lookup | `weather-refresh-v1` | `weather-zip-valid.json` | `weather-zip-missing-location.json` |
+| Open-Meteo forecast | `weather-refresh-v1` | `weather-forecast-valid.json` | `weather-forecast-missing-temperature.json` |
 | AAA gas prices | `aaa-gas-v1` | `tests/fixtures/parsers/aaa-current-avg-valid.html` | `aaa-current-avg-missing-column.html` |
 | Public social follower profiles | `social-followers-v2` | `social-{facebook,instagram,tiktok,youtube}-valid.html` | `social-follower-signal-missing.html` |
 | eBay analytics traffic and marketing report | `ebay-analytics-v3` | `ebay-traffic-valid.json`, `ebay-marketing-report-valid.tsv` | `ebay-traffic-missing-required-metric.json`, `ebay-marketing-report-missing-metric.tsv` |

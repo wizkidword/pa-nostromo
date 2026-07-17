@@ -109,3 +109,14 @@ failures and upstream `408`, `425`, `429`, and `5xx` responses are retried once;
 parser failures and are not retried. When a refresh fails, the NBA pod keeps
 the current-day cached scoreboard visible with a clear stale marker and retry
 time.
+
+## Weather reads
+
+The browser-only weather refresh treats ZIP lookup and the corresponding
+Open-Meteo forecast as one bounded operation: a 15-second operation deadline,
+an 8-second attempt deadline, jittered retry, cancellation, and a 30-second
+temporary cooldown. Transient network failures and upstream `408`, `425`,
+`429`, and `5xx` responses are retried once, while `Retry-After` sets the
+minimum wait. Invalid ZIP or forecast payloads are parser failures and are not
+retried. The weather panel retains a current-ZIP snapshot and explicitly marks
+it as cached while waiting to retry a failed refresh.
