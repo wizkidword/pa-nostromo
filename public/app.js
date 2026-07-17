@@ -2463,6 +2463,7 @@ function renderGasPricesView(){
   if (gas.source === 'aaa-state-average') parts.push('Source: AAA state average');
   else parts.push('Source: manual override');
   if (gas.updatedAt) parts.push(`Updated: ${new Date(gas.updatedAt).toLocaleString()}`);
+  if (gas.lastError && gas.updatedAt) parts.push('Showing last successful prices');
   if (gas.lastError) parts.push(`Auto fetch unavailable: ${gas.lastError}`);
   meta.textContent = parts.join(' · ');
 

@@ -88,3 +88,13 @@ behavior for rate limits. OAuth refresh-token requests, Marketing report
 creation/polling/downloads, Trading API calls, and every other eBay operation
 remain outside this retry policy. Configure the traffic-read behavior with the
 `EBAY_TRAFFIC_READ_*` variables in `.env.example`.
+
+## AAA gas-price reads
+
+The read-only AAA state-average request retries transient network and upstream
+failures with a total deadline, per-attempt deadline, jittered backoff,
+cancellation, and a temporary provider cooldown. A provider `Retry-After`
+value is the minimum wait. Parser drift is explicit and is not retried. The
+gas pod keeps its last successful local values visible as a marked stale result
+when a new AAA read fails. Configure this behavior with the
+`GAS_PROXY_READ_*` variables in `.env.example`.

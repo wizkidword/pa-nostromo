@@ -144,6 +144,11 @@ const CRYPTO_PROXY_ALLOW_REMOTE = parseBool(process.env.CRYPTO_PROXY_ALLOW_REMOT
 const CRYPTO_PROXY_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.CRYPTO_PROXY_TIMEOUT_MS, 10000));
 const GAS_PROXY_ALLOW_REMOTE = parseBool(process.env.GAS_PROXY_ALLOW_REMOTE);
 const GAS_PROXY_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.GAS_PROXY_TIMEOUT_MS, 10000));
+const GAS_PROXY_READ_MAX_ATTEMPTS = Math.max(1, parsePositiveInt(process.env.GAS_PROXY_READ_MAX_ATTEMPTS, 2));
+const GAS_PROXY_READ_BACKOFF_BASE_MS = Math.max(100, parsePositiveInt(process.env.GAS_PROXY_READ_BACKOFF_BASE_MS, 500));
+const GAS_PROXY_READ_BACKOFF_MAX_MS = Math.max(GAS_PROXY_READ_BACKOFF_BASE_MS, parsePositiveInt(process.env.GAS_PROXY_READ_BACKOFF_MAX_MS, 2_000));
+const GAS_PROXY_READ_OPERATION_TIMEOUT_MS = Math.max(GAS_PROXY_TIMEOUT_MS, parsePositiveInt(process.env.GAS_PROXY_READ_OPERATION_TIMEOUT_MS, 15_000));
+const GAS_PROXY_READ_UNHEALTHY_COOLDOWN_MS = Math.max(1_000, parsePositiveInt(process.env.GAS_PROXY_READ_UNHEALTHY_COOLDOWN_MS, 30_000));
 const SYS_MONITOR_ALLOW_REMOTE = parseBool(process.env.SYS_MONITOR_ALLOW_REMOTE);
 const SYS_MONITOR_TIMEOUT_MS = Math.max(1000, parsePositiveInt(process.env.SYS_MONITOR_TIMEOUT_MS, 1500));
 const SYS_MONITOR_MAX_PROCESSES = Math.max(10, parsePositiveInt(process.env.SYS_MONITOR_MAX_PROCESSES, 120));
@@ -5751,9 +5756,10 @@ function parseJsonSafely(raw, sourceLabel = 'json') {
   }
 }
 
-function fetchJsonViaCurl(upstreamUrl, timeoutMs = CRYPTO_PROXY_TIMEOUT_MS) {
+function fetchJsonViaCurl(upstreamUrl, timeoutMs = CRYPTO_PROXY_TIMEOUT_MS, requestOptions = {}) {
   return coordinatedSafeFetch(upstreamUrl, {
     method: 'GET',
+    signal: requestOptions.signal,
     timeoutMs,
     firstByteTimeoutMs: timeoutMs,
     maxBytes: 2 * 1024 * 1024,
@@ -7269,14 +7275,14 @@ function parseAaaCurrentAvgRow(html) {
   };
 }
 
-async function resolveUsStateFromLocation(input) {
+async function resolveUsStateFromLocation(input, options = {}) {
   const raw = String(input || '').trim();
   if (!raw) return { code: null, label: '' };
 
   const zip = raw.match(/^\d{5}$/)?.[0] || null;
   if (zip) {
     try {
-      const zipJson = await fetchJsonViaCurl(`https://api.zippopotam.us/us/${zip}`, GAS_PROXY_TIMEOUT_MS);
+      const zipJson = await fetchJsonViaCurl(`https://api.zippopotam.us/us/${zip}`, GAS_PROXY_TIMEOUT_MS, { signal: options.signal });
       const place = zipJson?.places?.[0] || {};
       const code = String(place['state abbreviation'] || '').trim().toUpperCase();
       const city = String(place['place name'] || '').trim();
@@ -7306,6 +7312,53 @@ async function resolveUsStateFromLocation(input) {
   return { code: null, label: raw };
 }
 
+function isRetryableGasPriceReadError(error){
+  if (error?.code === 'aaa_gas_parser_required_fields_missing') return false;
+  const status = Number(error?.status || error?.httpStatus || 0);
+  return error?.code === 'provider_attempt_timeout'
+    || [408, 425, 429, 500, 502, 503, 504].includes(status)
+    || /abort|timeout|network|temporar/i.test(String(error?.message || ''));
+}
+
+function gasPriceReadRetryDelayMs({ error }){
+  return Math.max(0, Number(error?.retryAfter || 0) * 1000);
+}
+
+async function fetchAaaStateGasPrices(resolved, options = {}) {
+  const stateCode = String(resolved?.code || '').trim().toUpperCase();
+  if (!stateCode) throw Object.assign(new Error('aaa_gas_state_required'), { code: 'aaa_gas_state_required', status: 400 });
+  const sourceUrl = `https://gasprices.aaa.com/?state=${encodeURIComponent(stateCode)}`;
+  const result = await fetchWithFailover({
+    providers: ['aaa_state_average'],
+    retries: GAS_PROXY_READ_MAX_ATTEMPTS - 1,
+    backoffBaseMs: GAS_PROXY_READ_BACKOFF_BASE_MS,
+    backoffMaxMs: GAS_PROXY_READ_BACKOFF_MAX_MS,
+    operationTimeoutMs: GAS_PROXY_READ_OPERATION_TIMEOUT_MS,
+    attemptTimeoutMs: GAS_PROXY_TIMEOUT_MS,
+    unhealthyCooldownMs: GAS_PROXY_READ_UNHEALTHY_COOLDOWN_MS,
+    signal: options.signal,
+    healthStore: options.healthStore,
+    random: options.random,
+    delay: options.delay,
+    now: options.now,
+    isRetryableError: isRetryableGasPriceReadError,
+    retryDelayMs: gasPriceReadRetryDelayMs,
+    async tryProvider(_provider, _attempt, { signal }) {
+      const html = typeof options.fetchText === 'function'
+        ? await options.fetchText(sourceUrl, { signal })
+        : await fetchTextViaCurl(sourceUrl, GAS_PROXY_TIMEOUT_MS, 600 * 1024, { signal });
+      const prices = parseAaaCurrentAvgRow(html);
+      if (!prices) {
+        throw Object.assign(new Error('aaa_gas_parser_required_fields_missing'), {
+          code: 'aaa_gas_parser_required_fields_missing',
+        });
+      }
+      return { prices, sourceUrl };
+    },
+  });
+  return result.result;
+}
+
 async function handleApiGasPrices(req, res) {
   if (req.method !== 'GET') {
     return sendJson(res, 405, { ok: false, error: 'method_not_allowed', message: 'Use GET /api/gas-prices?location=ZIP_OR_CITY_STATE.' });
@@ -7317,38 +7370,38 @@ async function handleApiGasPrices(req, res) {
     return sendJson(res, 400, { ok: false, error: 'missing_location', message: 'Provide location query param (ZIP or City, ST).' });
   }
 
-  const resolved = await resolveUsStateFromLocation(location);
-  if (!resolved.code) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'state_unresolved',
-      message: 'Could not resolve a U.S. state from that location. Try a 5-digit ZIP or include state (e.g., "Akron, OH").',
-    });
-  }
-
-  const upstreamUrl = `https://gasprices.aaa.com/?state=${encodeURIComponent(resolved.code)}`;
+  const clientRequest = createClientAbortSignal(req, res);
   try {
-    const html = await fetchTextViaCurl(upstreamUrl, GAS_PROXY_TIMEOUT_MS, 600 * 1024);
-    const prices = parseAaaCurrentAvgRow(html);
-    if (!prices) {
-      return sendJson(res, 502, { ok: false, error: 'parse_failed', message: 'AAA page format changed or prices were unavailable.' });
+    const resolved = await resolveUsStateFromLocation(location, { signal: clientRequest.signal });
+    if (!resolved.code) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: 'state_unresolved',
+        message: 'Could not resolve a U.S. state from that location. Try a 5-digit ZIP or include state (e.g., "Akron, OH").',
+      });
     }
+    const gas = await fetchAaaStateGasPrices(resolved, { signal: clientRequest.signal });
 
     return sendJson(res, 200, {
       ok: true,
       provider: 'aaa-state-average',
       stateCode: resolved.code,
       resolvedLocation: resolved.label || resolved.code,
-      sourceUrl: upstreamUrl,
+      sourceUrl: gas.sourceUrl,
       fetchedAt: new Date().toISOString(),
-      prices,
+      prices: gas.prices,
     });
   } catch (err) {
+    if (err?.code === 'aaa_gas_parser_required_fields_missing') {
+      return sendJson(res, 502, { ok: false, error: 'parse_failed', message: 'AAA page format changed or prices were unavailable.' });
+    }
     return sendJson(res, 502, {
       ok: false,
       error: 'gas_upstream_failed',
       message: String(err?.message || err || 'Failed to fetch gas prices from AAA').slice(0, 180),
     });
+  } finally {
+    clientRequest.dispose();
   }
 }
 
@@ -7656,6 +7709,7 @@ module.exports = {
   parseEbayTrafficReport,
   parseEbayMarketingReport,
   fetchEbayTrafficReport,
+  fetchAaaStateGasPrices,
   parseFeedXml,
   parseAaaCurrentAvgRow,
   extractUnreadEmailAtomFeed,

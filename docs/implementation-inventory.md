@@ -51,7 +51,7 @@ All routes are dispatched through `ROUTE_MANIFEST` before reaching their handler
 | Social | `fetchMetaGraphJson`, public-page fetches, `fetch*Via*Session` | HTTP calls use `safeFetch` and the coordinator; Playwright child scripts retain script-specific timeouts and session-storage containment. |
 | RSS | `fetchFeedXml` | User-provided feed URLs use DNS-pinned `safeFetch`, configured byte/feed/entry/time limits, coordinator deduplication, and stale cache fallback. |
 | Camera | `handleApiCameraSnapshot` | Explicit public hostname allowlist, DNS-pinned `safeFetch`, zero redirects, image content-type and byte limits. |
-| Crypto and gas | `handleApiCryptoProxy`, `handleApiGasPrices` | Fixed target catalog/configured providers via `safeFetch`; no arbitrary URL reaches `curl`. |
+| Crypto and gas | `handleApiCryptoProxy`, `handleApiGasPrices` | Fixed target catalog/configured providers via `safeFetch`; no arbitrary URL reaches `curl`. AAA state-average reads add bounded retries and retain the pod's marked stale local result on refresh failure. |
 | Relay | `relayRowanMessage` | Explicitly configured trusted relay URL with optional bearer/header; the only direct HTTP exception because a loopback relay is supported. |
 | System and devices | `readDiskUsagePercent`, `readTopProcesses`, `runExecFile`, speed-test helpers | PowerShell, `df`, `ps`, `ping`, `wakeonlan`, `etherwake`, and speed-test commands with timeouts/buffers. |
 
