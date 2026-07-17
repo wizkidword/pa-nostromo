@@ -124,13 +124,11 @@ const musicPlayerStateFeature = window.MissionControlModules?.musicPlayerState;
 if (!musicPlayerStateFeature) throw new Error('Music Player state feature failed to load.');
 const rssStateFeature = window.MissionControlModules?.rssState;
 if (!rssStateFeature) throw new Error('RSS state feature failed to load.');
+const settingsStateFeature = window.MissionControlModules?.settingsState;
+if (!settingsStateFeature) throw new Error('Settings state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
-const DEFAULT_SETTINGS = {
-  theme: 'dark',
-  weatherIntervalMin: 15,
-  defaultTaskColumn: 'inbox',
-};
+const DEFAULT_SETTINGS = settingsStateFeature.defaults;
 
 const layoutStateFeature = window.MissionControlModules?.layout;
 if (!layoutStateFeature) throw new Error('Utility Layout state feature failed to load.');
@@ -720,13 +718,7 @@ function ensureChangelogPatch(stateObj, message){
   stateObj.changelog = stateObj.changelog.slice(0, 200);
 }
 function normalizeSettingsState(input){
-  const settings = { ...DEFAULT_SETTINGS, ...(input || {}) };
-  settings.theme = normalizeThemePreference(settings.theme);
-  settings.defaultTaskColumn = normalizeTaskColumn(settings.defaultTaskColumn);
-  settings.shortcutsFilterProjectIds = Array.isArray(settings.shortcutsFilterProjectIds)
-    ? settings.shortcutsFilterProjectIds
-    : [];
-  return settings;
+  return settingsStateFeature.normalizeState(input, { normalizeThemePreference, normalizeTaskColumn });
 }
 
 function migrateIdeasTasksToNotes(stateObj){
