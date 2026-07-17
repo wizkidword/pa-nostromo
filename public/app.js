@@ -110,6 +110,8 @@ const gasPricesStateFeature = window.MissionControlModules?.gasPricesState;
 if (!gasPricesStateFeature) throw new Error('Gas Prices state feature failed to load.');
 const everydayCalculatorStateFeature = window.MissionControlModules?.everydayCalculatorState;
 if (!everydayCalculatorStateFeature) throw new Error('Everyday Calculator state feature failed to load.');
+const systemMonitorStateFeature = window.MissionControlModules?.systemMonitorState;
+if (!systemMonitorStateFeature) throw new Error('System Monitor state feature failed to load.');
 const normalizeTaskColumn = tasksFeature.normalizeTaskColumn;
 
 const DEFAULT_SETTINGS = {
@@ -282,12 +284,7 @@ function normalizeEverydayCalculatorState(input){
 }
 
 function normalizeSystemMonitorState(input){
-  return {
-    allowlist: Array.isArray(input?.allowlist)
-      ? [...new Set(input.allowlist.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean))].slice(0, 30)
-      : ['node', 'chrome', 'openclaw', 'code', 'python'],
-    settingsOpen: !!input?.settingsOpen,
-  };
+  return systemMonitorStateFeature.normalizeState(input);
 }
 
 function normalizeSpeedTestState(input){
@@ -10518,45 +10515,19 @@ window.onYouTubeIframeAPIReady = function(){
 };
 
 function formatRateBytesPerSec(value){
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) return '—';
-  if (n < 1024) return `${Math.round(n)} B/s`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB/s`;
-  return `${(n / (1024 * 1024)).toFixed(2)} MB/s`;
+  return systemMonitorStateFeature.formatRateBytesPerSec(value);
 }
 
 function formatSystemMonitorUptime(seconds){
-  const total = Number(seconds);
-  if (!Number.isFinite(total) || total < 0) return '—';
-  const days = Math.floor(total / 86400);
-  const hours = Math.floor((total % 86400) / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
+  return systemMonitorStateFeature.formatUptime(seconds);
 }
 
-const SYSMON_SEVERITY_THRESHOLDS = {
-  goodMax: 59.9,
-  warnMax: 84.9,
-};
-
-const SYSMON_ALLOWLIST_PRESETS = {
-  dev: ['node', 'code', 'chrome', 'openclaw', 'python', 'git', 'docker'],
-  media: ['chrome', 'firefox', 'vlc', 'obs', 'ffmpeg', 'spotify', 'discord'],
-  minimal: ['node', 'openclaw', 'code'],
-};
-
 function classifySysMonSeverity(percent){
-  const n = Number(percent);
-  if (!Number.isFinite(n)) return 'neutral';
-  if (n <= SYSMON_SEVERITY_THRESHOLDS.goodMax) return 'good';
-  if (n <= SYSMON_SEVERITY_THRESHOLDS.warnMax) return 'warn';
-  return 'danger';
+  return systemMonitorStateFeature.classifySeverity(percent);
 }
 
 function applySystemMonitorAllowlistPreset(preset){
-  const next = [...new Set((SYSMON_ALLOWLIST_PRESETS[preset] || []).map((v) => String(v || '').trim().toLowerCase()).filter(Boolean))].slice(0, 30);
+  const next = systemMonitorStateFeature.getPresetAllowlist(preset);
   if (!next.length) return;
   state.systemMonitor.allowlist = next;
   save(`system_monitor_allowlist_preset_${preset}`);
@@ -10659,11 +10630,7 @@ function renderSystemResourceMonitorPod(){
   const scannedCount = Number(processes.scanned || 0);
   const allowlistMatchCount = Array.isArray(processes.allowlistMatches) ? processes.allowlistMatches.length : 0;
   const uptimeLabel = formatSystemMonitorUptime(host.uptimeSec);
-  const presetState = {
-    dev: SYSMON_ALLOWLIST_PRESETS.dev.every((name) => activeAllowlist.includes(name)),
-    media: SYSMON_ALLOWLIST_PRESETS.media.every((name) => activeAllowlist.includes(name)),
-    minimal: SYSMON_ALLOWLIST_PRESETS.minimal.every((name) => activeAllowlist.includes(name)),
-  };
+  const presetState = systemMonitorStateFeature.getPresetState(activeAllowlist);
 
   el.innerHTML = `
     <div class="system-monitor-shell" data-pod="system-resource-monitor">
