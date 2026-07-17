@@ -153,6 +153,11 @@ const HOME_DEVICE_ALLOW_REMOTE = parseBool(process.env.HOME_DEVICE_ALLOW_REMOTE)
 const HOME_DEVICE_TIMEOUT_MS = Math.max(1000, parsePositiveInt(process.env.HOME_DEVICE_TIMEOUT_MS, 2500));
 const EMAIL_UNREAD_ALLOW_REMOTE = parseBool(process.env.EMAIL_UNREAD_ALLOW_REMOTE);
 const EMAIL_UNREAD_TIMEOUT_MS = Math.max(1500, parsePositiveInt(process.env.EMAIL_UNREAD_TIMEOUT_MS, 8000));
+const EMAIL_UNREAD_MAX_ATTEMPTS = Math.max(1, parsePositiveInt(process.env.EMAIL_UNREAD_MAX_ATTEMPTS, 2));
+const EMAIL_UNREAD_BACKOFF_BASE_MS = Math.max(100, parsePositiveInt(process.env.EMAIL_UNREAD_BACKOFF_BASE_MS, 500));
+const EMAIL_UNREAD_BACKOFF_MAX_MS = Math.max(EMAIL_UNREAD_BACKOFF_BASE_MS, parsePositiveInt(process.env.EMAIL_UNREAD_BACKOFF_MAX_MS, 2_000));
+const EMAIL_UNREAD_OPERATION_TIMEOUT_MS = Math.max(EMAIL_UNREAD_TIMEOUT_MS, parsePositiveInt(process.env.EMAIL_UNREAD_OPERATION_TIMEOUT_MS, 15_000));
+const EMAIL_UNREAD_UNHEALTHY_COOLDOWN_MS = Math.max(1_000, parsePositiveInt(process.env.EMAIL_UNREAD_UNHEALTHY_COOLDOWN_MS, 30_000));
 const EMAIL_UNREAD_PROVIDER = String(process.env.EMAIL_UNREAD_PROVIDER || 'gmail_atom').trim().toLowerCase() || 'gmail_atom';
 const EMAIL_UNREAD_URL = String(process.env.EMAIL_UNREAD_URL || 'https://mail.google.com/mail/feed/atom').trim() || 'https://mail.google.com/mail/feed/atom';
 const EMAIL_UNREAD_LABEL = String(process.env.EMAIL_UNREAD_LABEL || 'Inbox').trim() || 'Inbox';
@@ -2197,7 +2202,24 @@ function summarizeUnreadEmailAccounts(accounts = []){
   }));
 }
 
-async function fetchUnreadEmailFeedForAccountViaAtom(account){
+function isRetryableGmailAtomError(error){
+  if (error?.code === GMAIL_UNREAD_ATOM_PARSER_ERROR_CODE) return false;
+  const status = Number(error?.status || error?.httpStatus || 0);
+  return error?.code === 'provider_attempt_timeout'
+    || [408, 425, 429, 500, 502, 503, 504].includes(status)
+    || /abort|timeout|network|temporar/i.test(String(error?.message || ''));
+}
+
+function gmailAtomRetryDelayMs({ error }){
+  return Math.max(0, Number(error?.retryAfter || 0) * 1000);
+}
+
+function gmailAtomProviderKey(account){
+  const identity = String(account?.id || account?.username || 'default');
+  return `gmail_atom:${crypto.createHash('sha256').update(identity).digest('hex').slice(0, 16)}`;
+}
+
+async function fetchUnreadEmailFeedForAccountViaAtom(account, options = {}){
   if (!account?.username || !account?.appPassword) {
     return {
       id: String(account?.id || ''),
@@ -2218,43 +2240,66 @@ async function fetchUnreadEmailFeedForAccountViaAtom(account){
 
   try {
     const auth = Buffer.from(`${account.username}:${account.appPassword}`, 'utf8').toString('base64');
-    const res = await coordinatedSafeFetch(account.feedUrl || EMAIL_UNREAD_URL, {
-      method: 'GET',
-      timeoutMs: EMAIL_UNREAD_TIMEOUT_MS,
-      firstByteTimeoutMs: EMAIL_UNREAD_TIMEOUT_MS,
-      maxBytes: 1024 * 1024,
-      maxRedirects: 2,
-      headers: {
-        Authorization: `Basic ${auth}`,
-        Accept: 'application/atom+xml,application/xml,text/xml;q=0.9,*/*;q=0.1',
-        'User-Agent': 'pa-nostromo-unread-email/1.0',
-      },
-    }, { integration: 'email', key: `email:atom:${account.id}` });
-    if (!res.ok) {
-      const err = new Error(`Mail feed request failed (${res.status})`);
-      err.status = res.status;
-      throw err;
-    }
+    const result = await fetchWithFailover({
+      providers: [gmailAtomProviderKey(account)],
+      retries: EMAIL_UNREAD_MAX_ATTEMPTS - 1,
+      backoffBaseMs: EMAIL_UNREAD_BACKOFF_BASE_MS,
+      backoffMaxMs: EMAIL_UNREAD_BACKOFF_MAX_MS,
+      operationTimeoutMs: EMAIL_UNREAD_OPERATION_TIMEOUT_MS,
+      attemptTimeoutMs: EMAIL_UNREAD_TIMEOUT_MS,
+      unhealthyCooldownMs: EMAIL_UNREAD_UNHEALTHY_COOLDOWN_MS,
+      signal: options.signal,
+      healthStore: options.healthStore,
+      random: options.random,
+      delay: options.delay,
+      now: options.now,
+      isRetryableError: isRetryableGmailAtomError,
+      retryDelayMs: gmailAtomRetryDelayMs,
+      async tryProvider(_provider, _attempt, { signal }) {
+        const res = typeof options.fetchResponse === 'function'
+          ? await options.fetchResponse({ signal })
+          : await coordinatedSafeFetch(account.feedUrl || EMAIL_UNREAD_URL, {
+            method: 'GET',
+            signal,
+            timeoutMs: EMAIL_UNREAD_TIMEOUT_MS,
+            firstByteTimeoutMs: EMAIL_UNREAD_TIMEOUT_MS,
+            maxBytes: 1024 * 1024,
+            maxRedirects: 2,
+            headers: {
+              Authorization: `Basic ${auth}`,
+              Accept: 'application/atom+xml,application/xml,text/xml;q=0.9,*/*;q=0.1',
+              'User-Agent': 'pa-nostromo-unread-email/1.0',
+            },
+          }, { integration: 'email', key: `email:atom:${account.id}` });
+        if (!res.ok) {
+          const err = new Error(`Mail feed request failed (${res.status})`);
+          err.status = res.status;
+          err.retryAfter = res.headers?.get?.('retry-after') || '';
+          throw err;
+        }
 
-    const xml = await res.text();
-    const parsed = extractUnreadEmailAtomFeed(xml);
-    return {
-      id: String(account.id || ''),
-      label: String(account.label || account.username || 'Inbox'),
-      account: account.username,
-      unreadCount: parsed.unreadCount,
-      entries: parsed.entries.slice(0, EMAIL_UNREAD_PREVIEW_LIMIT),
-      recentEntries: [],
-      sentEntries: [],
-      inboxUrl: String(account.openUrl || EMAIL_UNREAD_OPEN_URL),
-      sentOpenUrl: String(account.sentOpenUrl || defaultSentOpenUrl(account.openUrl || EMAIL_UNREAD_OPEN_URL)),
-      includeSent: !!account.includeSent,
-      fetchedAt: new Date().toISOString(),
-      status: 'fresh',
-      message: '',
-    };
+        const xml = await res.text();
+        const parsed = extractUnreadEmailAtomFeed(xml);
+        return {
+          id: String(account.id || ''),
+          label: String(account.label || account.username || 'Inbox'),
+          account: account.username,
+          unreadCount: parsed.unreadCount,
+          entries: parsed.entries.slice(0, EMAIL_UNREAD_PREVIEW_LIMIT),
+          recentEntries: [],
+          sentEntries: [],
+          inboxUrl: String(account.openUrl || EMAIL_UNREAD_OPEN_URL),
+          sentOpenUrl: String(account.sentOpenUrl || defaultSentOpenUrl(account.openUrl || EMAIL_UNREAD_OPEN_URL)),
+          includeSent: !!account.includeSent,
+          fetchedAt: new Date().toISOString(),
+          status: 'fresh',
+          message: '',
+        };
+      },
+    });
+    return result.result;
   } catch (error) {
-    if (error?.code === 'request_timeout') {
+    if (error?.code === 'request_timeout' || error?.code === 'provider_attempt_timeout' || error?.code === 'operation_deadline_exceeded') {
       const timeoutError = new Error(`Mail feed timed out after ${EMAIL_UNREAD_TIMEOUT_MS}ms`);
       timeoutError.status = 504;
       throw timeoutError;
@@ -7574,5 +7619,6 @@ module.exports = {
   parseFeedXml,
   parseAaaCurrentAvgRow,
   extractUnreadEmailAtomFeed,
+  fetchUnreadEmailFeedForAccountViaAtom,
   emailUnreadSetupPayload,
 };

@@ -65,3 +65,11 @@ provider-supplied `Retry-After` value is the minimum wait. RSS parser failures
 remain explicit and are not retried; when a feed has a last-known-good cache,
 the existing stale response is returned instead. Configure this with the
 `RSS_FETCH_*` retry variables in `.env.example`.
+
+## Gmail Atom unread-email refreshes
+
+The Gmail Atom inbox snapshot is read-only, so it retries transient network
+and upstream failures with a total deadline, per-attempt deadline, jitter, and
+a short per-account cooldown. `Retry-After` is honored. Authentication and
+Atom parser failures are explicit and are not retried. IMAP mailbox reads and
+all IMAP message actions remain outside this retry policy.

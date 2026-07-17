@@ -105,6 +105,14 @@ Every response carries anti-sniffing, frame, referrer, and same-origin resource 
 - `RSS_FETCH_MAX_ATTEMPTS`, `RSS_FETCH_BACKOFF_BASE_MS`, and `RSS_FETCH_BACKOFF_MAX_MS`
 - `RSS_FETCH_OPERATION_TIMEOUT_MS` and `RSS_FETCH_UNHEALTHY_COOLDOWN_MS`
 
+### Gmail Atom unread-email retry safety
+
+When `EMAIL_UNREAD_PROVIDER=gmail_atom`, its read-only inbox snapshot supports
+bounded retries through `EMAIL_UNREAD_MAX_ATTEMPTS`, the backoff variables,
+`EMAIL_UNREAD_OPERATION_TIMEOUT_MS`, and
+`EMAIL_UNREAD_UNHEALTHY_COOLDOWN_MS`. Authentication and parser failures are
+not retried, and IMAP message actions are not affected.
+
 ### Outbound network safety
 
 All ordinary server-side HTTP requests use a DNS-pinned request boundary. It rejects URL credentials, non-HTTP(S) schemes, loopback/private/link-local/reserved/documentation/metadata addresses, and unsafe redirect targets before connecting. Response sizes and deadlines are bounded. Expensive outbound work is globally and per-host limited, deduplicated while in flight, and cancelled during shutdown or client disconnects. See [the outbound inventory](docs/outbound-network-inventory.md) for the remaining deliberate exceptions.
