@@ -3310,6 +3310,9 @@ const CRYPTO_PROVIDER_PREFERRED_FALLBACK = 'coingecko';
 const CRYPTO_PROVIDER_RETRY_COUNT = 1;
 const CRYPTO_PROVIDER_RETRY_BASE_MS = 500;
 const CRYPTO_PROVIDER_RETRY_MAX_MS = 2200;
+const CRYPTO_PROVIDER_OPERATION_TIMEOUT_MS = 12000;
+const CRYPTO_PROVIDER_ATTEMPT_TIMEOUT_MS = 4500;
+const CRYPTO_PROVIDER_UNHEALTHY_COOLDOWN_MS = 30000;
 
 const CRYPTO_SYMBOL_ALIASES = {
   btc: 'bitcoin',
@@ -3544,8 +3547,11 @@ function formatCryptoError(error){
   return 'Network/API error';
 }
 
-async function fetchJsonWithTimeout(url, timeoutMs = 12000){
+async function fetchJsonWithTimeout(url, timeoutMs = 12000, externalSignal = null){
   const controller = new AbortController();
+  const onAbort = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) onAbort();
+  else externalSignal?.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, { signal: controller.signal });
@@ -3557,6 +3563,7 @@ async function fetchJsonWithTimeout(url, timeoutMs = 12000){
     return await res.json();
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onAbort);
   }
 }
 
@@ -3636,10 +3643,10 @@ async function fetchTopSymbolMapWithFailover(){
   if (lastErr) throw lastErr;
 }
 
-async function fetchWatchFromCoinGecko(watchIds){
+async function fetchWatchFromCoinGecko(watchIds, { signal } = {}){
   if (!watchIds.length) return [];
   const watchUrl = `${CRYPTO_PROXY_API}/coingecko/coins/markets?vs_currency=usd&ids=${encodeURIComponent(watchIds.join(','))}&order=market_cap_desc&sparkline=false&price_change_percentage=24h`;
-  const watchRes = await fetchJsonWithTimeout(watchUrl);
+  const watchRes = await fetchJsonWithTimeout(watchUrl, 12000, signal);
   const watch = Array.isArray(watchRes) ? watchRes : [];
   return watch.map((c) => ({
     id: String(c.id || '').toLowerCase(),
@@ -3651,13 +3658,13 @@ async function fetchWatchFromCoinGecko(watchIds){
   }));
 }
 
-async function fetchWatchFromCoinCap(watchIds){
+async function fetchWatchFromCoinCap(watchIds, { signal } = {}){
   if (!watchIds.length) return [];
   const idToSymbol = mapCoinIdToSymbolMap();
   const symbols = [...new Set(watchIds.map((id) => idToSymbol.get(id)).filter(Boolean))];
   if (!symbols.length) return [];
 
-  const assetsRes = await fetchJsonWithTimeout(`${CRYPTO_PROXY_API}/coincap/assets?limit=2000`);
+  const assetsRes = await fetchJsonWithTimeout(`${CRYPTO_PROXY_API}/coincap/assets?limit=2000`, 12000, signal);
   const assets = Array.isArray(assetsRes?.data) ? assetsRes.data : [];
   const symbolSet = new Set(symbols.map((s) => String(s || '').toUpperCase()));
   const bySymbol = new Map();
@@ -3686,7 +3693,7 @@ async function fetchWatchFromCoinCap(watchIds){
   return out;
 }
 
-async function fetchWatchFromCryptoCompare(watchIds){
+async function fetchWatchFromCryptoCompare(watchIds, { signal } = {}){
   if (!watchIds.length) return [];
   const idToSymbol = mapCoinIdToSymbolMap();
   const symbols = [...new Set(watchIds.map((id) => idToSymbol.get(id)).filter(Boolean))];
@@ -3694,7 +3701,7 @@ async function fetchWatchFromCryptoCompare(watchIds){
 
   const fsyms = symbols.join(',');
   const priceUrl = `${CRYPTO_PROXY_API}/cryptocompare/data/pricemultifull?fsyms=${encodeURIComponent(fsyms)}&tsyms=USD`;
-  const res = await fetchJsonWithTimeout(priceUrl);
+  const res = await fetchJsonWithTimeout(priceUrl, 12000, signal);
   const raw = res?.RAW || {};
 
   const out = [];
@@ -3715,7 +3722,7 @@ async function fetchWatchFromCryptoCompare(watchIds){
   return out;
 }
 
-async function fetchCryptoWatchWithFailover(watchIds){
+async function fetchCryptoWatchWithFailover(watchIds, options = {}){
   const providerChain = getCryptoProviderChain();
   const failoverApi = window?.MissionControlModules?.cryptoFailover;
   if (!failoverApi?.fetchWithFailover) {
@@ -3740,13 +3747,17 @@ async function fetchCryptoWatchWithFailover(watchIds){
     retries: CRYPTO_PROVIDER_RETRY_COUNT,
     backoffBaseMs: CRYPTO_PROVIDER_RETRY_BASE_MS,
     backoffMaxMs: CRYPTO_PROVIDER_RETRY_MAX_MS,
+    operationTimeoutMs: CRYPTO_PROVIDER_OPERATION_TIMEOUT_MS,
+    attemptTimeoutMs: CRYPTO_PROVIDER_ATTEMPT_TIMEOUT_MS,
+    unhealthyCooldownMs: CRYPTO_PROVIDER_UNHEALTHY_COOLDOWN_MS,
+    signal: options.signal,
     isRetryableError(error){
       return failoverApi.defaultIsRetryableError(error);
     },
-    async tryProvider(provider){
-      if (provider === 'coingecko') return fetchWatchFromCoinGecko(watchIds);
-      if (provider === 'coincap') return fetchWatchFromCoinCap(watchIds);
-      if (provider === 'cryptocompare') return fetchWatchFromCryptoCompare(watchIds);
+    async tryProvider(provider, _attempt, { signal } = {}){
+      if (provider === 'coingecko') return fetchWatchFromCoinGecko(watchIds, { signal });
+      if (provider === 'coincap') return fetchWatchFromCoinCap(watchIds, { signal });
+      if (provider === 'cryptocompare') return fetchWatchFromCryptoCompare(watchIds, { signal });
       throw new Error(`Unknown provider: ${provider}`);
     },
     shouldAcceptResult(watch){
