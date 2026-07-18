@@ -1,0 +1,47 @@
+name: Bug report
+description: Help us reproduce a dashboard or integration problem.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Please remove credentials, email content,
+        private URLs, and runtime data before submitting.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the expected and actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start the dashboard with...
+        2. Open...
+        3. Choose...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Include the app version, commit SHA, or "main" if known.
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other
+  - type: textarea
+    id: logs
+    attributes:
+      label: Safe diagnostics
+      description: Paste only redacted errors, console output, or screenshots.

@@ -12,6 +12,7 @@ output/
 tmp-instagram-page.html
 
 data/*.bak
+data/*.tmp
 data/state*.json
 data/backups/
 data/.auth/

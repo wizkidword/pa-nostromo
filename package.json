@@ -2,7 +2,7 @@
   "name": "pa-nostromo",
   "version": "0.1.0",
   "private": true,
-  "description": "Local-first swiss-army dashboard",
+  "description": "Local-first personal operations cockpit for projects, tasks, notes, signals, and daily focus",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
