@@ -161,7 +161,7 @@ assert.equal(editTaskDialog.shown, 1);
 assert.equal(editTaskForm.elements.title.value, 'Existing');
 editTaskForm.emit('submit');
 assert.equal(state.tasks[0].title, 'Edited task');
-assert.deepEqual(commits, ['task_created', 'task_edited']);
+assert.deepEqual(commits, ['task_created', 'task_completed']);
 assert.deepEqual(logs, ['Edited task: Edited task']);
 controller.destroy();
 assert.equal(addButton.listenerCount(), 0);

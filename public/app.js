@@ -137,6 +137,8 @@ const productProfilesFeature = window.MissionControlModules?.productProfiles;
 if (!productProfilesFeature) throw new Error('Product Profiles feature failed to load.');
 const sourceReferenceFeature = window.MissionControlModules?.sourceReference;
 if (!sourceReferenceFeature) throw new Error('Source reference feature failed to load.');
+const activityTimelineFeature = window.MissionControlModules?.activityTimeline;
+if (!activityTimelineFeature) throw new Error('Activity timeline feature failed to load.');
 const cryptoStateFeature = window.MissionControlModules?.cryptoState;
 if (!cryptoStateFeature) throw new Error('Crypto state feature failed to load.');
 const integrationHealthFeature = window.MissionControlModules?.integrationHealth;
@@ -384,6 +386,7 @@ const seed = {
     toastAt: '',
   },
   changelog: [],
+  activityTimeline: { events: [] },
   layout: createDefaultUtilityLayoutState(),
   shortcuts: [
     {
@@ -729,12 +732,14 @@ function persistFeatureAction(feature, action, options = {}){
 }
 
 function commitProjectsFeature(reason = 'updated'){
+  if (reason === 'project_created' || reason === 'project_updated') recordActivity('project_updated');
   return persistFeatureAction('projects', reason, {
     changedAreas: ['projects', 'tasks', 'notes', 'shortcuts', 'stats'],
   });
 }
 
 function commitTasksFeature(reason = 'updated'){
+  if (reason === 'task_completed' || reason === 'today_focus_task_completed') recordActivity('task_completed');
   return persistFeatureAction('tasks', reason, {
     changedAreas: ['tasks', 'stats'],
   });
@@ -746,18 +751,21 @@ function commitNotesFeature(reason = 'updated', { render = true } = {}){
 }
 
 function commitRemindersFeature(reason = 'updated'){
+  if (reason === 'today_focus_reminder_snoozed') recordActivity('reminder_snoozed');
   return persistFeatureAction('reminders', reason, {
     changedAreas: ['reminders', 'calendar'],
   });
 }
 
 function commitTodayFocus(reason = 'updated'){
+  if (reason === 'today_focus_email_moved_to_project') recordActivity('email_moved');
   return persistFeatureAction('today-focus', reason, {
     changedAreas: ['today-focus'],
   });
 }
 
 function commitSettingsFeature(reason = 'updated'){
+  if (reason === 'weather_interval_changed' || reason === 'rss_interval_changed') recordActivity('integration_config_changed');
   return persistFeatureAction('settings', reason, { changedAreas: ['settings'] });
 }
 
@@ -950,6 +958,8 @@ let undoState = {
   status: 'idle',
   expiresAt: 0,
   timer: null,
+  undoFn: null,
+  onUndoCommitted: null,
 };
 let safetyBackupsCache = [];
 let lastSafetyBackupsRefreshAt = 0;
@@ -971,6 +981,16 @@ function ensureChangelogPatch(stateObj, message){
   if (stateObj.changelog.some((entry) => entry?.message === message)) return;
   stateObj.changelog.unshift({ id: id(), ts: now(), message });
   stateObj.changelog = stateObj.changelog.slice(0, 200);
+}
+function recordActivity(type, { actionId = '' } = {}){
+  if (!state || !activityTimelineFeature.EVENT_TYPES?.[type]) return false;
+  state.activityTimeline = activityTimelineFeature.appendEvent(state.activityTimeline, {
+    id: id(),
+    type,
+    ts: now(),
+    actionId,
+  });
+  return true;
 }
 function normalizeSettingsState(input){
   const settings = settingsStateFeature.normalizeState(input, { normalizeThemePreference, normalizeTaskColumn });
@@ -1100,6 +1120,7 @@ function load(){
   state.nba = normalizeNbaState(state.nba);
   state.unreadEmailBlockedSenders = normalizeUnreadEmailBlockedSenders(state.unreadEmailBlockedSenders);
   state.changelog = Array.isArray(state.changelog) ? state.changelog : [];
+  state.activityTimeline = activityTimelineFeature.normalizeState(state.activityTimeline);
 
   ensureChangelogPatch(state, 'Patch: Crypto Tracker now supports portfolio holdings (qty + avg buy) with unrealized P/L summary.');
   ensureChangelogPatch(state, 'Patch: Utility Pod order now supports drag-and-drop across rows in Settings (arrow buttons still reorder within each row).');
@@ -1502,6 +1523,8 @@ function clearUndoPrompt(status = 'cleared'){
     status,
     expiresAt: 0,
     timer: null,
+    undoFn: null,
+    onUndoCommitted: null,
   };
   const bar = document.getElementById('stateSafetyUndoBar');
   if (bar) bar.hidden = true;
@@ -1520,33 +1543,43 @@ function offerUndoAction({ label, undoFn, actionId = '', onUndoCommitted = null 
     status: 'offered',
     expiresAt: Date.now() + UNDO_WINDOW_MS,
     timer: null,
+    undoFn,
     onUndoCommitted,
   };
 
   text.textContent = label;
   bar.hidden = false;
 
-  btn.onclick = () => {
-    if (undoState.actionId !== resolvedActionId) return;
-    if (undoState.status !== 'offered') return;
-    if (Date.now() > undoState.expiresAt) {
-      clearUndoPrompt('expired');
-      return;
-    }
-    const onUndoCommitted = undoState.onUndoCommitted;
-    clearUndoPrompt('undone');
-    undoFn();
-    if (typeof onUndoCommitted === 'function') onUndoCommitted('destructive_action_undo_restored');
-    else commitState('destructive_action_undo_restored');
-    broadcastCrossTabSync('undo_restored', { actionId: resolvedActionId, reason: 'destructive_action_undo_restored' });
-  };
+  btn.onclick = () => { runUndoAction(resolvedActionId); };
 
   undoState.timer = setTimeout(() => {
     if (undoState.actionId !== resolvedActionId) return;
     if (undoState.status !== 'offered') return;
     clearUndoPrompt('expired');
+    renderActivityTimeline();
     broadcastCrossTabSync('undo_expired', { actionId: resolvedActionId, reason: 'undo_window_expired' });
   }, UNDO_WINDOW_MS);
+  renderActivityTimeline();
+}
+
+function runUndoAction(actionId){
+  const resolvedActionId = String(actionId || '').trim();
+  if (undoState.actionId !== resolvedActionId || undoState.status !== 'offered') return false;
+  if (Date.now() > undoState.expiresAt) {
+    clearUndoPrompt('expired');
+    renderActivityTimeline();
+    return false;
+  }
+  const { undoFn, onUndoCommitted } = undoState;
+  if (typeof undoFn !== 'function') return false;
+  clearUndoPrompt('undone');
+  state.activityTimeline = activityTimelineFeature.markUndoApplied(state.activityTimeline, resolvedActionId);
+  undoFn();
+  if (typeof onUndoCommitted === 'function') onUndoCommitted('destructive_action_undo_restored');
+  else commitState('destructive_action_undo_restored');
+  renderActivityTimeline();
+  broadcastCrossTabSync('undo_restored', { actionId: resolvedActionId, reason: 'destructive_action_undo_restored' });
+  return true;
 }
 
 function deleteWithUndo({ collection, itemId, reason, buildUndoLabel, commit = commitState }){
@@ -1556,9 +1589,10 @@ function deleteWithUndo({ collection, itemId, reason, buildUndoLabel, commit = c
   if (idx < 0) return false;
 
   const [removed] = list.splice(idx, 1);
+  const actionId = `delete:${String(removed?.id || itemId)}:${Date.now()}`;
+  recordActivity('item_deleted', { actionId });
   commit(reason);
 
-  const actionId = `delete:${String(removed?.id || itemId)}:${Date.now()}`;
   offerUndoAction({
     actionId,
     label: typeof buildUndoLabel === 'function' ? buildUndoLabel(removed) : 'Item deleted. Undo?',
@@ -1597,6 +1631,7 @@ async function refreshStateSafetyBackups(force = false){
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     safetyBackupsCache = Array.isArray(data?.backups) ? data.backups : [];
+    renderActivityTimeline();
 
     if (!safetyBackupsCache.length) {
       list.innerHTML = '<div class="note-meta">No backups found yet.</div>';
@@ -1640,10 +1675,12 @@ async function refreshStateSafetyBackups(force = false){
           }
           clearUndoPrompt('restore_applied');
           await scheduleSharedHydrate('manual_restore_applied');
+          recordActivity('backup_restored');
+          commitState('backup_restored');
           broadcastCrossTabSync('state_restored', { reason: 'manual_restore_applied' });
-          logChange(`Restored state from backup ${backupFile}`);
+          logChange('Restored shared state from a backup');
           await refreshStateSafetyBackups(true);
-          alert(`State restored. Pre-restore snapshot: ${payload.preRestoreSnapshot || 'created'}`);
+          alert('State restored. A pre-restore snapshot was created.');
         } catch (err) {
           alert(`Restore failed: ${String(err?.message || err)}`);
         } finally {
@@ -1653,6 +1690,7 @@ async function refreshStateSafetyBackups(force = false){
     });
   } catch (err) {
     list.innerHTML = `<div class="note-meta">Failed to load backups: ${escapeHtml(String(err?.message || err))}</div>`;
+    renderActivityTimeline();
   }
 }
 
@@ -1679,7 +1717,9 @@ async function importStateSnapshotFromFile(file){
   });
 
   applySharedWriteIntegrity(incoming, result);
-  applyIncomingState(incoming, { render: true });
+  applyIncomingState(incoming, { render: false });
+  recordActivity('state_imported');
+  commitState('state_imported');
   broadcastCrossTabSync('state_imported', { reason: 'manual_import' });
 }
 
@@ -1856,6 +1896,49 @@ function renderChangeLog(){
     moreBtn.classList.toggle('is-hidden', state.changelog.length <= changeLogLimit);
   }
   updatePatchNotesOverflowAffordance();
+}
+
+function formatActivityTimestamp(value){
+  const parsed = Date.parse(String(value || ''));
+  return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : 'Unknown time';
+}
+
+function renderActivityTimeline(){
+  const root = document.getElementById('activityTimeline');
+  if (!root) return;
+  const activeUndoActionId = undoState.status === 'offered' ? undoState.actionId : '';
+  const entries = activityTimelineFeature.buildTimeline({
+    state: state?.activityTimeline,
+    backups: safetyBackupsCache,
+    activeUndoActionId,
+  }).slice(0, 30);
+  if (!entries.length) {
+    root.innerHTML = '<div class="note-meta">No recorded activity or recovery snapshots yet.</div>';
+    return;
+  }
+
+  root.innerHTML = entries.map((entry) => {
+    const statusClass = entry.reversible ? 'is-reversible' : 'is-irreversible';
+    const actions = [
+      entry.undoAvailable ? `<button class="btn ghost" type="button" data-activity-undo="${escapeAttribute(entry.actionId)}">Undo</button>` : '',
+      entry.recoveryAvailable ? '<button class="btn ghost" type="button" data-activity-open-safety="true">Open System &amp; Safety</button>' : '',
+    ].filter(Boolean).join('');
+    return `<article class="activity-timeline-entry">
+      <div class="activity-timeline-entry-head">
+        <strong>${escapeHtml(entry.label)}</strong>
+        <span class="activity-timeline-status ${statusClass}">${escapeHtml(entry.status)}</span>
+      </div>
+      <div class="note-meta">${escapeHtml(formatActivityTimestamp(entry.ts))} · ${entry.source === 'backup' ? 'Recovery snapshot' : 'Recorded action'}</div>
+      ${actions ? `<div class="activity-timeline-actions">${actions}</div>` : ''}
+    </article>`;
+  }).join('');
+
+  root.querySelectorAll('[data-activity-undo]').forEach((button) => {
+    button.addEventListener('click', () => runUndoAction(button.dataset.activityUndo));
+  });
+  root.querySelectorAll('[data-activity-open-safety]').forEach((button) => {
+    button.addEventListener('click', () => setActiveSettingsSection('system-safety'));
+  });
 }
 
 themeController.bindSystemThemeListener();
@@ -2446,6 +2529,7 @@ function setProductProfile(profileId){
   state.settings.productProfile = nextProfile;
   state.settings.customProfilePodIds = productProfilesFeature.normalizeCustomPodIds(state.settings.customProfilePodIds);
   stopDisabledProductProfileResources();
+  recordActivity('profile_changed');
   logChange(`Product profile changed to ${productProfilesFeature.PROFILE_DEFINITIONS[nextProfile].name}`);
   commitState('product_profile_changed');
   setActiveSettingsSection('profiles', { preserveScroll: true });
@@ -2492,6 +2576,7 @@ function renderSettings(){
   const fs = document.getElementById('settingFullscreen');
   const rssInterval = document.getElementById('settingRssInterval');
   renderChangeLog();
+  renderActivityTimeline();
   if (theme) theme.value = state.settings.theme;
   renderThemeChoices();
   if (weather) weather.value = String(state.settings.weatherIntervalMin);

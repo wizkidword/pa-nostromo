@@ -48,6 +48,7 @@
         <button type="button" class="settings-nav-btn" data-settings-section-btn="data-feeds">Data &amp; Feeds</button>
         <button type="button" class="settings-nav-btn" data-settings-section-btn="integration-health">Integration Health</button>
         <button type="button" class="settings-nav-btn" data-settings-section-btn="shortcuts">Shortcuts</button>
+        <button type="button" class="settings-nav-btn" data-settings-section-btn="activity">Activity &amp; Recovery</button>
         <button type="button" class="settings-nav-btn" data-settings-section-btn="system-safety">System &amp; Safety</button>
         <button type="button" class="settings-nav-btn" data-settings-section-btn="patch-notes">Patch Notes</button>
       </nav>
@@ -145,6 +146,12 @@
             <h3 class="m0">Shortcuts</h3>
             <button id="addShortcutBtn" class="btn settings-toggle-start">+ New Shortcut</button>
             <div id="settingsShortcutsList" class="change-log-list"></div>
+          </section>
+
+          <section class="settings-section" data-settings-section="activity" hidden>
+            <h3 class="m0">Activity &amp; Recovery</h3>
+            <p class="note-meta">This records only action types and timestamps—not task names, email subjects, message contents, URLs, or backup filenames.</p>
+            <div id="activityTimeline" class="activity-timeline" aria-live="polite" aria-label="Activity and recovery timeline"></div>
           </section>
 
           <section class="settings-section" data-settings-section="system-safety" hidden>
@@ -607,6 +614,7 @@
   <script src="app/features/settings-state.js"></script>
   <script src="app/features/product-profiles.js"></script>
   <script src="app/features/source-reference.js"></script>
+  <script src="app/features/activity-timeline.js"></script>
   <script src="app/features/crypto-state.js"></script>
   <script src="app/features/projects.js"></script>
   <script src="app/features/notes.js"></script>

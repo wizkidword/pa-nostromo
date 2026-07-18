@@ -308,6 +308,47 @@ body.theme-light .social-icon-link img {
   gap: 10px;
 }
 
+.activity-timeline {
+  display: grid;
+  gap: 10px;
+}
+
+.activity-timeline-entry {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.activity-timeline-entry-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.activity-timeline-status {
+  flex: 0 0 auto;
+  font-size: .76rem;
+  line-height: 1.2;
+}
+
+.activity-timeline-status.is-reversible {
+  color: var(--good, #86efac);
+}
+
+.activity-timeline-status.is-irreversible {
+  color: var(--muted);
+}
+
+.activity-timeline-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .integration-health-card {
   display: grid;
   gap: 10px;

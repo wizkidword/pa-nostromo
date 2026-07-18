@@ -172,8 +172,9 @@
           dropTarget.classList.remove('is-over');
           const taskId = event.dataTransfer?.getData('text/plain');
           const task = state().tasks.find((item) => item.id === taskId);
+          const completed = dropTarget.dataset.col === 'done' && task?.column !== 'done';
           if (!moveTask(task, dropTarget.dataset.col, now)) return;
-          commitState('task_column_changed_drag');
+          commitState(completed ? 'task_completed' : 'task_column_changed_drag');
         }, boardBindings);
       });
     }
@@ -278,6 +279,7 @@
           editTaskDialog?.close?.();
           return;
         }
+        const wasCompleted = task.column === 'done';
         const result = updateTask(task, {
           values,
           now,
@@ -286,7 +288,7 @@
         if (!result.updated) return;
         editTaskDialog?.close?.();
         logChange(`Edited task: ${task.title}`);
-        commitState('task_edited');
+        commitState(!wasCompleted && task.column === 'done' ? 'task_completed' : 'task_edited');
       }, staticBindings);
       if (toolbar) {
         toolbar.innerHTML = markdownToolbarButtons();

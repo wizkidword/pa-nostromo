@@ -194,6 +194,32 @@ try {
   await createSourceAction(page.locator('[data-signal-type="ebay"][data-signal-action="task"]').first(), 'tasks', 'ebay', 'listing-signal-1');
   await createSourceAction(page.locator('[data-signal-type="social"][data-signal-action="reminder"]').first(), 'reminders', 'social', 'facebook');
 
+  await page.evaluate(() => {
+    state.tasks.push({
+      id: 'timeline-private-task',
+      title: 'Timeline task that must remain private',
+      projectId: state.projects[0]?.id || '',
+      column: 'inbox',
+      owner: 'Rowan',
+      nextAction: 'Do not expose this in activity.',
+    });
+    deleteWithUndo({
+      collection: () => state.tasks,
+      itemId: 'timeline-private-task',
+      reason: 'dashboard_smoke_timeline_delete',
+      commit: (reason) => commitTasksFeature(reason),
+    });
+  });
+  await page.getByRole('button', { name: '⚙️ Settings' }).click();
+  await page.getByRole('button', { name: 'Activity & Recovery' }).click();
+  const activityText = await page.locator('#activityTimeline').textContent();
+  assert.match(activityText || '', /Removed item/);
+  assert.match(activityText || '', /Undo available/);
+  assert.doesNotMatch(activityText || '', /Timeline task that must remain private/);
+  await page.locator('#activityTimeline').getByRole('button', { name: 'Undo' }).click();
+  await page.waitForFunction(() => state.tasks.some((task) => task.id === 'timeline-private-task'));
+  assert.match(await page.locator('#activityTimeline').textContent() || '', /Reversed/);
+
   const hostileContentResult = await page.evaluate(async () => {
     window.__nostromoStoredXss = 0;
     const payload = '<img src=x onerror="window.__nostromoStoredXss=1">';
